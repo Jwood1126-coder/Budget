@@ -1,0 +1,26 @@
+# Private inputs and credentials must never enter source control.
+/data/*
+!/data/sample-data.json
+/dist/
+/.openai/
+.env
+.env*
+*.env
+*.pem
+*.key
+*credentials*
+*secret*
+*private*
+*local-state*
+*saved-state*
+*budget-copy*.html
+*budget-private*.html
+*.csv
+*.xlsx
+*.xls
+*.pdf
+*.zip
+*.tar
+*.gz
+__pycache__/
+.DS_Store
