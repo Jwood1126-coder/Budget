@@ -888,3 +888,179 @@ test('coverage: coverageMap and latestCompleteMonth', () => {
 test('coverage: rejects malformed months', () => {
   assert.throws(() => L.coverage(coverageDataset(), '2026-3'), E.ValidationError);
 });
+
+// ======================================================================= hardening: partial reimbursements
+// A confirmed reimbursement whose deposit does not equal the charge must not make the
+// difference disappear: only the amount actually paid back leaves the totals.
+
+function mismatchDataset(chargeCents, depositCents, depositFields = {}) {
+  return dataset([
+    tx('2026-07-08', 0 - chargeCents, { id: 'trip', description: 'SAMPLE AIRLINES', category: 'Travel', flags: ['reimbursement_candidate'], matchIds: ['back'] }),
+    tx('2026-07-20', depositCents, Object.assign({ id: 'back', accountId: 'chk', description: 'MOBILE DEPOSIT', kind: 'income', subtype: 'other', category: 'Income', flags: ['reimbursement_candidate'] }, depositFields))
+  ]);
+}
+
+test('hardening: a deposit smaller than the charge leaves the unreimbursed part in spending', () => {
+  const ds = mismatchDataset(30000, 20000);
+  const rows = L.applyEdits(ds, { trip: { reimbursement: 'confirmed', history: [] } });
+  const s = L.summarize(rows);
+  // The household paid $300 and got $200 back: $100 is still its own cost.
+  assert.equal(s.spendingCents, 10000);
+  assert.equal(s.incomeCents, 0);
+  assert.equal(s.excludedCents, 20000);
+  assert.equal(s.excludedIncomeCents, 20000);
+  assert.equal(byId(rows, 'back').excluded, 'reimbursed');
+  const trip = byId(rows, 'trip');
+  assert.equal(trip.excluded, null);
+  assert.equal(trip.reimbursedCents, 20000);
+  assert.equal(L.measure(trip).spendCents, 10000);
+  assert.deepEqual(trip.parts, [{ category: 'Travel', spendCents: 10000 }]);
+  assert.deepEqual(L.group(rows, 'category').map(g => [g.key, g.spendCents]), [['Travel', 10000]]);
+  assert.ok(trip.editWarnings.some(w => /\$200\.00 of this \$300\.00/.test(w)), trip.editWarnings.join(' '));
+});
+
+test('hardening: a deposit larger than the charge keeps the extra as income', () => {
+  const ds = mismatchDataset(20000, 30000);
+  const rows = L.applyEdits(ds, { back: { reimbursement: 'confirmed', history: [] } });
+  const s = L.summarize(rows);
+  assert.equal(byId(rows, 'trip').excluded, 'reimbursed');
+  assert.equal(byId(rows, 'back').excluded, null);
+  assert.equal(byId(rows, 'back').reimbursedCents, 20000);
+  assert.equal(s.spendingCents, 0);
+  assert.equal(s.incomeCents, 10000);
+  assert.equal(s.excludedIncomeCents, 20000);
+});
+
+test('hardening: equal amounts still exclude both sides completely', () => {
+  const rows = L.applyEdits(mismatchDataset(20000, 20000), { trip: { reimbursement: 'confirmed', history: [] } });
+  assert.equal(byId(rows, 'trip').excluded, 'reimbursed');
+  assert.equal(byId(rows, 'back').excluded, 'reimbursed');
+  assert.equal(byId(rows, 'trip').reimbursedCents, 0);
+  assert.equal(L.summarize(rows).spendingCents, 0);
+});
+
+test('hardening: a split, partly reimbursed charge shrinks its parts to the amount still counted', () => {
+  const ds = mismatchDataset(30001, 10000);
+  const edits = {
+    trip: { reimbursement: 'confirmed', splits: [{ category: 'Travel', cents: 20001 }, { category: 'Dining & takeout', cents: 10000 }], history: [] }
+  };
+  const trip = byId(L.applyEdits(ds, edits), 'trip');
+  assert.equal(trip.splitApplied, true);
+  const total = trip.parts.reduce((sum, p) => sum + p.spendCents, 0);
+  assert.equal(total, 20001);
+  assert.equal(total, L.measure(trip).spendCents);
+  assert.deepEqual(trip.parts.map(p => p.category), ['Travel', 'Dining & takeout']);
+  assert.ok(trip.parts.every(p => Number.isInteger(p.spendCents)));
+});
+
+test('hardening: the what-if toggle also only removes what the deposit covers', () => {
+  const rows = L.applyEdits(mismatchDataset(30000, 20000), {}, { whatIf: { excludePendingReimbursements: true } });
+  assert.equal(byId(rows, 'back').excluded, 'what_if');
+  assert.equal(byId(rows, 'trip').excluded, null);
+  assert.equal(L.summarize(rows).spendingCents, 10000);
+  assert.ok(byId(rows, 'trip').editWarnings.some(w => /^What-if: assuming \$200\.00 of this \$300\.00 charge is paid back/.test(w)), byId(rows, 'trip').editWarnings.join(' '));
+  // Without the toggle nothing changes.
+  assert.equal(L.summarize(L.applyEdits(mismatchDataset(30000, 20000), {})).spendingCents, 30000);
+});
+
+test('hardening: a duplicate or business decision still removes a partly reimbursed charge entirely', () => {
+  const ds = mismatchDataset(30000, 20000);
+  const dup = L.applyEdits(ds, { trip: { reimbursement: 'confirmed', duplicate: 'exclude', history: [] } });
+  assert.equal(byId(dup, 'trip').excluded, 'duplicate');
+  assert.equal(L.measure(byId(dup, 'trip')).spendCents, 0);
+  const biz = L.applyEdits(ds, { trip: { reimbursement: 'confirmed', business: 'business', history: [] } });
+  assert.equal(byId(biz, 'trip').excluded, 'business');
+  assert.equal(L.summarize(biz).spendingCents, 0);
+});
+
+// ======================================================================= hardening: coverage of accounts without exports
+
+function noExportDataset(extra) {
+  return dataset([tx('2026-02-10', -5000, { accountId: 'chk' })], Object.assign({
+    accounts: [
+      { id: 'chk', label: 'Joint checking', type: 'checking', scope: 'joint', coverage: [{ start: '2026-01-01', end: '2026-03-31' }] },
+      { id: 'card', label: 'Joint card', type: 'credit_card', scope: 'joint', coverage: [] },
+      { id: 'sav', label: 'Joint savings', type: 'savings', scope: 'joint' }
+    ]
+  }, extra || {}));
+}
+
+test('hardening: a spending account with no export at all keeps months partial (its spending is unknown)', () => {
+  const ds = noExportDataset();
+  const feb = L.coverage(ds, '2026-02');
+  assert.equal(feb.status, 'partial');
+  assert.equal(feb.coveredDays, 0);
+  const card = feb.accounts.find(a => a.accountId === 'card');
+  assert.deepEqual([card.coveredDays, card.missingDays, card.expected], [0, 28, true]);
+  assert.match(feb.note, /Joint card covers 0 of 28 days/);
+  assert.equal(L.latestCompleteMonth(ds), null);
+  // A savings account without exports still does not affect spending completeness.
+  assert.ok(!feb.accounts.some(a => a.accountId === 'sav'));
+});
+
+test('hardening: ledger coverage agrees with the importer month summary for accounts without exports', () => {
+  if (!E.importer || typeof E.importer.monthlySummary !== 'function') return;
+  const ds = noExportDataset();
+  for (const row of E.importer.monthlySummary(ds)) assert.equal(L.coverage(ds, row.month).status, row.spendingCoverage, row.month);
+});
+
+test('hardening: with only export-less accounts every month is none, and an override still wins', () => {
+  const ds = dataset([], { accounts: [{ id: 'card', label: 'Joint card', type: 'credit_card', scope: 'joint', coverage: [] }] });
+  assert.equal(L.coverage(ds, '2026-02').status, 'none');
+  const ds2 = noExportDataset({ coverageOverrides: { '2026-02': { status: 'full', note: 'Card unused this month' } } });
+  assert.equal(L.coverage(ds2, '2026-02').status, 'full');
+  assert.equal(L.coverage(ds2, '2026-03').status, 'partial');
+});
+
+test('hardening: a contribution that partly paid back a charge counts only its remainder', () => {
+  const ds = mismatchDataset(20000, 50000, { kind: 'transfer', subtype: 'contribution', description: 'ONLINE TRANSFER FROM SAM PERSONAL', category: 'Transfer' });
+  const rows = L.applyEdits(ds, { trip: { reimbursement: 'confirmed', history: [] } });
+  assert.equal(byId(rows, 'trip').excluded, 'reimbursed');
+  assert.equal(byId(rows, 'back').reimbursedCents, 20000);
+  assert.equal(L.summarize(rows).contributionsCents, 30000);
+});
+
+test('hardening: counting identities hold under random edits and what-if toggles (inputs frozen)', () => {
+  let seed = 2026;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const pick = list => list[Math.floor(rnd() * list.length)];
+  for (let iter = 0; iter < 40; iter++) {
+    const rows = [];
+    for (let i = 0; i < 40; i++) {
+      const kind = pick(['spend', 'spend', 'spend', 'income', 'transfer', 'card_payment', 'debt_payment']);
+      const sign = kind === 'income' || rnd() < 0.15 ? 1 : -1;
+      rows.push(tx(pick(['2026-02', '2026-04', '2026-06', '2026-08']) + '-1' + Math.floor(rnd() * 9), sign * (1 + Math.floor(rnd() * 90000)), {
+        id: 'f' + iter + '-' + i, accountId: pick(['chk', 'card', 'sav', 'alex-chk']), kind,
+        subtype: kind === 'transfer' ? pick(['savings', 'contribution', 'internal']) : kind === 'income' ? 'other' : null,
+        category: pick(['Groceries', 'Travel', 'Dental']), flags: rnd() < 0.15 ? ['reimbursement_candidate'] : rnd() < 0.1 ? ['business_candidate'] : []
+      }));
+    }
+    for (let k = 0; k < 5; k++) { const a = pick(rows), b = pick(rows); if (a !== b) a.matchIds = [b.id]; }
+    const ds = deepFreeze(dataset(rows));
+    const edits = {};
+    for (const t of ds.transactions) {
+      const r = rnd();
+      if (r < 0.05) edits[t.id] = { duplicate: 'exclude' };
+      else if (r < 0.12) edits[t.id] = { reimbursement: pick(['confirmed', 'pending', 'not_reimbursed']) };
+      else if (r < 0.15) edits[t.id] = { business: pick(['business', 'household']) };
+      else if (r < 0.2 && t.kind === 'spend') {
+        const third = Math.trunc(-t.amountCents / 3);
+        edits[t.id] = { splits: [{ category: 'Groceries', cents: third }, { category: 'Travel', cents: -t.amountCents - third }] };
+      }
+    }
+    deepFreeze(edits);
+    for (const whatIf of [{}, { excludePendingReimbursements: true, excludeBusinessCandidates: true }]) {
+      const eff = L.applyEdits(ds, edits, { whatIf });
+      for (const t of eff) {
+        const m = L.measure(t);
+        if (t.excluded) assert.ok(Object.values(m).every(v => v === 0), t.id);
+        else if (t.kind === 'spend') assert.equal(t.parts.reduce((s, p) => s + p.spendCents, 0), m.spendCents, t.id);
+      }
+      const s = L.summarize(eff);
+      assert.equal(L.group(eff, 'category').reduce((a, g) => a + g.spendCents, 0), s.spendingCents);
+      // Counted + excluded always adds back to the gross flow: nothing appears or vanishes.
+      assert.equal(eff.filter(t => t.kind === 'spend').reduce((a, t) => a - t.amountCents, 0), s.spendingCents + s.excludedCents);
+      assert.equal(eff.filter(t => t.kind === 'income').reduce((a, t) => a + t.amountCents, 0), s.incomeCents + s.excludedIncomeCents);
+    }
+  }
+});

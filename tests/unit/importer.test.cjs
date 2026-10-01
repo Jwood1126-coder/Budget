@@ -1111,6 +1111,25 @@ describe('tools/import.cjs', () => {
     assert.equal(res.status, 2);
     assert.match(res.stderr, /isSynthetic/);
   });
+  test('--sample only reads inputs from fixtures/, even when a private config claims to be synthetic', () => {
+    const root = tmpRoot();
+    writeConfig(root, { isSynthetic: true });
+    const res = run(root, ['--sample', '--config', 'private/import.json']);
+    assert.equal(res.status, 2);
+    assert.match(res.stderr, /fixtures\//);
+    assert.ok(!fs.existsSync(path.join(root, 'fixtures', 'sample-data.json')), 'nothing written into fixtures/');
+    assert.ok(!fs.existsSync(path.join(root, 'fixtures', 'sample-import-report.json')));
+  });
+  test('--sample refuses a synthetic config in fixtures/ that points at private exports', () => {
+    const root = tmpRoot();
+    writeConfig(root, { isSynthetic: true });
+    fs.mkdirSync(path.join(root, 'fixtures'), { recursive: true });
+    fs.copyFileSync(path.join(root, 'private', 'import.json'), path.join(root, 'fixtures', 'sample-import.json'));
+    const res = run(root, ['--sample']);
+    assert.equal(res.status, 2);
+    assert.match(res.stderr, /private\/raw\/chk\.csv/);
+    assert.ok(!fs.existsSync(path.join(root, 'fixtures', 'sample-data.json')));
+  });
   test('an unrecognised export asks for a mapping', () => {
     const root = tmpRoot();
     writeConfig(root);
@@ -1123,5 +1142,360 @@ describe('tools/import.cjs', () => {
   test('rejects unknown options', () => {
     const res = run(tmpRoot(), ['--bogus']);
     assert.equal(res.status, 2);
+  });
+});
+
+// ====================================================================== hardening (adversarial review)
+
+describe('hardening: loan accounts', () => {
+  const LOAN = { id: 'auto', label: 'Auto loan', type: 'loan', scope: 'joint' };
+  const WITH_LOAN = [CHECKING, CARD, LOAN];
+  const run = list => I.pairTransfers(I.classify(list, {}, WITH_LOAN), WITH_LOAN);
+
+  test('a payment received on a loan account is not a refund that reduces spending', () => {
+    const [t] = I.classify([raw({ accountId: 'auto', description: 'PAYMENT RECEIVED - THANK YOU', amountCents: 30000 })], {}, WITH_LOAN);
+    assert.notEqual(t.kind, 'spend');
+    assert.equal(t.kind, 'transfer');
+    assert.ok(!t.flags.includes('refund'));
+    assert.match(t.categoryReason, /loan/i);
+  });
+  test('an unexplained credit on a loan account is never spending or income', () => {
+    const [t] = I.classify([raw({ accountId: 'auto', description: 'PRINCIPAL ADJ', amountCents: 1234 })], {}, WITH_LOAN);
+    assert.equal(t.kind, 'transfer');
+    assert.ok(!t.flags.includes('refund'));
+  });
+  test('interest charged on a loan account is still a fee (money out)', () => {
+    const [t] = I.classify([raw({ accountId: 'auto', description: 'INTEREST CHARGE', amountCents: -4000 })], {}, WITH_LOAN);
+    assert.equal(t.kind, 'spend');
+    assert.equal(t.category, 'Fees & interest');
+  });
+  test('a merchant refund credited to a loan account still reduces spending', () => {
+    const [t] = I.classify([raw({ accountId: 'auto', description: 'LATE FEE REVERSAL', amountCents: 2500 })], {}, WITH_LOAN);
+    assert.equal(t.kind, 'spend');
+    assert.ok(t.flags.includes('refund'));
+  });
+  test('a checking debt payment pairs with the payment received on the loan', () => {
+    const out = run([
+      raw({ id: 'pay', accountId: 'chk', date: '2026-03-05', description: 'AUTO LOAN PMT', amountCents: -30000 }),
+      raw({ id: 'rcv', accountId: 'auto', date: '2026-03-06', description: 'PAYMENT RECEIVED', amountCents: 30000 })
+    ]);
+    const [pay, rcv] = out;
+    assert.equal(pay.pairId, 'rcv');
+    assert.equal(rcv.pairId, 'pay');
+    assert.equal(pay.kind, 'debt_payment', 'the paying side stays the debt payment');
+    assert.equal(pay.subtype, 'loan');
+    assert.equal(rcv.kind, 'transfer');
+    assert.ok(!rcv.flags.includes('unpaired_transfer'));
+    assert.ok(!pay.flags.includes('unpaired_transfer'));
+  });
+  test('a generic transfer that lands on a loan account counts as a debt payment', () => {
+    const [pay, rcv] = run([
+      raw({ id: 'pay', accountId: 'chk', date: '2026-03-05', description: 'ONLINE TRANSFER TO AUTO LN 01', amountCents: -30000 }),
+      raw({ id: 'rcv', accountId: 'auto', date: '2026-03-05', description: 'ONLINE PAYMENT', amountCents: 30000 })
+    ]);
+    assert.equal(pay.pairId, 'rcv');
+    assert.equal(pay.kind, 'debt_payment');
+    assert.equal(pay.subtype, 'loan');
+    assert.equal(rcv.kind, 'transfer');
+    assert.match(pay.categoryReason, /Auto loan/);
+  });
+  test('an unpaired payment on the loan is flagged with a loan-specific note', () => {
+    const [t] = run([raw({ accountId: 'auto', description: 'PAYMENT RECEIVED', amountCents: 30000 })]);
+    assert.ok(t.flags.includes('unpaired_transfer'));
+    assert.match(t.note, /loan/i);
+  });
+  test('loan-side activity does not change household spending (ledger)', { skip: !E.ledger }, () => {
+    const { dataset } = I.buildDataset({
+      datasetId: 'loan', generatedAt: '2026-04-01', accounts: WITH_LOAN,
+      files: [
+        { name: 'c.csv', accountId: 'chk', text: 'Date,Description,Amount\n03/05/2026,AUTO LOAN PMT,-300.00\n03/06/2026,SAMPLE GROCER,-50.00\n' },
+        { name: 'l.csv', accountId: 'auto', text: 'Date,Description,Amount\n03/06/2026,PAYMENT RECEIVED,300.00\n' }
+      ]
+    });
+    const s = E.ledger.summarize(E.ledger.applyEdits(dataset, {}));
+    assert.equal(s.spendingCents, 5000);
+    assert.equal(s.refundsCents, 0);
+    assert.equal(s.debtPaymentsCents, 30000);
+  });
+  test('loan exports that print payments as negative balance changes are inferred and flipped', () => {
+    const res = I.normalizeFile({
+      name: 'loan.csv', account: LOAN,
+      text: csv(['Date,Description,Amount', '01/05/2026,PAYMENT RECEIVED,-300.00', '01/31/2026,INTEREST CHARGE,40.00', '02/05/2026,PAYMENT RECEIVED,-300.00'])
+    });
+    assert.deepEqual(res.txns.map(t => t.amountCents), [30000, -4000, 30000]);
+    assert.ok(res.warnings.some(w => /inferred/.test(w)));
+  });
+  test('loan exports already in account flow are kept', () => {
+    const res = I.normalizeFile({
+      name: 'loan.csv', account: LOAN,
+      text: csv(['Date,Description,Amount', '01/05/2026,PAYMENT RECEIVED,300.00', '02/05/2026,PAYMENT RECEIVED,300.00'])
+    });
+    assert.deepEqual(res.txns.map(t => t.amountCents), [30000, 30000]);
+  });
+  test('chargesPositive in a loan mapping is honoured', () => {
+    const res = I.normalizeFile({
+      name: 'loan.csv', account: LOAN, mapping: { chargesPositive: true },
+      text: csv(['Date,Description,Amount', '01/05/2026,PAYMENT RECEIVED,-300.00'])
+    });
+    assert.deepEqual(res.txns.map(t => t.amountCents), [30000]);
+  });
+});
+
+describe('hardening: debt payments to a card that is in the data', () => {
+  const STORE = { id: 'store', label: 'Store card', type: 'credit_card', scope: 'joint' };
+  const ACC = [CHECKING, CARD, STORE];
+  const RULES = { merchantRules: [{ match: 'STORE CARD PMT', sign: 'out', kind: 'debt_payment', subtype: 'store_card', reason: 'Household rule: store card' }] };
+
+  test('a debt payment that lands on a card account in the data becomes a card payment on both sides', () => {
+    const out = I.pairTransfers(I.classify([
+      raw({ id: 'pay', accountId: 'chk', date: '2026-03-09', description: 'STORE CARD PMT', amountCents: -5500 }),
+      raw({ id: 'rcv', accountId: 'store', date: '2026-03-10', description: 'PAYMENT - THANK YOU', amountCents: 5500 })
+    ], RULES, ACC), ACC);
+    assert.deepEqual(out.map(t => [t.kind, t.pairId]), [['card_payment', 'rcv'], ['card_payment', 'pay']]);
+    assert.equal(out[0].subtype, null);
+    assert.ok(out.every(t => !t.flags.includes('unpaired_transfer')));
+    assert.match(out[0].categoryReason, /card payment/i);
+  });
+  test('without the card in the data, the debt payment rule stands and is not flagged', () => {
+    const out = I.pairTransfers(I.classify([
+      raw({ id: 'pay', accountId: 'chk', date: '2026-03-09', description: 'STORE CARD PMT', amountCents: -5500 })
+    ], RULES, ACC), ACC);
+    assert.equal(out[0].kind, 'debt_payment');
+    assert.equal(out[0].subtype, 'store_card');
+    assert.deepEqual(out[0].flags, []);
+  });
+  test('a debt payment never pairs with a deposit on a cash account', () => {
+    const out = I.pairTransfers([
+      txn({ id: 'pay', accountId: 'chk', date: '2026-03-09', kind: 'debt_payment', subtype: 'loan', amountCents: -5500 }),
+      txn({ id: 'in', accountId: 'sav', date: '2026-03-09', kind: 'transfer', subtype: 'internal', amountCents: 5500 })
+    ], ACCOUNTS);
+    assert.equal(out[0].pairId, null);
+    assert.equal(out[0].kind, 'debt_payment');
+  });
+});
+
+describe('hardening: amounts and mappings', () => {
+  test('absurdly large amounts are skipped with a reason instead of losing precision', () => {
+    const res = I.normalizeFile({ name: 'big.csv', account: CHECKING, text: csv(['Date,Description,Amount', '01/02/2026,BIG,99999999999999999.99', '01/03/2026,OK,-5.00']) });
+    assert.deepEqual(res.txns.map(t => t.amountCents), [-500]);
+    assert.equal(res.skipped.length, 1);
+    assert.match(res.skipped[0].reason, /amount/);
+    for (const t of res.txns) assert.ok(Number.isSafeInteger(t.amountCents));
+  });
+  test('large debit/credit amounts are bounded the same way', () => {
+    const res = I.normalizeFile({ name: 'big.csv', account: CHECKING, text: csv(['Date,Description,Debit,Credit', '01/02/2026,BIG,,"200,000,000.00"', '01/03/2026,OK,5.00,']) });
+    assert.deepEqual(res.txns.map(t => t.amountCents), [-500]);
+    assert.match(res.skipped[0].reason, /amount/);
+  });
+  test('a non-boolean chargesPositive is an error, never silently ignored', () => {
+    const text = csv(['Date,Description,Amount', '01/02/2026,KROGER,10.00', '01/03/2026,PAYMENT - THANK YOU,-10.00']);
+    assert.throws(() => I.normalizeFile({ name: 'c.csv', account: CARD, text, mapping: { chargesPositive: 'false' } }), /chargesPositive/);
+    assert.throws(() => I.normalizeFile({ name: 'c.csv', account: CARD, text, mapping: { chargesPositive: 1 } }), E.ValidationError);
+  });
+});
+
+describe('hardening: classification', () => {
+  test('a debit-card purchase is spending, not a credit card payment', () => {
+    const u = one({ description: 'DEBIT CARD PURCHASE SAMPLE SHOP', amountCents: -1200 });
+    assert.equal(u.kind, 'spend');
+  });
+  test('genuine card payment wording is still a card payment', () => {
+    assert.equal(one({ description: 'CREDIT CARD PAYMENT', amountCents: -5000 }).kind, 'card_payment');
+    assert.equal(one({ description: 'SAMPLE BANK CARD AUTOPAY', amountCents: -5000 }).kind, 'card_payment');
+  });
+});
+
+describe('hardening: unpaired card payments', () => {
+  test('when a card is covered, the note still says the payment may be for a card not in the data', () => {
+    const accounts = [CHECKING, { ...CARD, coverage: [{ start: '2026-01-01', end: '2026-06-30' }] }];
+    const [t] = I.pairTransfers([txn({ id: 'a', accountId: 'chk', date: '2026-03-25', kind: 'card_payment', amountCents: -40000 })], accounts);
+    assert.match(t.note, /confirm this pays a card/);
+    assert.match(t.note, /not in the data/);
+  });
+  test('buildDataset warns about every unpaired card payment from a cash account', () => {
+    const { report } = I.buildDataset({
+      datasetId: 't', generatedAt: '2026-04-01', accounts: [CHECKING, CARD],
+      files: [
+        { name: 'c.csv', accountId: 'chk', coverageStart: '2026-03-01', coverageEnd: '2026-03-31', text: 'Date,Description,Amount\n03/25/2026,OTHER BANK CARD AUTOPAY,-400.00\n' },
+        { name: 'k.csv', accountId: 'card', coverageStart: '2026-03-01', coverageEnd: '2026-03-31', text: 'Date,Description,Amount\n03/10/2026,KROGER,-20.00\n' }
+      ]
+    });
+    assert.ok(report.warnings.some(w => /card payment/.test(w) && /\$400\.00/.test(w)), report.warnings.join('\n'));
+  });
+});
+
+describe('hardening: reimbursement candidates', () => {
+  const mark = list => I.markReimbursementCandidates(list, { accounts: ACCOUNTS });
+  test('a charge already refunded on the same account is not offered as reimbursed', () => {
+    const out = mark([
+      txn({ id: 'buy', accountId: 'card', date: '2026-07-01', merchant: 'Sample Shop', description: 'SAMPLE SHOP', amountCents: -6000 }),
+      txn({ id: 'ref', accountId: 'card', date: '2026-07-09', merchant: 'Sample Shop', description: 'SAMPLE SHOP', amountCents: 6000, flags: ['refund'] }),
+      txn({ id: 'dep', accountId: 'chk', date: '2026-07-20', kind: 'income', subtype: 'other', category: 'Income', amountCents: 6000 })
+    ]);
+    assert.ok(out.every(t => !t.flags.includes('reimbursement_candidate')));
+  });
+  test('a refund of a different charge does not block the match', () => {
+    const out = mark([
+      txn({ id: 'buy1', accountId: 'card', date: '2026-07-01', merchant: 'Sample Shop', description: 'SAMPLE SHOP', amountCents: -6000 }),
+      txn({ id: 'buy2', accountId: 'card', date: '2026-07-02', merchant: 'Sample Shop', description: 'SAMPLE SHOP', amountCents: -6000 }),
+      txn({ id: 'ref', accountId: 'card', date: '2026-07-09', merchant: 'Sample Shop', description: 'SAMPLE SHOP', amountCents: 6000, flags: ['refund'] }),
+      txn({ id: 'dep', accountId: 'chk', date: '2026-07-20', kind: 'income', subtype: 'other', category: 'Income', amountCents: 6000 })
+    ]);
+    const dep = out.find(t => t.id === 'dep');
+    assert.equal(dep.matchIds.length, 1, 'one of the two charges is still unrefunded');
+  });
+});
+
+describe('hardening: posted date columns', () => {
+  test('a plain Date column next to a Posted Date column: the posted date is the transaction date', () => {
+    const m = I.detectMapping(['Date', 'Posted Date', 'Description', 'Amount']);
+    assert.equal(m.postDate, 'Posted Date');
+    assert.equal(m.date, 'Date');
+    const r = I.normalizeFile({ name: 'x.csv', account: CHECKING, text: csv(['Date,Posted Date,Description,Amount', '01/30/2026,02/02/2026,SAMPLE SHOP,-10.00']) });
+    assert.equal(r.txns[0].date, '2026-02-02', 'counted in the month it posted');
+    assert.match(r.txns[0].note, /Transaction date 2026-01-30/);
+  });
+  test('the same works with Debit/Credit columns', () => {
+    const m = I.detectMapping(['Date', 'Description', 'Debit', 'Credit', 'Date Posted']);
+    assert.equal(m.postDate, 'Date Posted');
+  });
+  test('a bare "Posted" status column is not mistaken for a posted date', () => {
+    const m = I.detectMapping(['Date', 'Description', 'Amount', 'Posted']);
+    assert.equal(m.postDate, undefined);
+    const r = I.normalizeFile({ name: 'x.csv', account: CHECKING, text: csv(['Date,Description,Amount,Posted', '01/30/2026,SAMPLE SHOP,-10.00,Y']) });
+    assert.equal(r.txns.length, 1);
+  });
+});
+
+describe('hardening: pairing priority', () => {
+  test('a card payment beats a same-amount debt payment for the same card credit', () => {
+    for (const ids of [['a-card', 'z-debt'], ['z-card', 'a-debt']]) {
+      const out = I.pairTransfers([
+        txn({ id: ids[1], accountId: 'chk', date: '2026-03-25', kind: 'debt_payment', subtype: 'store_card', amountCents: -5500 }),
+        txn({ id: ids[0], accountId: 'chk', date: '2026-03-25', kind: 'card_payment', amountCents: -5500 }),
+        txn({ id: 'rcv', accountId: 'card', date: '2026-03-25', kind: 'card_payment', amountCents: 5500 })
+      ], ACCOUNTS);
+      const by = Object.fromEntries(out.map(t => [t.id, t]));
+      assert.equal(by.rcv.pairId, ids[0], ids.join());
+      assert.equal(by[ids[1]].kind, 'debt_payment');
+      assert.equal(by[ids[1]].pairId, null);
+    }
+  });
+});
+
+describe('hardening: extra edge cases', () => {
+  test('CSV: a quoted field after leading spaces, and line numbers after a multi-line field', () => {
+    assert.deepEqual(I.parseCSV('a,  "b, c"\n'), [['a', 'b, c']]);
+    const recs = I.parseCSVRecords('h1,h2\n"x\ny\nz",1\r\n2,3\n');
+    assert.deepEqual(recs.map(r => r.line), [1, 2, 5]);
+  });
+  test('CSV: a lone CR inside quotes counts as a line break for row numbers', () => {
+    const recs = I.parseCSVRecords('h\r"a\rb"\rc\r');
+    assert.deepEqual(recs.map(r => r.line), [1, 2, 4]);
+  });
+  test('detectMapping: Discover-style "Trans. Date" and "Post Date"', () => {
+    const m = I.detectMapping(['Trans. Date', 'Post Date', 'Description', 'Amount', 'Category']);
+    assert.equal(m.profile, 'card_signed_amount');
+    assert.equal(m.date, 'Trans. Date');
+    assert.equal(m.postDate, 'Post Date');
+    assert.equal(m.category, 'Category');
+  });
+  test('parseDate: compact, short and two-digit forms', () => {
+    assert.equal(I.parseDate('20260310'), '2026-03-10');
+    assert.equal(I.parseDate('3/5/26'), '2026-03-05');
+    assert.equal(I.parseDate('2024-02-30', 'YMD'), null);
+    assert.equal(I.parseDate('2/29/2028'), '2028-02-29');
+    assert.equal(I.parseDate('2/29/2100'), null, '2100 is not a leap year');
+    assert.equal(I.parseDate('31/12/2025', 'MDY'), null);
+  });
+  test('normalizeFile: parentheses, trailing minus and negative zero', () => {
+    const r = I.normalizeFile({ name: 'p.csv', account: CHECKING, text: csv(['Date,Description,Amount', '01/02/2026,A,(12.50)', '01/03/2026,B,7.25-', '01/04/2026,C,-0.00', '01/05/2026,D,"$1,234.56"']) });
+    assert.deepEqual(r.txns.map(t => t.amountCents), [-1250, -725, 123456]);
+    assert.deepEqual(r.skipped, [{ row: 4, reason: 'zero amount' }]);
+  });
+  test('normalizeFile: amounts are exact integer cents (no float drift)', () => {
+    const r = I.normalizeFile({ name: 'p.csv', account: CHECKING, text: csv(['Date,Description,Amount', '01/02/2026,A,-0.29', '01/03/2026,B,-1.005', '01/04/2026,C,-4.35']) });
+    assert.deepEqual(r.txns.map(t => t.amountCents), [-29, -101, -435]);
+    for (const t of r.txns) assert.ok(Number.isInteger(t.amountCents));
+  });
+  test('card sign inference: a tie between conventions is refused, not guessed', () => {
+    const text = csv(['Date,Description,Amount', '01/02/2026,SHOP A,10.00', '01/03/2026,SHOP B,-10.00']);
+    assert.throws(() => I.normalizeFile({ name: 't.csv', account: CARD, text }), err => err.code === 'SIGN_UNKNOWN');
+  });
+  test('card sign inference: purchases only, positive, are treated as charges', () => {
+    const r = I.normalizeFile({ name: 't.csv', account: CARD, text: csv(['Date,Description,Amount', '01/02/2026,SHOP A,10.00', '01/03/2026,SHOP B,20.00']) });
+    assert.deepEqual(r.txns.map(t => t.amountCents), [-1000, -2000]);
+    assert.ok(r.warnings.some(w => /no payment rows to confirm/.test(w)));
+  });
+  test('normalizeFile does not mutate the mapping it is given', () => {
+    const mapping = Object.freeze({ chargesPositive: true });
+    const r = I.normalizeFile({ name: 't.csv', account: CARD, mapping, text: csv(['Date,Description,Amount', '01/02/2026,SHOP,10.00']) });
+    assert.equal(r.txns[0].amountCents, -1000);
+    assert.deepEqual(mapping, { chargesPositive: true });
+  });
+  test('dedupe: three overlapping files keep the largest single-file count', () => {
+    const t = (file, row) => raw({ sourceFile: file, sourceRow: row, description: 'COFFEE', amountCents: -300 });
+    const { kept, removed } = I.dedupe([t('a', 1), t('b', 1), t('b', 2), t('c', 1), t('c', 2), t('c', 3)]);
+    assert.equal(kept.length, 3);
+    assert.ok(kept.every(k => k.sourceFile === 'c'));
+    assert.equal(removed.length, 3);
+    assert.ok(removed.every(r => r.keptFile === 'c'));
+  });
+  test('dedupe: the same export listed twice imports each row once', () => {
+    const text = csv(['Date,Description,Amount', '01/02/2026,COFFEE,-3.00', '01/02/2026,COFFEE,-3.00']);
+    const { dataset, report } = I.buildDataset({ datasetId: 't', generatedAt: '2026-02-01', accounts: [CHECKING],
+      files: [{ name: 'a.csv', accountId: 'chk', text }, { name: 'a-copy.csv', accountId: 'chk', text }] });
+    assert.equal(dataset.transactions.length, 2);
+    assert.equal(report.files[1].duplicatesRemoved, 2);
+    for (const f of report.files) assert.equal(f.rows, f.imported + f.skipped + f.duplicatesRemoved);
+  });
+  test('buildDataset does not mutate its inputs', () => {
+    const accounts = [{ ...CHECKING, coverage: [{ start: '2026-01-01', end: '2026-01-31' }] }];
+    const files = [{ name: 'a.csv', accountId: 'chk', text: csv(['Date,Description,Amount', '02/02/2026,SHOP,-3.00']), coverageStart: '2026-02-01', coverageEnd: '2026-02-28' }];
+    const rules = { merchantRules: [{ match: 'SHOP', category: 'Groceries', reason: 'test' }] };
+    const before = JSON.stringify({ accounts, files, rules });
+    const { dataset } = I.buildDataset({ datasetId: 't', generatedAt: '2026-03-01', accounts, files, rules });
+    assert.equal(JSON.stringify({ accounts, files, rules }), before);
+    assert.deepEqual(dataset.accounts[0].coverage, [{ start: '2026-01-01', end: '2026-02-28' }]);
+  });
+  test('buildDataset is deterministic regardless of row order within a day', () => {
+    const a = csv(['Date,Description,Amount', '01/02/2026,B,-2.00', '01/02/2026,A,-1.00']);
+    const b = csv(['Date,Description,Amount', '01/02/2026,A,-1.00', '01/02/2026,B,-2.00']);
+    const ids = text => I.buildDataset({ datasetId: 't', generatedAt: '2026-02-01', accounts: [CHECKING], files: [{ name: 'x.csv', accountId: 'chk', text }] })
+      .dataset.transactions.map(t => t.id);
+    assert.deepEqual(ids(a), ids(b));
+  });
+  test('monthlySummary: a leap-year February needs 29 covered days to be full', () => {
+    const rows = I.monthlySummary({ accounts: [{ id: 'chk', type: 'checking', coverage: [{ start: '2028-02-01', end: '2028-02-28' }] }], transactions: [] });
+    assert.equal(rows[0].days, 29);
+    assert.equal(rows[0].spendingCoverage, 'partial');
+  });
+  test('periodBreakdown: both ends of the period are inclusive', () => {
+    const { dataset } = I.buildDataset({ datasetId: 't', generatedAt: '2026-04-01', accounts: [CHECKING],
+      files: [{ name: 'a.csv', accountId: 'chk', text: csv(['Date,Description,Amount', '02/28/2026,A,-1.00', '03/01/2026,B,-2.00', '03/31/2026,C,-4.00', '04/01/2026,D,-8.00']) }] });
+    assert.equal(I.periodBreakdown(dataset, '2026-03-01', '2026-03-31').spending.netCents, 600);
+  });
+  test('reimbursement: a deposit on the same day as the charge can match', () => {
+    const out = I.markReimbursementCandidates([
+      txn({ id: 'c', accountId: 'card', date: '2026-05-01', amountCents: -4000 }),
+      txn({ id: 'd', accountId: 'chk', date: '2026-05-01', kind: 'income', subtype: 'other', amountCents: 4000 })
+    ], { accounts: ACCOUNTS });
+    assert.deepEqual(out[1].matchIds, ['c']);
+  });
+  test('pairing: a contribution paired with a personal account keeps its subtype', () => {
+    const accounts = [...ACCOUNTS, { id: 'p2chk', label: 'Partner B checking', type: 'checking', scope: 'personal', ownerId: 'p2' }];
+    const out = I.pairTransfers([
+      txn({ id: 'o', accountId: 'p2chk', date: '2026-05-01', kind: 'transfer', subtype: 'internal', amountCents: -132500 }),
+      txn({ id: 'i', accountId: 'chk', date: '2026-05-01', kind: 'transfer', subtype: 'contribution', amountCents: 132500 })
+    ], accounts);
+    assert.equal(out[1].pairId, 'o');
+    assert.equal(out[1].subtype, 'contribution');
+  });
+  test('pairing: a withdrawal from savings is labelled savings on both sides', () => {
+    const out = I.pairTransfers([
+      txn({ id: 'o', accountId: 'sav', date: '2026-05-01', kind: 'transfer', subtype: 'savings', amountCents: -20000 }),
+      txn({ id: 'i', accountId: 'chk', date: '2026-05-02', kind: 'transfer', subtype: 'internal', amountCents: 20000 })
+    ], ACCOUNTS);
+    assert.deepEqual(out.map(t => [t.pairId, t.subtype]), [['i', 'savings'], ['o', 'savings']]);
   });
 });

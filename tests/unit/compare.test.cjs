@@ -519,3 +519,57 @@ test('describeMonths: ranges, single months and gaps', () => {
   assert.equal(C.describeMonths(['2026-06', '2026-08']), 'Jun 2026 and Aug 2026');
   assert.equal(C.describeMonths([]), 'no months');
 });
+
+// ======================================================================= hardening
+
+test('hardening: rule values left undefined keep the defaults instead of disabling the rule', () => {
+  const txns = [spend('2026-06', 26000), spend('2026-07', 26000), spend('2026-08', 26000), spend('2026-09', 37000)];
+  const r = usualFor(txns, { month: '2026-09', rule: { minPct: undefined, minDiffCents: null, minMonths: undefined } });
+  assert.deepEqual(r.rule, C.RULE);
+  assert.equal(cat(r, 'Groceries').signal, 'higher');
+});
+
+test('hardening: a percentage just under the limit is never shown rounded up to the limit', () => {
+  // $600 usual, +$149.70 is 24.95%: under 25%, so "+25%" would contradict "under 25%".
+  const txns = [spend('2026-06', 60000), spend('2026-07', 60000), spend('2026-08', 60000), spend('2026-09', 74970)];
+  const g = cat(usualFor(txns, { month: '2026-09' }), 'Groceries');
+  assert.equal(g.signal, 'typical');
+  assert.equal(g.pct, 25); // the numeric field keeps whole-percent rounding
+  assert.ok(g.explanation.includes('(+24.9%) is over $100 but under 25% of usual'), g.explanation);
+  // The same on the way down.
+  const down = [spend('2026-06', 60000), spend('2026-07', 60000), spend('2026-08', 60000), spend('2026-09', 45030)];
+  const d = cat(usualFor(down, { month: '2026-09' }), 'Groceries');
+  assert.equal(d.signal, 'typical');
+  assert.ok(d.explanation.includes('(−24.9%) is over $100 but under 25% of usual'), d.explanation);
+});
+
+test('hardening: seasonal explanations use the same exact percentage wording', () => {
+  const txns = [
+    spend('2025-12', 60000, 'Gas & heating', { accountId: 'chk' }),
+    spend('2026-12', 74970, 'Gas & heating', { accountId: 'chk' })
+  ];
+  const g = cat(usualFor(txns, { month: '2026-12' }), 'Gas & heating');
+  assert.equal(g.signal, 'seasonal_typical');
+  assert.ok(g.explanation.includes('(+24.9%) is over $100 but under 25% of last year'), g.explanation);
+});
+
+test('hardening: whole percentages are unchanged when they do not touch the limit', () => {
+  const txns = [spend('2026-06', 26000), spend('2026-07', 26000), spend('2026-08', 26000), spend('2026-09', 41200)];
+  const g = cat(usualFor(txns, { month: '2026-09' }), 'Groceries');
+  assert.ok(g.explanation.includes('(+58%) exceeds both $100 and 25%'), g.explanation);
+});
+
+test('hardening: a partly reimbursed charge counts only its unreimbursed part in comparisons and trends', () => {
+  const txns = [
+    spend('2026-06', 10000, 'Travel'), spend('2026-07', 10000, 'Travel'), spend('2026-08', 10000, 'Travel'),
+    spend('2026-09', 50000, 'Travel', { id: 'flight', flags: ['reimbursement_candidate'], matchIds: ['payback'] }),
+    { id: 'payback', accountId: 'chk', date: '2026-09-20', description: 'MOBILE DEPOSIT', amountCents: 30000, kind: 'income', subtype: 'other', category: 'Income', flags: ['reimbursement_candidate'] }
+  ];
+  const ds = build(txns);
+  const rows = effective(ds, { flight: { reimbursement: 'confirmed', history: [] } });
+  const travel = cat(C.usual(rows, ds, { month: '2026-09' }), 'Travel');
+  assert.equal(travel.actualCents, 20000);
+  assert.equal(C.trend(rows, ds, { months: ['2026-09'], category: 'Travel' })[0].spendCents, 20000);
+  const row = C.planVsActual({ targets: { Travel: 15000 } }, rows, ds, { month: '2026-09' }).find(r => r.category === 'Travel');
+  assert.deepEqual([row.actualCents, row.diffToPlanCents, row.status], [20000, 5000, 'over']);
+});

@@ -1,0 +1,481 @@
+{
+  "schemaVersion": 1,
+  "isSynthetic": true,
+  "household": {
+    "name": "Alex & Sam (sample)",
+    "people": [
+      { "id": "p1", "name": "Alex" },
+      { "id": "p2", "name": "Sam" }
+    ]
+  },
+  "plan": {
+    "people": [
+      { "id": "p1", "name": "Alex" },
+      { "id": "p2", "name": "Sam" }
+    ],
+    "incomes": [
+      {
+        "id": "p1-pay",
+        "label": "Alex paycheck",
+        "personId": "p1",
+        "kind": "paycheck",
+        "netPerPaycheckCents": 224000,
+        "jointPerPaycheckCents": 188000,
+        "frequency": "biweekly",
+        "frequencyStatus": "confirmed",
+        "anchorDate": "2024-10-04",
+        "semimonthlyDays": [15, 31],
+        "monthlyDay": null,
+        "assumedPerMonthIfUnknown": 2,
+        "status": "confirmed",
+        "startMonth": null,
+        "endMonth": null,
+        "note": "Take-home pay of $2,240.00 every other Friday. A direct-deposit split sends $360.00 of each check to Alex's personal account; $1,880.00 lands in joint checking."
+      },
+      {
+        "id": "p2-pay",
+        "label": "Sam paycheck",
+        "personId": "p2",
+        "kind": "paycheck",
+        "netPerPaycheckCents": null,
+        "jointPerPaycheckCents": null,
+        "frequency": "unknown",
+        "frequencyStatus": "unknown",
+        "anchorDate": null,
+        "semimonthlyDays": [15, 31],
+        "monthlyDay": null,
+        "assumedPerMonthIfUnknown": 2,
+        "status": "unknown",
+        "startMonth": null,
+        "endMonth": null,
+        "note": "Unknown: Sam is paid into a personal account that is not in the data, so take-home pay and paydays are not known. Only Sam's transfers into joint are known (see Sam contribution to joint)."
+      },
+      {
+        "id": "p2-contribution",
+        "label": "Sam contribution to joint",
+        "personId": "p2",
+        "kind": "contribution",
+        "netPerPaycheckCents": null,
+        "jointPerPaycheckCents": 132500,
+        "frequency": "semimonthly",
+        "frequencyStatus": "observed",
+        "anchorDate": null,
+        "semimonthlyDays": [1, 15],
+        "monthlyDay": null,
+        "assumedPerMonthIfUnknown": 2,
+        "status": "observed",
+        "startMonth": null,
+        "endMonth": null,
+        "note": "Transfers of $1,325.00 from Sam's personal checking on the 1st and 15th (the Friday before when that date is a weekend). This is money moved into joint, not Sam's full income."
+      }
+    ],
+    "bills": [
+      {
+        "id": "mortgage",
+        "label": "Mortgage",
+        "category": "Mortgage",
+        "monthlyCents": 141256,
+        "fundedFrom": "joint",
+        "type": "housing",
+        "debtId": "mortgage",
+        "status": "existing",
+        "startMonth": null,
+        "endMonth": null,
+        "note": "Paid on the 1st from joint checking. Unknown: whether the payment includes escrow for property tax and home insurance."
+      },
+      {
+        "id": "internet",
+        "label": "Internet",
+        "category": "Internet & phone",
+        "monthlyCents": 7500,
+        "fundedFrom": "joint",
+        "type": "utility",
+        "debtId": null,
+        "status": "existing",
+        "startMonth": null,
+        "endMonth": null,
+        "note": "Paid on the 12th."
+      },
+      {
+        "id": "wireless",
+        "label": "Wireless phones",
+        "category": "Internet & phone",
+        "monthlyCents": 9240,
+        "fundedFrom": "joint",
+        "type": "utility",
+        "debtId": null,
+        "status": "existing",
+        "startMonth": null,
+        "endMonth": null,
+        "note": "Paid on the 22nd."
+      },
+      {
+        "id": "home-insurance",
+        "label": "Home insurance",
+        "category": "Home insurance",
+        "monthlyCents": 9200,
+        "fundedFrom": "joint",
+        "type": "insurance",
+        "debtId": null,
+        "status": "existing",
+        "startMonth": null,
+        "endMonth": null,
+        "note": "Paid once a year in March ($1,104.00). $92.00 is the monthly amount to set aside for it."
+      },
+      {
+        "id": "store-card",
+        "label": "Store card payment",
+        "category": null,
+        "monthlyCents": 5500,
+        "fundedFrom": "joint",
+        "type": "debt",
+        "debtId": "store-card",
+        "status": "existing",
+        "startMonth": null,
+        "endMonth": null,
+        "note": "The minimum payment plus $25, currently $55.00, paid on the 9th. The minimum changes with the balance."
+      },
+      {
+        "id": "p1-car",
+        "label": "Alex car payment",
+        "category": null,
+        "monthlyCents": 24500,
+        "fundedFrom": "p1",
+        "type": "debt",
+        "debtId": "p1-car",
+        "status": "existing",
+        "startMonth": null,
+        "endMonth": null,
+        "note": "Paid from Alex's personal account, which is not in the data."
+      },
+      {
+        "id": "p1-student-loans",
+        "label": "Alex student loans",
+        "category": null,
+        "monthlyCents": 28950,
+        "fundedFrom": "p1",
+        "type": "debt",
+        "debtId": "p1-student-loans",
+        "status": "existing",
+        "startMonth": null,
+        "endMonth": null,
+        "note": "Paid from Alex's personal account, which is not in the data."
+      },
+      {
+        "id": "p2-car",
+        "label": "Sam car payment",
+        "category": null,
+        "monthlyCents": 37200,
+        "fundedFrom": "unknown",
+        "type": "debt",
+        "debtId": "p2-car",
+        "status": "existing",
+        "startMonth": null,
+        "endMonth": null,
+        "note": "Unknown: which account pays it. It does not appear in the joint data, so it is left out of joint totals until confirmed."
+      },
+      {
+        "id": "life-insurance",
+        "label": "Life insurance (being considered)",
+        "category": "Life insurance",
+        "monthlyCents": 4000,
+        "fundedFrom": "joint",
+        "type": "insurance",
+        "debtId": null,
+        "status": "planned",
+        "startMonth": null,
+        "endMonth": null,
+        "note": "Illustrative amount only: there is no policy or quote yet."
+      }
+    ],
+    "debts": [
+      {
+        "id": "mortgage",
+        "label": "Mortgage",
+        "ownerId": "joint",
+        "balanceCents": 14800000,
+        "balanceAsOf": null,
+        "balanceStatus": "approximate",
+        "aprPct": null,
+        "aprRange": null,
+        "aprStatus": "unknown",
+        "paymentBillId": "mortgage",
+        "promo": null,
+        "loanCount": 1,
+        "repaymentPlan": null,
+        "termStatus": "unknown",
+        "escrowIncluded": null,
+        "note": "The balance is approximate (about $148,000). Unknown: the interest rate, the remaining term and whether the payment includes escrow."
+      },
+      {
+        "id": "p1-car",
+        "label": "Alex car loan",
+        "ownerId": "p1",
+        "balanceCents": 590000,
+        "balanceAsOf": null,
+        "balanceStatus": "approximate",
+        "aprPct": null,
+        "aprRange": null,
+        "aprStatus": "unknown",
+        "paymentBillId": "p1-car",
+        "promo": null,
+        "loanCount": 1,
+        "repaymentPlan": null,
+        "termStatus": "unknown",
+        "escrowIncluded": null,
+        "note": "The balance is approximate (about $5,900). Unknown: the interest rate and the final payment month."
+      },
+      {
+        "id": "p1-student-loans",
+        "label": "Alex student loans",
+        "ownerId": "p1",
+        "balanceCents": 1421280,
+        "balanceAsOf": null,
+        "balanceStatus": "statement",
+        "aprPct": null,
+        "aprRange": [3.73, 6.28],
+        "aprStatus": "displayed",
+        "paymentBillId": "p1-student-loans",
+        "promo": null,
+        "loanCount": 6,
+        "repaymentPlan": null,
+        "termStatus": "unknown",
+        "escrowIncluded": null,
+        "note": "$14,212.80 across 6 loans; the servicer displays rates from 3.73% to 6.28%. Unknown: the repayment plan and the payoff date."
+      },
+      {
+        "id": "p2-car",
+        "label": "Sam car loan",
+        "ownerId": "p2",
+        "balanceCents": 2480000,
+        "balanceAsOf": null,
+        "balanceStatus": "approximate",
+        "aprPct": null,
+        "aprRange": null,
+        "aprStatus": "unknown",
+        "paymentBillId": "p2-car",
+        "promo": null,
+        "loanCount": 1,
+        "repaymentPlan": null,
+        "termStatus": "unknown",
+        "escrowIncluded": null,
+        "note": "The balance is approximate (about $24,800). Unknown: the interest rate, the final payment month and which account pays it."
+      },
+      {
+        "id": "store-card",
+        "label": "Store card",
+        "ownerId": "joint",
+        "balanceCents": 198035,
+        "balanceAsOf": null,
+        "balanceStatus": "statement",
+        "aprPct": null,
+        "aprRange": null,
+        "aprStatus": "unknown",
+        "paymentBillId": "store-card",
+        "promo": {
+          "balanceCents": null,
+          "expiresMonth": null,
+          "deferredInterest": null,
+          "note": "Unverified: how much of the balance is on a promotional plan, when the promotion ends and whether interest is deferred. Check the statement before relying on the promotion."
+        },
+        "loanCount": null,
+        "repaymentPlan": null,
+        "termStatus": "unknown",
+        "escrowIncluded": null,
+        "note": "Statement balance of $1,980.35 for the whole card. The payment is the minimum plus $25 (currently $55.00)."
+      }
+    ],
+    "targets": {
+      "Groceries": 60000,
+      "Dining & takeout": 30000,
+      "Mixed retail": 70000,
+      "Household & hardware": 15000,
+      "Clothing": null,
+      "Fuel": 13000,
+      "Auto maintenance": null,
+      "Gas & heating": 10500,
+      "Electric": 10500,
+      "Water & sewer": 5500,
+      "Medical & pharmacy": 2500,
+      "Dental": null,
+      "Pets": 5000,
+      "Subscriptions": 2748,
+      "Entertainment": null,
+      "Travel": null,
+      "Gifts & donations": null,
+      "Fees & interest": 792
+    },
+    "savings": [
+      {
+        "id": "emergency",
+        "label": "Emergency cushion",
+        "targetCents": 1500000,
+        "targetMonth": null,
+        "savedCents": null,
+        "monthlyCents": 15000,
+        "spendAtTarget": false,
+        "note": "Kept, not spent. Unknown: how much of the joint savings is already set aside for it."
+      },
+      {
+        "id": "anniversary-trip",
+        "label": "Anniversary trip",
+        "targetCents": 240000,
+        "targetMonth": "2027-09",
+        "savedCents": 0,
+        "monthlyCents": 20000,
+        "spendAtTarget": true,
+        "note": "Spent on the trip in September 2027."
+      },
+      {
+        "id": "home-projects",
+        "label": "Home projects fund",
+        "targetCents": null,
+        "targetMonth": null,
+        "savedCents": null,
+        "monthlyCents": 10000,
+        "spendAtTarget": false,
+        "note": "Unknown: the target, because quotes for the home projects have not arrived, and how much is already saved."
+      }
+    ],
+    "personalSpending": [
+      {
+        "personId": "p1",
+        "monthlyCents": null,
+        "note": "Unknown: spending from Alex's personal account is not in the data."
+      },
+      {
+        "personId": "p2",
+        "monthlyCents": null,
+        "note": "Unknown: spending from Sam's personal account is not in the data."
+      }
+    ],
+    "balances": {
+      "jointCashCents": null,
+      "asOf": null,
+      "note": "Unknown: account balances are not in the exports. Enter the joint cash balance and the date it was true."
+    },
+    "settings": {
+      "incomeTiming": "conservative",
+      "planningBaseline": "actual",
+      "comparisonWindow": 3
+    }
+  },
+  "scenarios": [
+    {
+      "id": "baby-arrives",
+      "name": "Baby arrives (May 2027)",
+      "description": "Sample: a baby due in May 2027. Supplies use a sample allowance; childcare, birth costs and parental-leave pay are not known yet, so they are left blank instead of guessed.",
+      "events": [
+        {
+          "id": "baby-supplies",
+          "type": "recurring",
+          "label": "Baby supplies",
+          "startMonth": "2027-05",
+          "endMonth": null,
+          "monthlyCents": 25000,
+          "direction": "expense",
+          "category": "Baby & childcare",
+          "note": "Sample allowance for diapers, formula and similar supplies. It is not a quote."
+        },
+        {
+          "id": "birth-costs",
+          "type": "one_time",
+          "label": "Birth and hospital costs",
+          "month": "2027-05",
+          "amountCents": null,
+          "direction": "expense",
+          "category": "Medical & pharmacy",
+          "goalId": null,
+          "note": "Unknown: the out-of-pocket cost depends on the insurance plan's deductible and out-of-pocket maximum."
+        },
+        {
+          "id": "p2-leave",
+          "type": "income_change",
+          "label": "Sam parental leave",
+          "streamId": "p2-contribution",
+          "startMonth": "2027-05",
+          "endMonth": "2027-07",
+          "jointPerPaycheckCents": null,
+          "note": "Unknown: Sam's pay during leave. The contribution into joint for these months is left blank instead of assuming full pay or none."
+        },
+        {
+          "id": "childcare",
+          "type": "recurring",
+          "label": "Childcare",
+          "startMonth": "2027-09",
+          "endMonth": null,
+          "monthlyCents": null,
+          "direction": "expense",
+          "category": "Baby & childcare",
+          "note": "Unknown: the cost and the real start month. September 2027 is a placeholder start; replace both once childcare is arranged."
+        }
+      ],
+      "assumptions": {
+        "incomeTiming": "conservative",
+        "annualReturnPct": 0,
+        "costGrowthPct": 0,
+        "incomeGrowthPct": 0
+      }
+    },
+    {
+      "id": "home-projects-scenario",
+      "name": "Home projects",
+      "description": "Sample: three home projects being considered. No quotes yet, so every cost is blank. Each project is paid from the Home projects fund.",
+      "events": [
+        {
+          "id": "attic-insulation",
+          "type": "one_time",
+          "label": "Attic insulation",
+          "month": "2026-11",
+          "amountCents": null,
+          "direction": "expense",
+          "category": "Home improvement",
+          "goalId": "home-projects",
+          "note": "Unknown: quote not received yet."
+        },
+        {
+          "id": "window-replacement",
+          "type": "one_time",
+          "label": "Window replacement",
+          "month": "2027-04",
+          "amountCents": null,
+          "direction": "expense",
+          "category": "Home improvement",
+          "goalId": "home-projects",
+          "note": "Unknown: quote not received yet."
+        },
+        {
+          "id": "electrical-panel",
+          "type": "one_time",
+          "label": "Electrical panel",
+          "month": "2027-06",
+          "amountCents": null,
+          "direction": "expense",
+          "category": "Home improvement",
+          "goalId": "home-projects",
+          "note": "Unknown: quote not received yet."
+        }
+      ],
+      "assumptions": {
+        "incomeTiming": "conservative",
+        "annualReturnPct": 0,
+        "costGrowthPct": 0,
+        "incomeGrowthPct": 0
+      }
+    }
+  ],
+  "references": [],
+  "rulesNote": "Import rules for this sample household are in fixtures/sample-rules.json.",
+  "notes": [
+    "Everything in this profile is invented for the public sample.",
+    "Sam's take-home pay and paydays are unknown; only Sam's transfers into joint are known.",
+    "Who pays Sam's car loan is unknown, so it stays out of joint totals until confirmed.",
+    "Mortgage: the rate, the remaining term and whether escrow is included are unknown; the balance is approximate.",
+    "Store card: the promotional balance, its expiry and whether interest is deferred are unverified.",
+    "Targets for Clothing, Auto maintenance, Entertainment, Travel and Gifts & donations are blank on purpose: there is not enough regular history to suggest one, so they show as missing instead of $0.",
+    "Dental is blank on purpose: the unusual dental episode in August 2026 makes recent history a poor guide. Set a reserve for routine visits.",
+    "The joint cash balance, the emergency cushion's saved amount, the home-projects target and personal spending are unknown.",
+    "Baby scenario: childcare cost and start, birth costs and parental-leave pay are unknown.",
+    "Home projects scenario: no quotes yet, so every project cost is blank."
+  ]
+}

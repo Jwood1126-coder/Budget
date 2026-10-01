@@ -160,7 +160,8 @@
    * @param {'actual'|'conservative'|'average'} [timing='actual']
    * @returns {{count:number, basis:'actual'|'typical'|'average'|'assumed'|'none', dates:string[], assumption:string|null, perYear:number|null}}
    *   `count` may be fractional for 'average'. `perYear` is set for the 'average' basis so callers
-   *   can round money exactly (perPaycheck × perYear / 12).
+   *   can round money exactly (perPaycheck × perYear / 12). Under 'actual' timing a weekly/biweekly
+   *   stream whose anchor falls in its startMonth is not counted before that first payday.
    */
   function count(stream, month, timing = 'actual') {
     requireMonth(month);
@@ -195,7 +196,12 @@
       return { count: TYPICAL[freq], basis: 'typical', dates: [], assumption: unconfirmed, perYear: null };
     }
 
-    const dates = paydays(stream, month);
+    let dates = paydays(stream, month);
+    // A weekly/biweekly stream that starts in the same month as its anchor payday (a new job,
+    // a return from leave) has nothing to pay before that first payday: do not count earlier dates.
+    if (dates && (freq === 'weekly' || freq === 'biweekly') && stream.startMonth === month && E.months.of(stream.anchorDate) === month) {
+      dates = dates.filter(d => d >= stream.anchorDate);
+    }
     if (dates === null) {
       // No anchor date / payday entered: fall back to a typical month and say why.
       const n = TYPICAL[freq];

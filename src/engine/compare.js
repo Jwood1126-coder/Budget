@@ -36,6 +36,19 @@
     if (p < 0) return '−' + Math.abs(p) + '%';
     return '0%';
   }
+  /**
+   * Percent for an explanation. Whole percent, except when rounding would show the rule's limit
+   * for a difference that is actually under it ("+25% … under 25%"): then one decimal, truncated.
+   */
+  function pctForText(diff, base, rule) {
+    const p = percent(diff, base);
+    const abs = Math.abs(diff);
+    if (Math.abs(p) === rule.minPct && abs * 100 < rule.minPct * base) {
+      const tenths = Math.floor((abs * 1000) / base) / 10;
+      return (diff < 0 ? '−' : '+') + tenths.toFixed(1) + '%';
+    }
+    return pctText(p);
+  }
   const label = m => E.months.label(m);
   const plural = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
   const stripDot = s => String(s).replace(/\.\s*$/, '');
@@ -228,7 +241,7 @@
         pct = percent(diffCents, ly);
         const t = threshold(diffCents, ly, rule, 'last year');
         signal = t.flag ? (diffCents > 0 ? 'seasonal_higher' : 'seasonal_lower') : 'seasonal_typical';
-        explanation = lead + ' ' + money(actualCents) + ' vs ' + money(ly) + ': ' + signedMoney(diffCents) + ' (' + pctText(pct) + ') ' + t.phrase
+        explanation = lead + ' ' + money(actualCents) + ' vs ' + money(ly) + ': ' + signedMoney(diffCents) + ' (' + pctForText(diffCents, ly, rule) + ') ' + t.phrase
           + ', so it is ' + (t.flag ? 'marked ' + (diffCents > 0 ? 'higher' : 'lower') + ' than last year' : 'typical for the season') + '.';
       }
     } else if (seasonal) {
@@ -268,7 +281,7 @@
       const t = threshold(diffCents, averageCents, rule, 'usual');
       signal = t.flag ? (diffCents > 0 ? 'higher' : 'lower') : 'typical';
       explanation = label(month) + ' ' + money(actualCents) + ' vs usual ' + money(averageCents) + ' (' + basisText + '). '
-        + signedMoney(diffCents) + ' (' + pctText(pct) + ') ' + t.phrase + ', so it is '
+        + signedMoney(diffCents) + ' (' + pctForText(diffCents, averageCents, rule) + ') ' + t.phrase + ', so it is '
         + (t.flag ? 'marked ' + (diffCents > 0 ? 'higher' : 'lower') + ' than usual' : 'typical') + '.';
     }
 
@@ -311,7 +324,9 @@
   function usual(txns, dataset, opts = {}) {
     const month = requireMonth(opts.month);
     const window = normalizeWindow(opts.window);
-    const rule = Object.assign({}, RULE, isObj(opts.rule) ? opts.rule : {});
+    // A rule value left undefined/null keeps the default rather than silently disabling the check.
+    const rule = Object.assign({}, RULE);
+    if (isObj(opts.rule)) for (const [k, v] of Object.entries(opts.rule)) if (v !== undefined && v !== null) rule[k] = v;
     const planning = opts.planning === true;
     const cov = coverageCache(dataset);
     const selectedCoverage = cov(month);

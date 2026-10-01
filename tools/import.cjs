@@ -348,6 +348,18 @@ function main(argv, { log = console.log, error = console.error } = {}) {
     error('Refusing --sample: ' + path.relative(root, configPath) + ' is not marked "isSynthetic": true. Real data must never go into fixtures/.');
     return 2;
   }
+  if (args.sample) {
+    // The flag alone is not proof: a mislabelled private config would copy real exports into the
+    // public fixtures/. The synthetic sample is built only from inputs that already live there.
+    const inputs = [path.relative(root, configPath)];
+    for (const f of Array.isArray(config.files) ? config.files : []) if (f && typeof f.path === 'string') inputs.push(f.path);
+    if (typeof config.rules === 'string' && config.rules) inputs.push(config.rules);
+    const outside = inputs.filter(p => !isInside(fixturesDir, resolve(p)));
+    if (outside.length) {
+      error('Refusing --sample: these inputs are not inside fixtures/: ' + outside.join(', ') + '. The synthetic sample is built only from files in fixtures/.');
+      return 2;
+    }
+  }
 
   let result;
   try {

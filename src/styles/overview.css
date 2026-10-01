@@ -15,7 +15,8 @@
 .flow-total { background: var(--surface-2); }
 .flow-total .num { font-size: 1.25rem; }
 @media (max-width: 599px) {
-  .flow-row { grid-template-columns: minmax(0, 1fr) auto auto; gap: var(--space-2); padding: 10px; }
+  .flow-row { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-2); padding: 10px; }
+  .flow-head { font-size: .66rem; }
   .flow-row .num { font-size: .95rem; }
   .flow-row small { font-size: .72rem; }
 }

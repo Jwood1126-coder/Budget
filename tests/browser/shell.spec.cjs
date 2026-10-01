@@ -64,7 +64,8 @@ module.exports = [
     name: 'skip link and keyboard reach the main content',
     async run(t) {
       await t.open('#/overview');
-      await t.page.evaluate(() => document.activeElement.blur());
+      await t.page.reload();
+      await t.page.waitForSelector('#page-title');
       await t.page.keyboard.press('Tab');
       t.assert.equal(await t.page.evaluate(() => document.activeElement.className), 'skip-link');
       await t.page.keyboard.press('Enter');

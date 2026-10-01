@@ -20,7 +20,6 @@
 
   const LOADED_DATASET_KEY = 'household-budget:loaded-dataset';
   const LOADED_PROFILE_KEY = 'household-budget:loaded-profile';
-  const LEGACY_COPY_IDS = ['local-private', 'local-sample', 'hosted'];
 
   const app = {
     build: null, profile: null, dataset: null, state: null,
@@ -75,24 +74,12 @@
   }
 
   function loadState() {
-    const result = E.state.loadFromStorage(app.storage || memoryStorage(), app.dataset.datasetId, app.profile, app.dataset, { legacyCopyIds: legacyCopyIds() });
+    // The engine picks the earlier version's storage keys by dataset type (sample vs household),
+    // so a private budget never inherits the sample page's invented figures or vice versa.
+    const result = E.state.loadFromStorage(app.storage || memoryStorage(), app.dataset.datasetId, app.profile, app.dataset);
     app.state = result.state;
     app.loadNotes.push(...(result.notes || []));
     app.stateSource = result.source;
-  }
-
-  /** Legacy keys from the first version of the app; private builds used 'local-private'. */
-  function legacyCopyIds() {
-    const ids = app.build.kind === 'sample' ? ['local-sample'] : LEGACY_COPY_IDS;
-    if (!app.storage) return ids;
-    const extra = [];
-    try {
-      for (let i = 0; i < app.storage.length; i++) {
-        const k = app.storage.key(i);
-        if (k && k.startsWith('sample-household-budget-v1-copy-')) extra.push(k.slice('sample-household-budget-v1-'.length));
-      }
-    } catch { /* ignore */ }
-    return [...ids, ...extra];
   }
 
   function memoryStorage() {
@@ -200,7 +187,9 @@
     document.title = (view.title || 'Budget') + ' · ' + (app.state.plan.people?.length ? householdName() : 'Household budget');
     updateChrome(ctx);
 
-    const viewChanged = lastView !== route.view;
+    // Move focus to the new heading when the view changes (not on first load, so the skip link
+    // stays the first Tab stop).
+    const viewChanged = lastView !== null && lastView !== route.view;
     lastView = route.view;
     if ((focusHeading || viewChanged) && !keepFocusOnNextRender) {
       const h = $('#page-title', container);
@@ -401,6 +390,13 @@
 
   function installEvents() {
     document.addEventListener('click', ev => {
+      // Re-selecting the current destination returns to the top of that view (no hashchange fires).
+      const nav = ev.target.closest('a[href^="#/"]');
+      if (nav && !ev.defaultPrevented && !nav.dataset.action && nav.getAttribute('href') === location.hash) {
+        ev.preventDefault();
+        render({ focusHeading: true });
+        return;
+      }
       const el = ev.target.closest('[data-action]');
       if (!el || el.tagName === 'INPUT' || el.tagName === 'SELECT') return;
       if (el.tagName === 'A') ev.preventDefault();

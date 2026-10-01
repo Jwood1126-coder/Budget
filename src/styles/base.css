@@ -71,6 +71,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
@@ -114,7 +115,7 @@ small { color: var(--text-3); }
 .save-status.is-error { color: var(--bad); font-weight: 600; }
 .topbar-data { display: none; font-size: .9rem; font-weight: 600; text-decoration: none; }
 
-.shell { display: grid; grid-template-columns: var(--nav-width) minmax(0, 1fr); min-height: calc(100vh - var(--topbar-h)); }
+.shell { display: grid; grid-template-columns: var(--nav-width) minmax(0, 1fr); min-height: calc(100vh - var(--topbar-h)); background: linear-gradient(to right, var(--surface) calc(var(--nav-width) - 1px), var(--border) calc(var(--nav-width) - 1px), var(--border) var(--nav-width), transparent var(--nav-width)); }
 .mainnav {
   position: sticky; top: var(--topbar-h); align-self: start;
   height: calc(100vh - var(--topbar-h));
@@ -144,7 +145,7 @@ main { padding: var(--space-6) var(--space-6) var(--space-7); max-width: 1240px;
 
 /* Phones and small tablets: bottom tab bar, Data link in the top bar */
 @media (max-width: 899px) {
-  .shell { grid-template-columns: minmax(0, 1fr); }
+  .shell { grid-template-columns: minmax(0, 1fr); background: none; }
   .topbar { padding: 0 var(--space-4); }
   .topbar-data { display: inline-block; }
   .save-status { display: none; }

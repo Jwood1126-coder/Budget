@@ -24,6 +24,12 @@
   const SPIKE_DEFAULTS = { minCents: 50000, multiple: 3, window: 6 };
 
   const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+  /** Options over defaults, ignoring undefined/null values (a blank setting keeps the default). */
+  const withDefaults = (defaults, opts) => {
+    const out = Object.assign({}, defaults);
+    if (isObj(opts)) for (const [k, v] of Object.entries(opts)) if (v !== undefined && v !== null) out[k] = v;
+    return out;
+  };
   const nonEmpty = v => typeof v === 'string' && v.trim() !== '';
   const byDateThenId = (a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   const flagsOf = t => (Array.isArray(t && t.flags) ? t.flags : []);
@@ -90,7 +96,9 @@
         }
       }
     }
-    return out.sort((p, q) => (p.txns[0].date > q.txns[0].date ? -1 : p.txns[0].date < q.txns[0].date ? 1 : p.ids[0] < q.ids[0] ? -1 : 1));
+    // Newest first, then by both ids: a total order, so every engine lists pairs the same way.
+    const cmp = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
+    return out.sort((p, q) => cmp(q.txns[0].date, p.txns[0].date) || cmp(p.ids[0], q.ids[0]) || cmp(p.ids[1], q.ids[1]));
   }
 
   // ------------------------------------------------------------------ reimbursements
@@ -124,6 +132,10 @@
 
   /** Is the missing side of an unpaired transfer expected to be absent? Explains why. */
   function transferExpectation(t, dataset) {
+    // Once the household confirms the money was a reimbursement, there is no transfer to explain.
+    if (t.reimbursementStatus === 'confirmed') {
+      return { expected: true, reason: 'Confirmed as a reimbursement, so no matching transfer is expected.' };
+    }
     if (t.pairId) return { expected: false, reason: 'Its paired transaction (' + t.pairId + ') is not in the data.' };
     if (t.kind === 'transfer' && t.subtype === 'contribution') {
       return { expected: true, reason: 'Contribution from a personal account that is not in the data, so no matching side is expected.' };
@@ -170,7 +182,7 @@
    * @returns {{month, category, totalCents, usualCents, ids, priorMonths, planningExcludedCents}[]} newest first
    */
   function spikes(txns, dataset, opts = {}) {
-    const o = Object.assign({}, SPIKE_DEFAULTS, isObj(opts) ? opts : {});
+    const o = withDefaults(SPIKE_DEFAULTS, opts);
     const cache = new Map();
     const cov = m => {
       if (!cache.has(m)) cache.set(m, E.ledger.coverage(dataset, m));
@@ -267,7 +279,9 @@
     }
 
     const reimbursements = reimbursementPairs(txns);
-    const business = live.filter(t => t.kind === 'spend' && (t.businessStatus != null || flagsOf(t).includes('business_candidate')));
+    // Each item carries `status` (default 'pending') as well as the effective businessStatus.
+    const business = live.filter(t => t.kind === 'spend' && (t.businessStatus != null || flagsOf(t).includes('business_candidate')))
+      .map(t => Object.assign({}, t, { status: t.businessStatus || 'pending' }));
     const spikeList = spikes(txns, dataset, opts.spikes);
 
     const coverageGaps = [];
@@ -309,7 +323,7 @@
       transfersPaired: paired.length,
       transfersExpected: unpaired.filter(u => u.expected).length,
       reimbursements: reimbursements.filter(r => r.status === 'pending').length,
-      business: business.filter(t => (t.businessStatus || 'pending') === 'pending').length,
+      business: business.filter(t => t.status === 'pending').length,
       spikes: spikeList.length,
       coverageGaps: coverageGaps.length,
       edited: edited.length,

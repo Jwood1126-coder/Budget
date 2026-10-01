@@ -36,7 +36,6 @@
   // ------------------------------------------------------------------ small helpers
 
   function fail(message, field) { throw new E.ValidationError(message, field); }
-  const isNum = v => typeof v === 'number' && Number.isFinite(v);
   const isCents = v => E.money.isCents(v);
   const arr = v => (Array.isArray(v) ? v : []);
   const money = c => (c === null || c === undefined ? 'not entered' : E.money.format(c));
@@ -83,7 +82,11 @@
     return Math.round(perCents * c.count);
   }
 
-  function knownOrNull(v) { return isCents(v) ? v : null; }
+  /**
+   * A usable plan amount: integer cents of 0 or more. Anything else (blank, negative, not a whole
+   * number of cents) is unknown, so it is listed as missing instead of shrinking a total.
+   */
+  function knownOrNull(v) { return isCents(v) && v >= 0 ? v : null; }
 
   function hasContributionStream(plan, personId) {
     return arr(plan.incomes).some(s => s && s.kind === 'contribution' && s.personId === personId);
@@ -98,7 +101,7 @@
   function buildIncome(plan, scope, month, timing, people, acc) {
     const lines = [];
     const notCounted = [];
-    // personId -> { netCents, jointCents, allocationKnown, hasPaycheck, contributionsCents, contributionsKnown }
+    // personId -> per-person facts: known take-home, joint portion, allocation and contributions
     const persons = new Map(people.map(p => [p.id, { netCents: 0, netKnown: true, jointCents: 0, allocationCents: 0, allocationKnown: true, hasPaycheck: false, contributionsCents: 0, contributionsKnown: true, hasContribution: false }]));
     const personFacts = id => {
       if (!persons.has(id)) persons.set(id, { netCents: 0, netKnown: true, jointCents: 0, allocationCents: 0, allocationKnown: true, hasPaycheck: false, contributionsCents: 0, contributionsKnown: true, hasContribution: false });
@@ -117,16 +120,19 @@
       const isPerson = FUNDING_PEOPLE.includes(pid) || persons.has(pid);
       const pname = nameOf(plan, pid);
       const base = { id: stream.id, label, personId: pid ?? null, kind, count: c.count, basis: c.basis, dates: c.dates, assumption: c.assumption };
+      // Outside its start/end window a stream pays nothing this month: a known $0, even if its amount is unknown.
+      const inactive = c.count === 0;
+      const amount = per => (inactive ? 0 : centsFor(per, c));
 
       // Per-person bookkeeping (both scopes): take-home, joint portion, personal allocation.
       if (isPerson && kind === 'paycheck') {
         const f = personFacts(pid);
         f.hasPaycheck = true;
-        const netCents = centsFor(net, c);
+        const netCents = amount(net);
         // A paycheck with no joint portion entered, from someone who transfers a contribution,
         // is read as "no direct deposit to joint": their joint money is the contribution stream.
         const jointPer = joint !== null ? joint : (hasContributionStream(plan, pid) ? 0 : null);
-        const jointCents = centsFor(jointPer, c);
+        const jointCents = amount(jointPer);
         if (netCents === null) f.netKnown = false; else f.netCents += netCents;
         if (jointCents !== null) f.jointCents += jointCents;
         if (netCents === null || jointCents === null) f.allocationKnown = false;
@@ -138,8 +144,7 @@
       if (isPerson && kind === 'contribution') {
         const f = personFacts(pid);
         f.hasContribution = true;
-        const per = joint !== null ? joint : net;
-        const cents = centsFor(per, c);
+        const cents = amount(joint !== null ? joint : net);
         if (cents === null) f.contributionsKnown = false; else f.contributionsCents += cents;
       }
 
@@ -157,28 +162,27 @@
         } else {
           per = joint !== null ? joint : (!isPerson ? net : null);
         }
-        const cents = centsFor(per, c);
-        if (cents === null && c.count !== 0) {
+        const cents = amount(per);
+        if (cents === null) {
           incomeUnknown = true;
           acc.missing.push({ id: stream.id, label: label + ': amount reaching the joint account is not entered', area: 'income' });
         }
-        lines.push(Object.assign(base, { perPaycheckCents: per, cents: c.count === 0 ? 0 : cents }));
+        lines.push(Object.assign(base, { perPaycheckCents: per, cents }));
         continue;
       }
 
       // household scope
       if (kind === 'contribution') {
-        const per = joint !== null ? joint : net;
-        notCounted.push({ id: stream.id, label, personId: pid ?? null, cents: centsFor(per, c), reason: 'Transfer from ' + possessive(pname) + ' personal account into joint: not extra household income (their pay is the income).' });
+        notCounted.push({ id: stream.id, label, personId: pid ?? null, cents: amount(joint !== null ? joint : net), reason: 'Transfer from ' + possessive(pname) + ' personal account into joint: not extra household income (their pay is the income).' });
         continue;
       }
       const per = kind === 'paycheck' ? net : (net !== null ? net : joint);
-      const cents = centsFor(per, c);
-      if (cents === null && c.count !== 0) {
+      const cents = amount(per);
+      if (cents === null) {
         incomeUnknown = true;
         acc.missing.push({ id: stream.id, label: label + ': take-home pay per paycheck is not entered', area: 'income' });
       }
-      lines.push(Object.assign(base, { perPaycheckCents: per, cents: c.count === 0 ? 0 : cents }));
+      lines.push(Object.assign(base, { perPaycheckCents: per, cents }));
     }
 
     // Household: a person who only shows up through contributions has unknown take-home pay.
@@ -313,13 +317,13 @@
             '. Check whether other personal money covers this.');
         }
         const estimate = arr(plan.personalSpending).find(p => p && p.personId === pid);
-        if (scope === 'household' && estimate && isCents(estimate.monthlyCents)) {
+        if (scope === 'household' && estimate && knownOrNull(estimate.monthlyCents) !== null) {
           acc.assumptions.push(possessive(name) + ' personal spending is the personal share of pay left after personal bills (' + money(entry.spendingCents) + '); the separate personal-spending estimate is not added on top.');
         }
       } else {
         if (f && f.hasPaycheck && f.allocationKnown && contributionsCents === null) entry.allocationCents = f.allocationCents;
         const estimate = arr(plan.personalSpending).find(p => p && p.personId === pid);
-        if (estimate && isCents(estimate.monthlyCents)) {
+        if (estimate && knownOrNull(estimate.monthlyCents) !== null) {
           entry.spendingCents = estimate.monthlyCents;
           entry.source = 'estimate';
           entry.note = 'Personal share of pay unknown; using the entered personal-spending estimate.';
@@ -381,6 +385,22 @@
     const personal = buildPersonal(plan, scope, month, people, persons, acc);
 
     const personalSpendingCents = scope === 'household' ? E.money.sum(personal.map(p => p.spendingCents)) : 0;
+
+    // Household scope counts bills with an unconfirmed paying account in full, and counts a known
+    // personal share of pay in full as personal spending. If such a bill is really paid from that
+    // share, it sits inside both totals. Say so plainly rather than hide a possible double count.
+    if (scope === 'household') {
+      const unconfirmed = bills.lines.filter(l => l.fundedFrom === 'unknown');
+      const fromPay = personal.filter(p => p.source === 'allocation' && p.spendingCents > 0);
+      if (unconfirmed.length && fromPay.length) {
+        const names = fromPay.map(p => possessive(p.name));
+        acc.assumptions.push(unconfirmed.map(l => l.label + ' (' + money(l.cents) + ')').join(', ') + ': which account pays ' +
+          (unconfirmed.length === 1 ? 'it' : 'them') + ' is not confirmed. ' + (unconfirmed.length === 1 ? 'It is counted as a household bill' : 'They are counted as household bills') +
+          ', and ' + names.join(' and ') + ' personal share' + (names.length === 1 ? ' of pay is' : 's of pay are') +
+          ' counted in full as personal spending; if paid from ' + (names.length === 1 ? 'that share' : 'one of those shares') +
+          ', the amount is counted twice. Confirm who pays it.');
+      }
+    }
     const outflowCents = spending.targetsCents + bills.totalCents + personalSpendingCents;
     const remainingCents = income.totalCents === null ? null : income.totalCents - outflowCents - savings.totalCents;
 
@@ -443,6 +463,8 @@
   const fmtMoney = v => (isCents(v) ? E.money.format(v) : 'not entered');
   const fmtText = v => (v === null || v === undefined || v === '' ? 'not set' : String(v));
   const fmtMonth = v => (E.months.isMonth(v) ? E.months.label(v) : 'not set');
+  const fmtDate = v => (E.dates.isDate(v) ? E.dates.label(v) : 'not set');
+  const fmtDays = v => (Array.isArray(v) && v.length ? v.join(', ') : 'not set');
 
   /**
    * Plain-language list of what changed between two plans and the effect on money left over.
@@ -476,7 +498,11 @@
     const pb = planBefore || {}, pa = planAfter || {};
     lines.push(...diffList(pb.incomes, pa.incomes, 'income',
       [['netPerPaycheckCents', 'take-home per paycheck', fmtMoney], ['jointPerPaycheckCents', 'joint portion per paycheck', fmtMoney],
-        ['frequency', 'pay frequency', fmtText], ['startMonth', 'start month', fmtMonth], ['endMonth', 'end month', fmtMonth]],
+        ['frequency', 'pay frequency', fmtText], ['startMonth', 'start month', fmtMonth], ['endMonth', 'end month', fmtMonth],
+        // Payday settings move paychecks between months under actual timing, so they are listed too.
+        ['anchorDate', 'payday used for timing', fmtDate], ['monthlyDay', 'day of the month paid', fmtText],
+        ['semimonthlyDays', 'twice-a-month paydays', fmtDays],
+        ['assumedPerMonthIfUnknown', 'paychecks a month assumed while the frequency is unknown', fmtText]],
       s => (s.label || s.id) + ' (' + fmtMoney(s.kind === 'contribution' ? s.jointPerPaycheckCents : s.netPerPaycheckCents) + ' per payment, ' + fmtText(s.frequency) + ')'));
     lines.push(...diffList(pb.bills, pa.bills, 'bill',
       [['monthlyCents', 'monthly amount', fmtMoney], ['fundedFrom', 'paid from', fmtText], ['status', 'status', fmtText],
@@ -494,10 +520,13 @@
     lines.push(...diffList(pb.savings, pa.savings, 'savings goal',
       [['monthlyCents', 'monthly contribution', fmtMoney], ['targetCents', 'target', fmtMoney], ['targetMonth', 'target month', fmtMonth], ['savedCents', 'saved so far', fmtMoney]],
       g => (g.label || g.id) + ' (' + fmtMoney(g.monthlyCents) + ' a month)'));
-    const psA = new Map(arr(pb.personalSpending).map(p => [p.personId, p.monthlyCents]));
-    for (const p of arr(pa.personalSpending)) {
-      const old = psA.has(p.personId) ? psA.get(p.personId) : null;
-      if ((old ?? null) !== (p.monthlyCents ?? null)) lines.push(possessive(nameOf(pa, p.personId)) + ' personal spending: ' + fmtMoney(old) + ' → ' + fmtMoney(p.monthlyCents) + '.');
+    // Personal-spending estimates: compare every person in either plan, so a removed estimate is listed too.
+    const psA = new Map(arr(pb.personalSpending).filter(p => p && p.personId).map(p => [p.personId, p.monthlyCents]));
+    const psB = new Map(arr(pa.personalSpending).filter(p => p && p.personId).map(p => [p.personId, p.monthlyCents]));
+    for (const pid of new Set([...psA.keys(), ...psB.keys()])) {
+      const old = psA.has(pid) ? psA.get(pid) : null;
+      const now = psB.has(pid) ? psB.get(pid) : null;
+      if ((old ?? null) !== (now ?? null)) lines.push(possessive(nameOf(pa, pid)) + ' personal spending: ' + fmtMoney(old) + ' → ' + fmtMoney(now) + '.');
     }
     const balA = pb.balances ? pb.balances.jointCashCents : null, balB = pa.balances ? pa.balances.jointCashCents : null;
     if ((balA ?? null) !== (balB ?? null)) lines.push('Joint cash balance: ' + fmtMoney(balA) + ' → ' + fmtMoney(balB) + '.');

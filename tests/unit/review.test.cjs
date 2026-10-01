@@ -442,3 +442,72 @@ test('editRecord output is understood by applyEdits', () => {
   assert.equal(t.planningExcluded, true);
   assert.deepEqual(t.parts.map(p => p.category), ['Groceries', 'Pets']);
 });
+
+// ======================================================================= hardening
+
+test('hardening: business items carry a status field (default pending) that consumers read', () => {
+  const { ds, edits, rows } = queueScenario();
+  const q = R.queues(ds, rows, edits);
+  assert.deepEqual(q.business.map(t => [t.id, t.status]), [['hd1', 'pending'], ['hd2', 'household']]);
+  // Items are copies: the effective rows passed in are not modified.
+  assert.equal(rows.find(t => t.id === 'hd1').status, undefined);
+  assert.equal(q.counts.business, 1);
+});
+
+test('hardening: a decided business item no longer shows as pending on the Overview list', () => {
+  if (!E.attention) return; // attention.js is optional for this group
+  const ds = build([tx('2026-03-10', -8899, { id: 'hw', flags: ['business_candidate'] })]);
+  const edits = { hw: R.editRecord(null, 'business', 'household', '', AT(1)) };
+  const items = E.attention.list({ dataset: ds, txns: L.applyEdits(ds, edits), state: { ledgerEdits: edits, ui: {}, scenarios: [] } });
+  assert.ok(!items.some(i => i.id === 'business'), items.map(i => i.title).join('; '));
+});
+
+function reimbursedTransferDataset() {
+  return build([
+    tx('2026-03-01', -40000, { id: 'concert', description: 'SAMPLE TICKETS', category: 'Entertainment', flags: ['reimbursement_candidate'], matchIds: ['payback'] }),
+    tx('2026-03-09', 40000, { id: 'payback', accountId: 'chk', description: 'ONLINE TRANSFER FROM 0000', kind: 'transfer', subtype: 'internal', category: 'Transfer', flags: ['reimbursement_candidate', 'unpaired_transfer'], matchIds: ['concert'] })
+  ]);
+}
+
+test('hardening: a transfer confirmed as a reimbursement is no longer an unexplained transfer', () => {
+  const ds = reimbursedTransferDataset();
+  const pending = R.queues(ds, L.applyEdits(ds, {}), {});
+  assert.equal(pending.counts.transfers, 1);
+  const edits = { concert: R.editRecord(null, 'reimbursement', 'confirmed', '', AT(1)) };
+  const q = R.queues(ds, L.applyEdits(ds, edits), edits);
+  const [u] = q.transfers.unpaired;
+  assert.equal(u.id, 'payback');
+  assert.equal(u.expected, true);
+  assert.match(u.reason, /reimbursement/);
+  assert.equal(q.counts.transfers, 0);
+  // A "not reimbursed" decision leaves the transfer question open.
+  const no = { concert: R.editRecord(null, 'reimbursement', 'not_reimbursed', '', AT(1)) };
+  assert.equal(R.queues(ds, L.applyEdits(ds, no), no).counts.transfers, 1);
+});
+
+test('hardening: spike options left undefined fall back to the defaults', () => {
+  const { ds, rows } = queueScenario();
+  const expected = R.spikes(rows, ds).map(s => s.month + s.category);
+  assert.ok(expected.length > 0);
+  assert.deepEqual(R.spikes(rows, ds, { minCents: undefined, multiple: undefined, window: undefined }).map(s => s.month + s.category), expected);
+  assert.deepEqual(R.queues(ds, rows, {}, { spikes: { window: undefined } }).spikes.map(s => s.month + s.category), expected);
+});
+
+test('hardening: duplicate candidates have one order whatever order the sort sees them in', () => {
+  const rows = dupRows(['2026-03-01', '2026-03-02', '2026-03-02', '2026-03-03'].map((d, i) =>
+    tx(d, -500, { id: 'abcd'[i], description: 'SAMPLE CAFE', merchant: 'Sample Cafe' })));
+  const expected = ['b+c', 'b+d', 'c+d', 'a+b', 'a+c', 'a+d']; // newest first, then by ids
+  assert.deepEqual(R.duplicateCandidates(rows).map(d => d.ids.join('+')), expected);
+  // Engines differ in how they order items a comparator cannot tell apart. Emulate that by
+  // handing every sort its input reversed: a total order gives the same result.
+  const original = Array.prototype.sort;
+  Array.prototype.sort = function (cmp) {
+    const copy = Array.from(this).reverse();
+    original.call(copy, cmp);
+    for (let i = 0; i < copy.length; i++) this[i] = copy[i];
+    return this;
+  };
+  let reversed;
+  try { reversed = R.duplicateCandidates(rows).map(d => d.ids.join('+')); } finally { Array.prototype.sort = original; }
+  assert.deepEqual(reversed, expected);
+});

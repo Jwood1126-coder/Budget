@@ -476,6 +476,8 @@
   /**
    * Layer user edits (and optional what-if toggles) over the dataset.
    * Returns NEW effective transaction objects; the dataset and edits are not modified.
+   * A confirmed (or what-if) reimbursement whose deposit and charge differ removes only the
+   * amount paid back: the smaller side is excluded and the larger keeps `reimbursedCents`.
    * @param {object} dataset normalized dataset
    * @param {object} ledgerEdits { [txnId]: Edit }
    * @param {{whatIf?: {excludePendingReimbursements?: boolean, excludeBusinessCandidates?: boolean}}} [opts]
@@ -527,6 +529,7 @@
         excluded: null,
         planningExcluded: !!edit && edit.planningBaseline === 'exclude',
         reimbursementStatus: null,
+        reimbursedCents: 0, // part of this row paid back by a smaller/larger linked reimbursement
         businessStatus: null,
         pairMissing: !!t.pairId && !ids.has(t.pairId),
         splitApplied: false,
@@ -549,12 +552,23 @@
       const candidate = sides.some(id => flaggedReimbursement(byId.get(id)));
       if (!candidate && own.length === 0) continue; // linked rows nobody flagged or decided on
       const status = combineReimbursement(own);
-      for (const id of sides) reimb.set(id, { status, candidate });
+      // When the deposit and the charge differ, only the smaller amount was paid back. The
+      // smaller side leaves the totals; the larger side keeps counting its unmatched remainder
+      // (`partialCents` is the part that was paid back), so no real cost or income vanishes.
+      let partialId = null, coveredCents = 0;
+      if (p.chargeId && p.depositId) {
+        const chargeCents = 0 - byId.get(p.chargeId).amountCents;
+        const depositCents = byId.get(p.depositId).amountCents;
+        coveredCents = Math.min(chargeCents, depositCents);
+        if (chargeCents > depositCents) partialId = p.chargeId;
+        else if (depositCents > chargeCents) partialId = p.depositId;
+      }
+      for (const id of sides) reimb.set(id, { status, candidate, partialCents: id === partialId ? coveredCents : 0 });
     }
     for (const r of rows) {
       if (reimb.has(r.id)) continue;
       const own = editedStatus(r.id);
-      if (own || flaggedReimbursement(r)) reimb.set(r.id, { status: own || 'pending', candidate: flaggedReimbursement(r) });
+      if (own || flaggedReimbursement(r)) reimb.set(r.id, { status: own || 'pending', candidate: flaggedReimbursement(r), partialCents: 0 });
     }
 
     // Pass 3: exclusions (first reason wins) and spending parts.
@@ -565,11 +579,29 @@
       const businessEdit = edit && BUSINESS_STATUS.includes(edit.business) ? edit.business : null;
       if (r.kind === 'spend' && (r.flags.includes('business_candidate') || businessEdit)) r.businessStatus = businessEdit || 'pending';
 
+      // 'reimbursed' (decided) or 'what_if' (assumed) when this row is paid back / pays back.
+      let reimbursing = null;
+      if (info && info.status === 'confirmed') reimbursing = 'reimbursed';
+      else if (wi.excludePendingReimbursements && info && info.candidate && info.status === 'pending') reimbursing = 'what_if';
+      const partial = reimbursing && info.partialCents > 0;
+
       if (edit && edit.duplicate === 'exclude') r.excluded = 'duplicate';
-      else if (info && info.status === 'confirmed') r.excluded = 'reimbursed';
+      else if (reimbursing === 'reimbursed' && !partial) r.excluded = 'reimbursed';
       else if (r.businessStatus === 'business') r.excluded = 'business';
-      else if (wi.excludePendingReimbursements && info && info.candidate && info.status === 'pending') r.excluded = 'what_if';
+      else if (reimbursing === 'what_if' && !partial) r.excluded = 'what_if';
       else if (wi.excludeBusinessCandidates && r.businessStatus === 'pending' && r.flags.includes('business_candidate')) r.excluded = 'what_if';
+
+      if (partial && !r.excluded) {
+        r.reimbursedCents = info.partialCents;
+        const whole = Math.abs(r.amountCents);
+        const rest = E.money.format(whole - info.partialCents);
+        const assumed = reimbursing === 'what_if' ? 'What-if: assuming ' : '';
+        r.editWarnings.push(r.kind === 'spend'
+          ? (assumed ? assumed + E.money.format(info.partialCents) + ' of this ' + E.money.format(whole) + ' charge is paid back'
+            : 'Reimbursed ' + E.money.format(info.partialCents) + ' of this ' + E.money.format(whole) + ' charge') + '; the other ' + rest + ' still counts as spending.'
+          : assumed + E.money.format(info.partialCents) + ' of this ' + E.money.format(whole) + ' deposit paid back a charge; the other ' + rest
+            + (r.kind === 'income' ? ' still counts as income.' : r.subtype === 'contribution' ? ' still counts as a contribution.' : ' is counted as before.'));
+      }
 
       const hasSplits = !!edit && edit.splits !== undefined && edit.splits !== null;
       if (r.kind !== 'spend') {
@@ -587,27 +619,46 @@
           r.editWarnings.push(check.message);
         }
       }
+      if (r.reimbursedCents) parts = shrinkParts(parts, spendCents - r.reimbursedCents);
       r.parts = r.excluded ? [] : parts;
     }
     return rows;
   }
 
+  /**
+   * Scale spending parts down to a smaller total (the part of a charge not paid back),
+   * proportionally and in whole cents; the rounding remainder goes to the largest part so the
+   * parts always add up exactly.
+   */
+  function shrinkParts(parts, total) {
+    const full = parts.reduce((s, p) => s + p.spendCents, 0);
+    if (parts.length === 1 || full === 0) return [{ category: parts[0].category, spendCents: total }];
+    const out = parts.map(p => ({ category: p.category, spendCents: Math.round((p.spendCents / full) * total) }));
+    let largest = 0;
+    out.forEach((p, i) => { if (Math.abs(p.spendCents) > Math.abs(out[largest].spendCents)) largest = i; });
+    out[largest].spendCents += total - out.reduce((s, p) => s + p.spendCents, 0);
+    return out;
+  }
+
   // ------------------------------------------------------------------ counting
 
   /**
-   * The counting rules for one (effective) transaction. Excluded rows count as 0 everywhere.
+   * The counting rules for one (effective) transaction. Excluded rows count as 0 everywhere;
+   * a partly reimbursed row (`reimbursedCents` > 0) counts only the part not paid back.
    * @returns {{spendCents: number, incomeCents: number, debtCents: number, savedCents: number, contributionCents: number}}
    */
   function measure(txn) {
     const out = { spendCents: 0, incomeCents: 0, debtCents: 0, savedCents: 0, contributionCents: 0 };
     if (!txn || txn.excluded) return out;
     const a = txn.amountCents;
+    // A partly reimbursed charge (or a deposit that only partly paid one back) counts its rest.
+    const paidBack = Number.isInteger(txn.reimbursedCents) ? txn.reimbursedCents : 0;
     switch (txn.kind) {
       case 'spend':
-        out.spendCents = 0 - a; // refunds (positive flow) reduce spending
+        out.spendCents = 0 - a - paidBack; // refunds (positive flow) reduce spending
         break;
       case 'income':
-        out.incomeCents = a;
+        out.incomeCents = a - paidBack;
         break;
       case 'debt_payment':
         out.debtCents = 0 - a;
@@ -615,7 +666,7 @@
       case 'transfer':
         if (txn.subtype === 'contribution') {
           // Money a partner moves in from a personal account outside the data.
-          if (txn.accountScope !== 'personal') out.contributionCents = a;
+          if (txn.accountScope !== 'personal') out.contributionCents = a - paidBack;
         } else if (txn.subtype === 'savings' || txn.subtype === 'investment') {
           if (txn.accountType === 'savings') {
             // Count the savings side only when the cash side is not in the data; otherwise the
@@ -642,8 +693,9 @@
   /**
    * Totals for a list of effective transactions. Refunds are reported as a positive amount and
    * spendingCents = purchasesCents − refundsCents. Card payments count only on the paying (non-card)
-   * side, as a positive number. excludedCents is the spending the excluded rows would have added
-   * (excludedIncomeCents the same for income). count = rows that count; excludedCount = rows excluded.
+   * side, as a positive number. excludedCents is the spending the excluded rows would have added,
+   * plus the paid-back part of partly reimbursed charges (excludedIncomeCents the same for income).
+   * count = rows that count; excludedCount = rows excluded.
    */
   function summarize(txns) {
     const s = {
@@ -660,6 +712,11 @@
       }
       s.count += 1;
       const m = measure(t);
+      // The reimbursed part of a partly reimbursed row is reported like an excluded amount.
+      if (Number.isInteger(t.reimbursedCents) && t.reimbursedCents) {
+        if (t.kind === 'spend') s.excludedCents += t.reimbursedCents;
+        else if (t.kind === 'income') s.excludedIncomeCents += t.reimbursedCents;
+      }
       if (t.kind === 'spend') {
         s.spendingCents += m.spendCents;
         if (m.spendCents > 0) s.purchasesCents += m.spendCents;
@@ -798,8 +855,10 @@
     if (!E.months.isMonth(month)) throw fail('Month must look like YYYY-MM (got ' + JSON.stringify(month) + ').', 'month');
     const totalDays = E.months.daysIn(month);
     const firstDay = E.dates.dayNumber(E.months.start(month));
-    const relevant = (dataset.accounts || []).filter(a =>
-      (purpose === 'all' || SPENDING_ACCOUNT_TYPES.includes(a.type)) && Array.isArray(a.coverage) && a.coverage.length > 0);
+    // An expected account with no export at all covers no day: its spending is unknown, so it
+    // keeps months partial instead of being silently left out (which would count it as $0).
+    const relevant = (dataset.accounts || []).filter(a => purpose === 'all' || SPENDING_ACCOUNT_TYPES.includes(a.type))
+      .map(a => Object.assign({}, a, { coverage: Array.isArray(a.coverage) ? a.coverage : [] }));
 
     let spanStart = null, spanEnd = null;
     for (const a of relevant) for (const r of a.coverage) {

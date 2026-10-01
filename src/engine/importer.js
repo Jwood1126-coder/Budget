@@ -182,6 +182,13 @@
         mapping[field] = String(header[idx]).trim();
       }
       if (!ok) continue;
+      // Txn.date is the POSTED date. When a plain "Date" sits next to a posted-date column, the
+      // plain one is the transaction date: book by the posted date. (A bare "Posted" column is
+      // often a yes/no status, so only names that say "date" count here.)
+      if (!mapping.postDate) {
+        const idx = findColumn(normHeader, ['postedDate'], used);
+        if (idx >= 0 && normHeader[idx].includes('date')) { used.add(idx); mapping.postDate = String(header[idx]).trim(); }
+      }
       for (const field of OPTIONAL_COLUMNS) {
         const idx = findColumn(normHeader, [field], used);
         if (idx >= 0) { used.add(idx); mapping[field] = String(header[idx]).trim(); }
@@ -288,6 +295,11 @@
       }
     }
     if (!DATE_FORMATS.includes(map.dateFormat)) throw fail('"' + fileName + '": dateFormat must be MDY, YMD or DMY.');
+    // An explicit sign instruction must never be silently ignored (e.g. "true" as text would
+    // otherwise fall back to inference and could import every charge with the wrong sign).
+    if (map.chargesPositive !== undefined && map.chargesPositive !== null && typeof map.chargesPositive !== 'boolean') {
+      throw fail('"' + fileName + '": chargesPositive must be true or false (without quotes), got ' + JSON.stringify(map.chargesPositive) + '.');
+    }
     const header = index >= 0 ? records[index].fields : null;
     const columns = {};
     for (const key of ['date', 'postDate', 'description', 'amount', 'debit', 'credit', ...OPTIONAL_COLUMNS]) {
@@ -306,7 +318,7 @@
    * Evidence: purchases (rows without payment wording) and payments should have opposite signs.
    * Throws when the file cannot tell (all one sign including payments, or a tie).
    */
-  function inferCardSign(raw, fileName) {
+  function inferCardSign(raw, fileName, noun = 'card') {
     let purchPos = 0, purchNeg = 0, payPos = 0, payNeg = 0;
     for (const x of raw) {
       if (PAYMENT_TEXT.test(x.description)) { if (x.amount > 0) payPos++; else payNeg++; } else if (x.amount > 0) purchPos++; else purchNeg++;
@@ -315,14 +327,14 @@
     const sameSign = purchases && payments && purchPos !== purchNeg && payPos !== payNeg && (purchPos > purchNeg) === (payPos > payNeg);
     const forPositive = purchPos + payNeg, forNegative = purchNeg + payPos;
     if (sameSign || forPositive === forNegative) {
-      throw fail('Cannot tell how "' + fileName + '" signs card charges (purchases ' + purchPos + ' positive / ' + purchNeg +
+      throw fail('Cannot tell how "' + fileName + '" signs ' + noun + ' charges (purchases ' + purchPos + ' positive / ' + purchNeg +
         ' negative; payments ' + payPos + ' positive / ' + payNeg + ' negative). Set "chargesPositive": true or false in this file\'s mapping.',
       { code: 'SIGN_UNKNOWN' });
     }
     const chargesPositive = forPositive > forNegative;
     const evidence = (chargesPositive ? purchPos : purchNeg) + ' of ' + purchases + ' purchase rows ' + (chargesPositive ? 'positive' : 'negative') +
       (payments ? ', ' + (chargesPositive ? payNeg : payPos) + ' of ' + payments + ' payment rows ' + (chargesPositive ? 'negative' : 'positive') : ', no payment rows to confirm');
-    const warning = '"' + fileName + '": inferred that card charges are ' + (chargesPositive ? 'POSITIVE' : 'negative') + ' numbers (' + evidence + '). ' +
+    const warning = '"' + fileName + '": inferred that ' + noun + ' charges are ' + (chargesPositive ? 'POSITIVE' : 'negative') + ' numbers (' + evidence + '). ' +
       (chargesPositive ? 'Signs were flipped so charges are money out.' : 'Amounts kept as account flow.') +
       ' Set "chargesPositive" in the mapping if this is wrong.';
     return { chargesPositive, warning };
@@ -383,6 +395,12 @@
         continue;
       }
       if (amount === 0) { skipped.push({ row: line, reason: 'zero amount' }); continue; }
+      // Beyond any household amount (and beyond exact integer cents): a column mix-up, not money.
+      if (!Number.isSafeInteger(amount) || Math.abs(amount) > E.money.MAX_INPUT_CENTS) {
+        const shown = usesDebitCredit ? (get('debit') + ' / ' + get('credit')) : get('amount');
+        skipped.push({ row: line, reason: 'amount too large "' + shown + '"' });
+        continue;
+      }
 
       raw.push({
         row: line,
@@ -399,13 +417,15 @@
     let signConvention;
     if (usesDebitCredit) {
       signConvention = 'Debit/Credit columns (debit = money out, credit = money in)';
-    } else if (account.type === 'credit_card') {
+    } else if (account.type === 'credit_card' || account.type === 'loan') {
+      // Loan exports, like card exports, often print balance changes (payment negative, interest
+      // positive) instead of account flow, so they get the same explicit-or-inferred treatment.
       let chargesPositive;
       if (typeof map.chargesPositive === 'boolean') {
         chargesPositive = map.chargesPositive;
         signConvention = chargesPositive ? 'Charges positive (set in mapping): signs flipped to account flow' : 'Charges negative (set in mapping): kept as account flow';
       } else if (raw.length) {
-        const inferred = inferCardSign(raw, fileName);
+        const inferred = inferCardSign(raw, fileName, account.type === 'loan' ? 'loan' : 'card');
         chargesPositive = inferred.chargesPositive;
         warnings.push(inferred.warning);
         signConvention = chargesPositive ? 'Charges positive (inferred): signs flipped to account flow' : 'Charges negative (inferred): kept as account flow';
@@ -570,6 +590,10 @@
       // --- payments, income and transfers (decide the kind before any merchant category)
       { match: 'PAYMENT|THANK YOU|AUTOPAY|AUTO PAY|AUTOMATIC PAYMENT', accountType: 'credit_card', sign: 'in', kind: 'card_payment', category: 'Card payment', confidence: 'high',
         reason: 'Rule: payment received on the card — moves money; the card purchases are the spending' },
+      // Money arriving on a loan account pays the loan down. The paying side (checking) is the
+      // debt payment; counting this side too, or as a refund, would double count it.
+      { match: 'PAYMENT|PYMT|PMT|THANK YOU|AUTOPAY|AUTO PAY', accountType: 'loan', sign: 'in', kind: 'transfer', subtype: 'internal', category: 'Transfer', confidence: 'high',
+        reason: 'Rule: payment received on the loan account — moves money; the paying side counts as the debt payment' },
       { match: 'CARD PAYMENT|CARD PMT|CRD PMT|CREDIT CRD|CREDIT CARD|CARD AUTOPAY|CRD AUTOPAY|CARD AUTO PAY|CARD EPAY|CRD EPAY|PAYMENT TO .*CARD|AUTOPAY.*CARD', accountType: CASH_SIDE, sign: 'out',
         kind: 'card_payment', category: 'Card payment', confidence: 'high', reason: 'Rule: credit card payment — excluded from spending (the card purchases are the spending)' },
       { match: 'PAYROLL|PAYRLL|DIR DEP|DIRECT DEP|SALARY', accountType: CASH_SIDE, sign: 'in', kind: 'income', subtype: 'payroll', category: 'Income', confidence: 'high',
@@ -735,7 +759,13 @@
     const flag = f => { if (!flags.includes(f)) flags.push(f); };
     const cardLike = accountType === 'credit_card' || accountType === 'loan';
     if (!kind) {
-      if (st.implied === 'spend' || flow < 0 || cardLike) kind = 'spend';
+      if (accountType === 'loan' && flow > 0 && st.implied !== 'spend') {
+        // A credit on a loan account is almost always money paid toward it. Treating it as a
+        // refund would cancel real spending; as income it would be counted twice. Neutral + review.
+        kind = 'transfer'; subtype = subtype || 'internal'; confidence = 'low';
+        flag('needs_category_review');
+        after.push('Credit on a loan account with no matching rule: treated as money paid toward the loan (not spending or income) — confirm');
+      } else if (st.implied === 'spend' || flow < 0 || cardLike) kind = 'spend';
       else {
         // Never payroll without a payroll pattern: an unexplained deposit is 'other' income to review.
         kind = 'income'; subtype = 'other'; confidence = 'low';
@@ -747,7 +777,7 @@
       subtype = null;
       if (flow > 0) {
         flag('refund');
-        after.push(cardLike ? 'Credit on a card account without a payment pattern: treated as a refund that reduces spending'
+        after.push(cardLike ? 'Credit on a ' + (accountType === 'loan' ? 'loan' : 'card') + ' account without a payment pattern: treated as a refund that reduces spending'
           : 'Credit from a merchant: treated as a refund that reduces spending');
       }
       if (!category) {
@@ -835,8 +865,12 @@
   /**
    * Pair opposite flows of equal size between two different household accounts within `days`.
    * Candidates: transfers and card payments (plus an unexplained inbound 'other' deposit that
-   * matches an outbound transfer, which is upgraded to a transfer). Greedy closest-date matching with a
-   * deterministic tie-break. Unmatched internal-looking rows get the unpaired_transfer flag.
+   * matches an outbound transfer, which is upgraded to a transfer). A debt payment from a cash
+   * account also pairs with the money arriving on a card or loan account in the data: on a card it
+   * becomes a card payment (the card's purchases are the spending); on a loan the cash side is the
+   * debt payment and the loan side a neutral transfer, so the payment is counted once. Greedy
+   * closest-date matching with a deterministic tie-break. Unmatched internal-looking rows get the
+   * unpaired_transfer flag.
    * @returns {object[]} new transaction objects (input order kept)
    */
   function pairTransfers(txns, accounts, { days = 5 } = {}) {
@@ -857,9 +891,13 @@
         inbound.get(t.amountCents).push(i);
       }
     });
+    // A debt payment from a cash account can also be one side of a pair: when the card or loan it
+    // pays is itself in the data, the money arrives there too and must not be counted twice.
+    const debtSide = t => t.kind === 'debt_payment' && CASH_SIDE.includes(typeOf(t));
+    const isDebtAccount = t => typeOf(t) === 'credit_card' || typeOf(t) === 'loan';
     const candidates = [];
     out.forEach((a, o) => {
-      if (a.pairId || !acct.has(a.accountId) || a.amountCents >= 0 || !movable(a)) return;
+      if (a.pairId || !acct.has(a.accountId) || a.amountCents >= 0 || !(movable(a) || debtSide(a))) return;
       for (const i of inbound.get(-a.amountCents) || []) {
         const b = out[i];
         if (b.accountId === a.accountId) continue;
@@ -868,7 +906,13 @@
         if (b.kind === 'income' && a.kind !== 'transfer') continue;
         // A card payment only pairs with money arriving on a card account.
         if ((a.kind === 'card_payment' || b.kind === 'card_payment') && typeOf(b) !== 'credit_card') continue;
-        candidates.push({ o, i, gap, priority: b.kind === 'income' ? 1 : 0 });
+        // A debt payment only pairs with money arriving on a card or loan account.
+        if (a.kind === 'debt_payment' && !isDebtAccount(b)) continue;
+        // Money arriving on a loan comes from a transfer or a debt payment, never from another loan.
+        if (typeOf(b) === 'loan' && (b.kind !== 'transfer' || typeOf(a) === 'loan')) continue;
+        // Explicit transfer / card-payment wording pairs first; a debt-rule match next; an
+        // unexplained deposit last (it is only upgraded when nothing better claims the money).
+        candidates.push({ o, i, gap, priority: b.kind === 'income' ? 2 : a.kind === 'debt_payment' ? 1 : 0 });
       }
     });
     candidates.sort((x, y) => x.priority - y.priority || x.gap - y.gap ||
@@ -883,12 +927,30 @@
       for (const t of [a, b]) removeFlag(t, 'unpaired_transfer');
       if (typeOf(b) === 'credit_card') {
         // Money arriving on a card from a household account is a card payment, whatever its wording.
+        // (A debt payment to a card whose purchases are in the data would count that money twice.)
         for (const t of [a, b]) {
-          if (t.kind !== 'card_payment') addReason(t, 'Matches a card payment between ' + labelOf(a.accountId) + ' and ' + labelOf(b.accountId) + ': treated as a card payment');
+          if (t.kind !== 'card_payment') {
+            addReason(t, 'Matches a card payment between ' + labelOf(a.accountId) + ' and ' + labelOf(b.accountId) + ': treated as a card payment' +
+              (t.kind === 'debt_payment' ? ', not a debt payment, because the card\'s purchases are in the data' : ''));
+          }
           t.kind = 'card_payment'; t.subtype = null; t.category = KIND_CATEGORY.card_payment; t.confidence = 'high';
         }
         addReason(a, 'Paired with the payment received on ' + labelOf(b.accountId) + ' (' + b.date + ')');
         addReason(b, 'Paired with the payment from ' + labelOf(a.accountId) + ' (' + a.date + ')');
+        continue;
+      }
+      if (typeOf(b) === 'loan') {
+        // Paying a household loan: the cash side is the debt payment; the loan side only records
+        // the money arriving (a neutral transfer), so the payment is counted once.
+        if (a.kind !== 'debt_payment') {
+          addReason(a, 'Matches the payment received on ' + labelOf(b.accountId) + ': treated as a debt payment');
+          a.kind = 'debt_payment'; a.subtype = 'loan'; a.category = KIND_CATEGORY.debt_payment;
+        }
+        a.confidence = 'high'; b.confidence = 'high';
+        b.kind = 'transfer'; b.subtype = b.subtype || 'internal'; b.category = KIND_CATEGORY.transfer;
+        removeFlag(b, 'needs_category_review');
+        addReason(a, 'Paired with the payment received on ' + labelOf(b.accountId) + ' (' + b.date + ')');
+        addReason(b, 'Paired with the debt payment from ' + labelOf(a.accountId) + ' (' + a.date + '), which is where it counts');
         continue;
       }
       if (b.kind === 'income') {
@@ -918,7 +980,8 @@
         if (t.amountCents < 0 && typeOf(t) !== 'credit_card') {
           const cardCovered = cards.some(c => covers(coverageById.get(c.id), t.date));
           addNote(t, cardCovered
-            ? 'No matching payment on the card account(s) in the data within ' + days + ' days: confirm this pays a card and is not a bill.'
+            ? 'No matching payment on the card account(s) in the data within ' + days + ' days: confirm this pays a card and is not a bill. ' +
+              'If it pays a card whose export is not in the data, that card\'s purchases (the spending) are missing.'
             : 'No card account in the data covers this date: the purchases this payment covers are not in the data, so that card\'s spending is missing (the payment itself is excluded).');
         } else {
           addNote(t, 'No matching payment found in the data within ' + days + ' days: paid from an account that is not in the data?');
@@ -926,7 +989,9 @@
       } else if (t.kind === 'transfer' && t.subtype !== 'contribution' && t.subtype !== 'investment') {
         // Contributions come from a partner's personal account outside the data: expected unpaired.
         addFlag(t, 'unpaired_transfer');
-        addNote(t, t.amountCents > 0
+        addNote(t, typeOf(t) === 'loan' && t.amountCents > 0
+          ? 'Payment received on the loan with no matching payment from a household account in the data within ' + days + ' days: paid from an account that is not in the data?'
+          : t.amountCents > 0
           ? 'No matching outbound transfer in the data within ' + days + ' days: confirm where this money came from.'
           : 'No matching inbound transfer in the data within ' + days + ' days: confirm where this money went.');
       }
@@ -940,7 +1005,8 @@
    * Flag an inbound non-payroll, non-interest deposit (income 'other', or an unpaired inbound
    * internal transfer) whose amount equals an earlier spend charge of at least minCents within
    * `days`. Both rows get reimbursement_candidate and point at each other in matchIds. Nothing is
-   * reclassified or excluded: the user confirms in Review. Card refunds are spend rows, never deposits.
+   * reclassified or excluded: the user confirms in Review. Card refunds are spend rows, never deposits,
+   * and a charge already refunded on its own account is not offered as a candidate.
    * @returns {object[]} new transaction objects
    */
   function markReimbursementCandidates(txns, { days = 120, minCents = 2500, accounts } = {}) {
@@ -956,7 +1022,19 @@
       if (!charges.has(-t.amountCents)) charges.set(-t.amountCents, []);
       charges.get(-t.amountCents).push(t);
     }
+    // A charge already refunded on its own account (same amount and merchant, refund on or after
+    // the charge) has nothing left to reimburse: offering it would let the user remove it twice.
     const matched = new Set();
+    const sameMerchant = (x, y) => norm(x.merchant) === norm(y.merchant) || norm(x.description) === norm(y.description);
+    const refunds = out.filter(t => t.kind === 'spend' && t.amountCents >= minCents).sort(byDateThenId);
+    for (const r of refunds) {
+      let best = null;
+      for (const ch of charges.get(r.amountCents) || []) {
+        if (matched.has(ch.id) || ch.accountId !== r.accountId || ch.date > r.date || E.dates.daysBetween(ch.date, r.date) > days || !sameMerchant(ch, r)) continue;
+        if (!best || ch.date > best.date || (ch.date === best.date && ch.id < best.id)) best = ch;
+      }
+      if (best) matched.add(best.id);
+    }
     for (const dep of deposits) {
       let best = null;
       for (const ch of charges.get(dep.amountCents) || []) {
@@ -1166,10 +1244,19 @@
       };
     });
 
-    const unpairedNoCard = transactions.filter(t => t.kind === 'card_payment' && t.flags.includes('unpaired_transfer') && /No card account in the data covers/.test(t.note));
+    // Every unmatched card payment from a cash account points at card spending that may be missing.
+    const unpairedPayments = transactions.filter(t => t.kind === 'card_payment' && !t.pairId && t.amountCents < 0 &&
+      accountById.get(t.accountId).type !== 'credit_card');
+    const unpairedNoCard = unpairedPayments.filter(t => /No card account in the data covers/.test(t.note));
+    const unpairedOther = unpairedPayments.filter(t => !unpairedNoCard.includes(t));
+    const total = list => money(-list.reduce((s, t) => s + t.amountCents, 0));
     if (unpairedNoCard.length) {
-      warnings.push(unpairedNoCard.length + ' card payment(s) totalling ' + money(-unpairedNoCard.reduce((s, t) => s + t.amountCents, 0)) +
+      warnings.push(unpairedNoCard.length + ' card payment(s) totalling ' + total(unpairedNoCard) +
         ' fall on dates no card export covers: those cards\' purchases are missing from spending for those months.');
+    }
+    if (unpairedOther.length) {
+      warnings.push(unpairedOther.length + ' card payment(s) totalling ' + total(unpairedOther) +
+        ' have no matching payment on a card account in the data: if they pay a card whose export is missing, that card\'s purchases are missing from spending; otherwise reclassify them (for example as a bill).');
     }
 
     const dataset = {

@@ -12,7 +12,7 @@
     "build:sample": "node tools/build.cjs --sample",
     "sample": "node tools/build-sample.cjs",
     "import": "node tools/import.cjs",
-    "test": "node --test tests/unit/",
+    "test": "node --test \"tests/unit/*.test.cjs\"",
     "test:browser": "node tools/build.cjs --sample && node tests/browser/run.cjs",
     "check:privacy": "node tools/check-privacy.cjs"
   }
