@@ -47,7 +47,7 @@ The browser stores edits locally under a key scoped to the build's embedded copy
 
 ## Sharing and repository hygiene
 
-Only source, documentation, tests, and the invented fixture belong in version control. This directory is history-free and has no remote configuration. It has not been pushed or uploaded. Do not copy an existing private repository's `.git`, `.openai`, `.env`, `dist`, statement files, or local scenario into it.
+Only source, documentation, tests, and the invented fixture belong in version control. This repository was initialized from a clean source export; no production Git history was copied. Do not copy an existing private repository's `.git`, `.openai`, `.env`, `dist`, statement files, or local scenario into it.
 
 The app performs no fetches and loads no remote libraries, fonts, trackers, or images. Its favicon is inline SVG. A supporting browser may expose the optional `document.modelContext` tools to inspect or update the current local scenario; that integration is not an account connection or an automatic sync service.
 
