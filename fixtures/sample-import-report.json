@@ -1,0 +1,118 @@
+{
+  "datasetId": "sample",
+  "generatedAt": "2026-10-01",
+  "isSynthetic": true,
+  "transactions": 959,
+  "start": "2024-10-01",
+  "end": "2026-09-30",
+  "files": [
+    {"name":"checking-2024-10-to-2025-12.csv","accountId":"joint-checking","profile":"signed_amount","rows":177,"imported":177,"skipped":0,"skippedReasons":{},"duplicatesRemoved":0,"start":"2024-10-01","end":"2025-12-26","coverageStart":"2024-10-01","coverageEnd":"2025-12-31","signConvention":"Signed amounts as exported (money out negative)"},
+    {"name":"checking-2025-11-to-2026-09.csv","accountId":"joint-checking","profile":"signed_amount","rows":139,"imported":116,"skipped":0,"skippedReasons":{},"duplicatesRemoved":23,"start":"2025-11-01","end":"2026-09-25","coverageStart":"2025-11-01","coverageEnd":"2026-09-30","signConvention":"Signed amounts as exported (money out negative)"},
+    {"name":"card-2025-01-to-2026-09.csv","accountId":"joint-card","profile":"card_debit_credit","rows":634,"imported":634,"skipped":0,"skippedReasons":{},"duplicatesRemoved":0,"start":"2025-01-01","end":"2026-09-30","coverageStart":"2025-01-01","coverageEnd":"2026-09-30","signConvention":"Debit/Credit columns (debit = money out, credit = money in)"},
+    {"name":"savings-2025-06-to-2026-09.csv","accountId":"joint-savings","profile":"signed_amount","rows":32,"imported":32,"skipped":0,"skippedReasons":{},"duplicatesRemoved":0,"start":"2025-06-02","end":"2026-09-30","coverageStart":"2025-06-01","coverageEnd":"2026-09-30","signConvention":"Signed amounts as exported (money out negative)"}
+  ],
+  "accounts": [
+    {"id":"joint-checking","label":"Joint checking","type":"checking","coverage":[{"start":"2024-10-01","end":"2026-09-30"}],"transactions":293},
+    {"id":"joint-card","label":"Joint rewards card","type":"credit_card","coverage":[{"start":"2025-01-01","end":"2026-09-30"}],"transactions":634},
+    {"id":"joint-savings","label":"Joint savings","type":"savings","coverage":[{"start":"2025-06-01","end":"2026-09-30"}],"transactions":32}
+  ],
+  "totalsByKind": {
+    "spend": {
+      "count": 745,
+      "inflowCents": 44013,
+      "outflowCents": 9359700,
+      "netCents": -9315687
+    },
+    "income": {
+      "count": 69,
+      "inflowCents": 9831126,
+      "outflowCents": 0,
+      "netCents": 9831126
+    },
+    "transfer": {
+      "count": 81,
+      "inflowCents": 6810000,
+      "outflowCents": 400000,
+      "netCents": 6410000
+    },
+    "card_payment": {
+      "count": 40,
+      "inflowCents": 4445553,
+      "outflowCents": 4445553,
+      "netCents": 0
+    },
+    "debt_payment": {
+      "count": 24,
+      "inflowCents": 0,
+      "outflowCents": 132000,
+      "netCents": -132000
+    }
+  },
+  "spending": {
+    "purchasesCents": 9359700,
+    "refundsCents": 44013,
+    "netCents": 9315687
+  },
+  "flagCounts": {
+    "business_candidate": 27,
+    "fee": 2,
+    "mixed_retail": 168,
+    "needs_category_review": 2,
+    "refund": 7,
+    "reimbursement_candidate": 2,
+    "unpaired_transfer": 1
+  },
+  "months": [
+    {"month":"2024-10","days":31,"spendingCoverage":"partial","coverage":{"joint-checking":31,"joint-card":0,"joint-savings":0},"transactions":11,"purchasesCents":190734,"refundsCents":0,"spendingCents":190734,"incomeCents":376000,"payrollCents":376000,"contributionsCents":265000,"debtPaymentsCents":5500,"cardPaymentsCents":0,"transfersInCents":265000,"transfersOutCents":0},
+    {"month":"2024-11","days":30,"spendingCoverage":"partial","coverage":{"joint-checking":30,"joint-card":0,"joint-savings":0},"transactions":12,"purchasesCents":179864,"refundsCents":0,"spendingCents":179864,"incomeCents":564000,"payrollCents":564000,"contributionsCents":397500,"debtPaymentsCents":5500,"cardPaymentsCents":0,"transfersInCents":397500,"transfersOutCents":0},
+    {"month":"2024-12","days":31,"spendingCoverage":"partial","coverage":{"joint-checking":31,"joint-card":0,"joint-savings":0},"transactions":9,"purchasesCents":185626,"refundsCents":0,"spendingCents":185626,"incomeCents":376000,"payrollCents":376000,"contributionsCents":132500,"debtPaymentsCents":5500,"cardPaymentsCents":0,"transfersInCents":132500,"transfersOutCents":0},
+    {"month":"2025-01","days":31,"spendingCoverage":"full","coverage":{"joint-checking":31,"joint-card":31,"joint-savings":0},"transactions":40,"purchasesCents":427972,"refundsCents":0,"spendingCents":427972,"incomeCents":376000,"payrollCents":376000,"contributionsCents":397500,"debtPaymentsCents":5500,"cardPaymentsCents":0,"transfersInCents":397500,"transfersOutCents":0},
+    {"month":"2025-02","days":28,"spendingCoverage":"full","coverage":{"joint-checking":28,"joint-card":28,"joint-savings":0},"transactions":43,"purchasesCents":413167,"refundsCents":4548,"spendingCents":408619,"incomeCents":376000,"payrollCents":376000,"contributionsCents":265000,"debtPaymentsCents":5500,"cardPaymentsCents":223396,"transfersInCents":265000,"transfersOutCents":0},
+    {"month":"2025-03","days":31,"spendingCoverage":"full","coverage":{"joint-checking":31,"joint-card":31,"joint-savings":0},"transactions":44,"purchasesCents":500505,"refundsCents":0,"spendingCents":500505,"incomeCents":376000,"payrollCents":376000,"contributionsCents":132500,"debtPaymentsCents":5500,"cardPaymentsCents":223224,"transfersInCents":132500,"transfersOutCents":0},
+    {"month":"2025-04","days":30,"spendingCoverage":"full","coverage":{"joint-checking":30,"joint-card":30,"joint-savings":0},"transactions":38,"purchasesCents":388697,"refundsCents":0,"spendingCents":388697,"incomeCents":376000,"payrollCents":376000,"contributionsCents":265000,"debtPaymentsCents":5500,"cardPaymentsCents":209176,"transfersInCents":265000,"transfersOutCents":0},
+    {"month":"2025-05","days":31,"spendingCoverage":"full","coverage":{"joint-checking":31,"joint-card":31,"joint-savings":0},"transactions":44,"purchasesCents":369392,"refundsCents":9067,"spendingCents":360325,"incomeCents":564000,"payrollCents":564000,"contributionsCents":397500,"debtPaymentsCents":5500,"cardPaymentsCents":196324,"transfersInCents":397500,"transfersOutCents":0},
+    {"month":"2025-06","days":30,"spendingCoverage":"full","coverage":{"joint-checking":30,"joint-card":30,"joint-savings":30},"transactions":42,"purchasesCents":393650,"refundsCents":0,"spendingCents":393650,"incomeCents":376582,"payrollCents":376000,"contributionsCents":132500,"debtPaymentsCents":5500,"cardPaymentsCents":186192,"transfersInCents":157500,"transfersOutCents":25000},
+    {"month":"2025-07","days":31,"spendingCoverage":"full","coverage":{"joint-checking":31,"joint-card":31,"joint-savings":31},"transactions":48,"purchasesCents":433024,"refundsCents":0,"spendingCents":433024,"incomeCents":376485,"payrollCents":376000,"contributionsCents":265000,"debtPaymentsCents":5500,"cardPaymentsCents":218641,"transfersInCents":290000,"transfersOutCents":25000},
+    {"month":"2025-08","days":31,"spendingCoverage":"full","coverage":{"joint-checking":31,"joint-card":31,"joint-savings":31},"transactions":46,"purchasesCents":409589,"refundsCents":11231,"spendingCents":398358,"incomeCents":376487,"payrollCents":376000,"contributionsCents":265000,"debtPaymentsCents":5500,"cardPaymentsCents":241513,"transfersInCents":290000,"transfersOutCents":25000},
+    {"month":"2025-09","days":30,"spendingCoverage":"full","coverage":{"joint-checking":30,"joint-card":30,"joint-savings":30},"transactions":42,"purchasesCents":362556,"refundsCents":0,"spendingCents":362556,"incomeCents":376211,"payrollCents":376000,"contributionsCents":265000,"debtPaymentsCents":5500,"cardPaymentsCents":223357,"transfersInCents":290000,"transfersOutCents":25000},
+    {"month":"2025-10","days":31,"spendingCoverage":"full","coverage":{"joint-checking":31,"joint-card":31,"joint-savings":31},"transactions":45,"purchasesCents":382708,"refundsCents":0,"spendingCents":382708,"incomeCents":564478,"payrollCents":564000,"contributionsCents":397500,"debtPaymentsCents":5500,"cardPaymentsCents":189473,"transfersInCents":422500,"transfersOutCents":25000},
+    {"month":"2025-11","days":30,"spendingCoverage":"full","coverage":{"joint-checking":30,"joint-card":30,"joint-savings":30},"transactions":44,"purchasesCents":381125,"refundsCents":3501,"spendingCents":377624,"incomeCents":376192,"payrollCents":376000,"contributionsCents":132500,"debtPaymentsCents":5500,"cardPaymentsCents":191340,"transfersInCents":157500,"transfersOutCents":25000},
+    {"month":"2025-12","days":31,"spendingCoverage":"full","coverage":{"joint-checking":31,"joint-card":31,"joint-savings":31},"transactions":47,"purchasesCents":418222,"refundsCents":0,"spendingCents":418222,"incomeCents":376323,"payrollCents":376000,"contributionsCents":265000,"debtPaymentsCents":5500,"cardPaymentsCents":197592,"transfersInCents":290000,"transfersOutCents":25000},
+    {"month":"2026-01","days":31,"spendingCoverage":"full","coverage":{"joint-checking":31,"joint-card":31,"joint-savings":31},"transactions":46,"purchasesCents":419683,"refundsCents":0,"spendingCents":419683,"incomeCents":376541,"payrollCents":376000,"contributionsCents":397500,"debtPaymentsCents":5500,"cardPaymentsCents":231592,"transfersInCents":422500,"transfersOutCents":25000},
+    {"month":"2026-02","days":28,"spendingCoverage":"full","coverage":{"joint-checking":28,"joint-card":28,"joint-savings":28},"transactions":43,"purchasesCents":375489,"refundsCents":1491,"spendingCents":373998,"incomeCents":376245,"payrollCents":376000,"contributionsCents":265000,"debtPaymentsCents":5500,"cardPaymentsCents":216210,"transfersInCents":290000,"transfersOutCents":25000},
+    {"month":"2026-03","days":31,"spendingCoverage":"full","coverage":{"joint-checking":31,"joint-card":31,"joint-savings":31},"transactions":47,"purchasesCents":521442,"refundsCents":0,"spendingCents":521442,"incomeCents":376212,"payrollCents":376000,"contributionsCents":132500,"debtPaymentsCents":5500,"cardPaymentsCents":188300,"transfersInCents":157500,"transfersOutCents":25000},
+    {"month":"2026-04","days":30,"spendingCoverage":"full","coverage":{"joint-checking":30,"joint-card":30,"joint-savings":30},"transactions":42,"purchasesCents":426237,"refundsCents":0,"spendingCents":426237,"incomeCents":376546,"payrollCents":376000,"contributionsCents":265000,"debtPaymentsCents":5500,"cardPaymentsCents":228357,"transfersInCents":290000,"transfersOutCents":25000},
+    {"month":"2026-05","days":31,"spendingCoverage":"full","coverage":{"joint-checking":31,"joint-card":31,"joint-savings":31},"transactions":46,"purchasesCents":393230,"refundsCents":3140,"spendingCents":390090,"incomeCents":564498,"payrollCents":564000,"contributionsCents":265000,"debtPaymentsCents":5500,"cardPaymentsCents":226968,"transfersInCents":340000,"transfersOutCents":25000},
+    {"month":"2026-06","days":30,"spendingCoverage":"full","coverage":{"joint-checking":30,"joint-card":30,"joint-savings":30},"transactions":42,"purchasesCents":367841,"refundsCents":0,"spendingCents":367841,"incomeCents":376112,"payrollCents":376000,"contributionsCents":265000,"debtPaymentsCents":5500,"cardPaymentsCents":216683,"transfersInCents":290000,"transfersOutCents":25000},
+    {"month":"2026-07","days":31,"spendingCoverage":"full","coverage":{"joint-checking":31,"joint-card":31,"joint-savings":31},"transactions":45,"purchasesCents":427181,"refundsCents":0,"spendingCents":427181,"incomeCents":376459,"payrollCents":376000,"contributionsCents":397500,"debtPaymentsCents":5500,"cardPaymentsCents":192471,"transfersInCents":422500,"transfersOutCents":25000},
+    {"month":"2026-08","days":31,"spendingCoverage":"full","coverage":{"joint-checking":31,"joint-card":31,"joint-savings":31},"transactions":50,"purchasesCents":599058,"refundsCents":11035,"spendingCents":588023,"incomeCents":425175,"payrollCents":376000,"contributionsCents":132500,"debtPaymentsCents":5500,"cardPaymentsCents":233299,"transfersInCents":157500,"transfersOutCents":25000},
+    {"month":"2026-09","days":30,"spendingCoverage":"full","coverage":{"joint-checking":30,"joint-card":30,"joint-savings":30},"transactions":43,"purchasesCents":392708,"refundsCents":0,"spendingCents":392708,"incomeCents":376580,"payrollCents":376000,"contributionsCents":265000,"debtPaymentsCents":5500,"cardPaymentsCents":411445,"transfersInCents":290000,"transfersOutCents":25000}
+  ],
+  "duplicatesRemoved": [
+    {"file":"checking-2025-11-to-2026-09.csv","row":118,"accountId":"joint-checking","date":"2025-12-26","amountCents":188000,"description":"SAMPLE EMPLOYER PAYROLL DIR DEP","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":2},
+    {"file":"checking-2025-11-to-2026-09.csv","row":119,"accountId":"joint-checking","date":"2025-12-25","amountCents":-197592,"description":"SAMPLE BANK CARD AUTOPAY","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":3},
+    {"file":"checking-2025-11-to-2026-09.csv","row":120,"accountId":"joint-checking","date":"2025-12-22","amountCents":-9240,"description":"SAMPLE WIRELESS","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":4},
+    {"file":"checking-2025-11-to-2026-09.csv","row":121,"accountId":"joint-checking","date":"2025-12-18","amountCents":-18584,"description":"SAMPLE GAS UTILITY","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":5},
+    {"file":"checking-2025-11-to-2026-09.csv","row":122,"accountId":"joint-checking","date":"2025-12-18","amountCents":-10050,"description":"SAMPLE ELECTRIC CO","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":6},
+    {"file":"checking-2025-11-to-2026-09.csv","row":123,"accountId":"joint-checking","date":"2025-12-15","amountCents":132500,"description":"ONLINE TRANSFER FROM SAM PERSONAL CHK","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":7},
+    {"file":"checking-2025-11-to-2026-09.csv","row":124,"accountId":"joint-checking","date":"2025-12-12","amountCents":188000,"description":"SAMPLE EMPLOYER PAYROLL DIR DEP","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":8},
+    {"file":"checking-2025-11-to-2026-09.csv","row":125,"accountId":"joint-checking","date":"2025-12-12","amountCents":-7500,"description":"SAMPLE INTERNET CO","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":9},
+    {"file":"checking-2025-11-to-2026-09.csv","row":126,"accountId":"joint-checking","date":"2025-12-09","amountCents":-5500,"description":"SAMPLE STORE CARD PAYMENT","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":10},
+    {"file":"checking-2025-11-to-2026-09.csv","row":127,"accountId":"joint-checking","date":"2025-12-02","amountCents":-25000,"description":"TRANSFER TO SAVINGS","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":11},
+    {"file":"checking-2025-11-to-2026-09.csv","row":128,"accountId":"joint-checking","date":"2025-12-01","amountCents":132500,"description":"ONLINE TRANSFER FROM SAM PERSONAL CHK","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":12},
+    {"file":"checking-2025-11-to-2026-09.csv","row":129,"accountId":"joint-checking","date":"2025-12-01","amountCents":-141256,"description":"SAMPLE MORTGAGE SERVICER PMT","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":13},
+    {"file":"checking-2025-11-to-2026-09.csv","row":130,"accountId":"joint-checking","date":"2025-11-28","amountCents":188000,"description":"SAMPLE EMPLOYER PAYROLL DIR DEP","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":14},
+    {"file":"checking-2025-11-to-2026-09.csv","row":131,"accountId":"joint-checking","date":"2025-11-25","amountCents":-191340,"description":"SAMPLE BANK CARD AUTOPAY","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":15},
+    {"file":"checking-2025-11-to-2026-09.csv","row":132,"accountId":"joint-checking","date":"2025-11-22","amountCents":-9240,"description":"SAMPLE WIRELESS","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":16},
+    {"file":"checking-2025-11-to-2026-09.csv","row":133,"accountId":"joint-checking","date":"2025-11-20","amountCents":-9317,"description":"SAMPLE ELECTRIC CO","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":17},
+    {"file":"checking-2025-11-to-2026-09.csv","row":134,"accountId":"joint-checking","date":"2025-11-19","amountCents":-12719,"description":"SAMPLE GAS UTILITY","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":18},
+    {"file":"checking-2025-11-to-2026-09.csv","row":135,"accountId":"joint-checking","date":"2025-11-14","amountCents":188000,"description":"SAMPLE EMPLOYER PAYROLL DIR DEP","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":19},
+    {"file":"checking-2025-11-to-2026-09.csv","row":136,"accountId":"joint-checking","date":"2025-11-14","amountCents":132500,"description":"ONLINE TRANSFER FROM SAM PERSONAL CHK","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":20},
+    {"file":"checking-2025-11-to-2026-09.csv","row":137,"accountId":"joint-checking","date":"2025-11-12","amountCents":-7500,"description":"SAMPLE INTERNET CO","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":21},
+    {"file":"checking-2025-11-to-2026-09.csv","row":138,"accountId":"joint-checking","date":"2025-11-09","amountCents":-5500,"description":"SAMPLE STORE CARD PAYMENT","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":22},
+    {"file":"checking-2025-11-to-2026-09.csv","row":139,"accountId":"joint-checking","date":"2025-11-02","amountCents":-25000,"description":"TRANSFER TO SAVINGS","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":23},
+    {"file":"checking-2025-11-to-2026-09.csv","row":140,"accountId":"joint-checking","date":"2025-11-01","amountCents":-141256,"description":"SAMPLE MORTGAGE SERVICER PMT","keptFile":"checking-2024-10-to-2025-12.csv","keptRow":24}
+  ],
+  "skippedRows": [],
+  "warnings": []
+}

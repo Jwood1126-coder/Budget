@@ -1,0 +1,20 @@
+{
+  "_note": "Household rules for the fictional sample (Alex & Sam). A real household keeps its own rules in private/rules.json.",
+  "categoryMap": {},
+  "merchantRules": [
+    {"match":"SAMPLE MORTGAGE SERVICER","sign":"out","category":"Mortgage","merchant":"Sample Mortgage Servicer","reason":"Household rule: mortgage servicer (escrow split unknown)"},
+    {"match":"SAMPLE GAS UTILITY","sign":"out","category":"Gas & heating","merchant":"Sample Gas Utility","reason":"Household rule: gas utility bill"},
+    {"match":"SAMPLE ELECTRIC CO","sign":"out","category":"Electric","merchant":"Sample Electric Co","reason":"Household rule: electric utility bill"},
+    {"match":"SAMPLE CITY WATER SEWER","sign":"out","category":"Water & sewer","merchant":"Sample City Water & Sewer","reason":"Household rule: water and sewer bill"},
+    {"match":"SAMPLE INTERNET CO","sign":"out","category":"Internet & phone","merchant":"Sample Internet Co","reason":"Household rule: home internet"},
+    {"match":"SAMPLE WIRELESS","sign":"out","category":"Internet & phone","merchant":"Sample Wireless","reason":"Household rule: mobile phone plan"},
+    {"match":"SAMPLE HOME INSURANCE","sign":"out","category":"Home insurance","merchant":"Sample Home Insurance","reason":"Household rule: annual home insurance premium"},
+    {"match":"SAMPLE STORE CARD PAYMENT","sign":"out","kind":"debt_payment","subtype":"store_card","category":"Debt payment","merchant":"Sample store card","reason":"Household rule: store-card payment — that card's purchases are not in the data, so it counts as a debt payment"},
+    {"match":"SAMPLE EMPLOYER PAYROLL","sign":"in","merchant":"Sample Employer","reason":"Household rule: Alex's paycheck (joint portion)"},
+    {"match":"HOME DEPOT|LOWE'?S","flags":["business_candidate"],"reason":"Possible business purchase — confirm"},
+    {"match":"SAMPLE ENDODONTICS","category":"Dental","merchant":"Sample Endodontics","reason":"Household rule: endodontist (dental specialist)"}
+  ],
+  "transferHints": [
+    {"match":"ONLINE TRANSFER FROM SAM PERSONAL","subtype":"contribution","personId":"p2","reason":"Transfer hint: Sam's contribution from a personal account outside the data"}
+  ]
+}
