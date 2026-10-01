@@ -37,7 +37,10 @@
     for (const s of plan.incomes || []) {
       const who = name(s.personId);
       const unconfirmed = !isKnownFrequency(s.frequency) || s.frequencyStatus === 'unknown';
-      if (s.kind === 'paycheck' && unconfirmed) {
+      // Frequency matters once an amount is known; with no take-home and no joint amount the
+      // missing pay itself is the item, so a separate frequency question would only be noise.
+      const amountKnown = s.netPerPaycheckCents !== null || s.jointPerPaycheckCents !== null;
+      if (s.kind === 'paycheck' && unconfirmed && amountKnown) {
         items.push({ id: 'freq-' + s.id, severity: 'decision', title: `Confirm ${who}'s pay frequency`, detail: 'Every two weeks means two months a year with a third paycheck; twice a month never does. Until confirmed, the budget assumes ' + scheduleAssumption(s, 'paycheck') + '.', route: '#/budget?section=income', cta: 'Set frequency' });
       }
       if (s.kind === 'paycheck' && s.netPerPaycheckCents === null) {
@@ -49,10 +52,10 @@
         if (unconfirmed) {
           // The budget counts an assumed number of transfers until the schedule is set: a decision.
           const seen = s.frequencyStatus === 'observed' || s.status === 'observed';
-          const lead = seen ? `${per === null ? 'Transfers' : money(per) + ' transfers'} were seen in the data, but the schedule is not confirmed.` : 'The transfer schedule is not confirmed.';
+          const lead = seen ? `${per === null ? 'Transfers have' : money(per) + ' transfers have'} been observed, but the schedule is not confirmed.` : 'The transfer schedule is not confirmed.';
           items.push({ id: 'contrib-' + s.id, severity: 'decision', title: `Confirm ${who}'s transfer schedule`, detail: `${lead} Until it is, the budget assumes ${scheduleAssumption(s, 'transfer')}.`, route: '#/budget?section=income', cta: 'Set schedule' });
         } else if (s.frequencyStatus === 'observed') {
-          items.push({ id: 'contrib-' + s.id, severity: 'info', title: `${who}'s contribution schedule is inferred from the data`, detail: `${per === null ? 'Transfers' : money(per) + ' transfers'} were observed ${FREQ_TEXT[s.frequency]}. Confirm it is the planned amount and timing.`, route: '#/budget?section=income', cta: 'Review' });
+          items.push({ id: 'contrib-' + s.id, severity: 'info', title: `${who}'s contribution schedule is inferred from observed transfers`, detail: `${per === null ? 'Transfers' : money(per) + ' transfers'} were observed ${FREQ_TEXT[s.frequency]}. Confirm it is the planned amount and timing.`, route: '#/budget?section=income', cta: 'Review' });
         }
       }
     }

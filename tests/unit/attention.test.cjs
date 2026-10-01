@@ -82,7 +82,7 @@ test('plan: unknown take-home pay is info for joint, a decision for the whole ho
 test('plan: an observed contribution with a known schedule asks to confirm amount and timing', () => {
   const c = item(planList({ incomes: [contribution()] }), 'contrib-sam-contrib');
   assert.equal(c.severity, 'info');
-  assert.equal(c.title, "Sam's contribution schedule is inferred from the data");
+  assert.equal(c.title, "Sam's contribution schedule is inferred from observed transfers");
   assert.equal(c.detail, '$1,325 transfers were observed twice a month. Confirm it is the planned amount and timing.');
 });
 
@@ -90,7 +90,7 @@ test('plan: an observed contribution with an unknown frequency says the schedule
   const c = item(planList({ incomes: [contribution({ frequency: 'unknown' })] }), 'contrib-sam-contrib');
   assert.equal(c.severity, 'decision');
   assert.equal(c.title, "Confirm Sam's transfer schedule");
-  assert.equal(c.detail, '$1,325 transfers were seen in the data, but the schedule is not confirmed. Until it is, the budget assumes 2 transfers a month.');
+  assert.equal(c.detail, '$1,325 transfers have been observed, but the schedule is not confirmed. Until it is, the budget assumes 2 transfers a month.');
   assert.doesNotMatch(c.detail, /regularly|paycheck/);
 });
 
@@ -184,9 +184,11 @@ test('sample: data review items with plan items, in severity order', () => {
   const { ds, state, txns } = sampleState();
   const items = A.list({ dataset: ds, txns, state });
   assertOrdered(items);
-  for (const id of ['dupes', 'uncertain', 'transfers', 'business', 'spike-2026-08Dental', 'coverage', 'freq-p2-pay', 'bill-fund-p2-car', 'promo-store-card', 'balance', 'net-p2-pay', 'contrib-p2-contribution', 'bill-planned-life-insurance', 'escrow-mortgage', 'terms-p1-student-loans']) {
+  for (const id of ['dupes', 'uncertain', 'transfers', 'business', 'spike-2026-08Dental', 'coverage', 'bill-fund-p2-car', 'promo-store-card', 'balance', 'net-p2-pay', 'contrib-p2-contribution', 'bill-planned-life-insurance', 'escrow-mortgage', 'terms-p1-student-loans']) {
     assert.ok(item(items, id), id + ' missing from ' + ids(items).join(', '));
   }
+  // Sam's paycheck has no known amount, so only 'pay unknown' is listed, not a frequency question.
+  assert.equal(item(items, 'freq-p2-pay'), undefined);
   assert.equal(item(items, 'dupes').severity, 'action');
   assert.equal(item(items, 'dupes').title, '1 possible duplicate to check');
   assert.equal(item(items, 'coverage').title, '3 months with incomplete account coverage');

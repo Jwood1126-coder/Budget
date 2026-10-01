@@ -73,7 +73,9 @@
       : p.incomeLowerBound !== null ? `At least ${esc(fmt.money(p.incomeLowerBound, { whole: true }))}<small>Some take-home pay is unknown</small>`
         : '<span class="tone-bad">Unknown</span><small>Enter pay details in Budget</small>';
     const gap = unbudgeted(ctx, month);
-    const gapNote = gap.total > 0 ? `<small class="tone-warn">Before about ${esc(fmt.money(gap.total, { whole: true }))} of usual spending with no target</small>` : '';
+    const unsetTargets = (plan.missing || []).filter(m => m.area === 'targets' && !String(m.id || '').startsWith('personal:')).length;
+    const gapNote = gap.total > 0 ? `<small class="tone-warn">Before about ${esc(fmt.money(gap.total, { whole: true }))} of usual spending with no target</small>`
+      : unsetTargets ? `<small class="tone-warn">Leaves out ${unsetTargets} spending target${unsetTargets === 1 ? '' : 's'} not set yet</small>` : '';
     const remainsPlan = p.remains === null ? '<span class="tone-bad">Unknown</span><small>Needs complete income</small>'
       : `<strong class="${p.remains < 0 ? 'tone-bad' : ''}">${esc(fmt.money(p.remains, { whole: true }))}</strong>${gapNote}`;
     const remainsActual = actual ? `<strong class="${actual.remains < 0 ? 'tone-bad' : ''}">${esc(fmt.money(actual.remains, { whole: true }))}</strong>` : '—';
@@ -144,7 +146,16 @@
     const goals = proj.goals || [];
     const short = goals.filter(g => g.status === 'short');
     const metrics = `<div class="metrics">
-      ${c.metric({ label: 'Change in joint cash over 12 months', value: cum === null ? 'Unknown' : fmt.money(cum, { whole: true, signed: true }), tone: cum !== null && cum < 0 ? 'bad' : '', sub: cum === null ? 'Needs complete income inputs' : 'If the budget is followed exactly', href: ctx.href('forecast') })}
+      ${c.metric({
+        label: 'Change in ' + (ctx.scope === 'joint' ? 'joint ' : '') + 'cash over 12 months',
+        value: cum === null ? 'Unknown' : fmt.money(cum, { whole: true, signed: true }),
+        tone: cum !== null && cum < 0 ? 'bad' : '',
+        status: cum !== null && proj.missing.length ? c.badge('Incomplete', 'warn') : '',
+        sub: cum === null ? 'Needs complete income inputs'
+          : proj.missing.length ? `Leaves out ${proj.missing.length} missing amount${proj.missing.length === 1 ? '' : 's'} (${esc(proj.missing.slice(0, 2).map(m => m.label).join('; '))}${proj.missing.length > 2 ? '…' : ''}), so the real change is likely lower`
+            : 'If the budget is followed exactly',
+        href: ctx.href('forecast'),
+      })}
       ${c.metric({ label: 'Months with more going out than coming in', value: String(s.negativeMonths.length), tone: s.negativeMonths.length ? 'warn' : '', sub: s.negativeMonths.length ? s.negativeMonths.slice(0, 3).map(fmt.month).join(', ') + (s.negativeMonths.length > 3 ? '…' : '') : 'None in the next year', href: ctx.href('forecast') })}
       ${c.metric({ label: 'Savings goals on track', value: goals.length ? `${goals.filter(g => g.status === 'funded').length} of ${goals.length}` : '—', tone: short.length ? 'warn' : '', sub: short.length ? 'Short: ' + short.map(g => g.label).join(', ') : goals.length ? 'Within this horizon' : 'Add goals in Budget', href: ctx.href('budget', { section: 'savings' }) })}
     </div>`;
