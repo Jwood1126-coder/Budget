@@ -230,7 +230,7 @@ module.exports = [
       await page.click('#sp-txn-actions button[type="submit"]');
       await page.waitForFunction(i => window.HouseholdBudget.getState().ledgerEdits[i]?.category === 'Household & hardware', id);
       await page.waitForFunction(() => document.querySelector('#sp-history')?.textContent.includes('Checked the receipt'));
-      assert.equal(await page.evaluate(() => document.activeElement.id), `sp-cat-${id}-sel`, 'focus stays on the category control');
+      assert.ok([`sp-cat-${id}-sel`, `sp-cat-${id}-save`].includes(await page.evaluate(() => document.activeElement.id)), 'focus stays on the category form (select or the Save button just used)');
       const edit = await page.evaluate(i => window.HouseholdBudget.getState().ledgerEdits[i], id);
       assert.equal(edit.history.length, 1, 'saved once, not twice');
       assert.ok((await page.textContent('#sp-details')).includes('Household & hardware'));

@@ -133,7 +133,12 @@
       forecastStart,
       memo,
       /** Plan summary for the current (or given) scope. */
-      plan: (opts = {}) => memo('plan:' + JSON.stringify(opts), () => E.plan.monthly(st.plan, { scope: opts.scope || st.ui.scope, timing: opts.timing || st.plan.settings.incomeTiming, month: opts.month })),
+      plan: (opts = {}) => memo('plan:' + JSON.stringify(opts), () => {
+        const timing = opts.timing || st.plan.settings.incomeTiming;
+        // Actual paydays only make sense for a specific month: use the first forecast month.
+        const month = opts.month || (timing === 'actual' ? forecastStart : undefined);
+        return E.plan.monthly(st.plan, { scope: opts.scope || st.ui.scope, timing, month });
+      }),
       /** Projection for a scenario id over the given horizon. */
       project: (scenarioId, opts = {}) => memo('proj:' + scenarioId + JSON.stringify(opts), () => {
         const scenario = st.scenarios.find(s => s.id === scenarioId) || st.scenarios[0];
@@ -149,7 +154,7 @@
   let lastView = null;
   let keepFocusOnNextRender = false;
 
-  function render({ focusHeading = false } = {}) {
+  function render({ focusHeading = false, fromHash = false } = {}) {
     const route = UI.router.current();
     const view = views[route.view] || views.overview;
     const ctx = makeContext(route);
@@ -191,7 +196,8 @@
     // stays the first Tab stop).
     const viewChanged = lastView !== null && lastView !== route.view;
     lastView = route.view;
-    if ((focusHeading || viewChanged) && !keepFocusOnNextRender) {
+    const keep = fromHash && keepFocusOnNextRender;
+    if ((focusHeading || viewChanged) && !keep) {
       const h = $('#page-title', container);
       root.scrollTo(0, 0);
       if (h) h.focus({ preventScroll: true });
@@ -202,7 +208,7 @@
         if (caret && typeof el.setSelectionRange === 'function') { try { el.setSelectionRange(caret[0], caret[1]); } catch { /* not a text input */ } }
       }
     }
-    keepFocusOnNextRender = false;
+    if (fromHash) keepFocusOnNextRender = false;
     if (app.state.ui.lastRoute !== location.hash && location.hash) {
       app.state = { ...app.state, ui: { ...app.state.ui, lastRoute: location.hash } };
       save();
@@ -349,7 +355,7 @@
       const path = el.dataset.bind;
       const current = E.state.getPath(app.state, path);
       if (JSON.stringify(current) === JSON.stringify(value)) { setFieldError(el, null); return; }
-      update(st => E.state.setPath(st, path, value), { message: el.dataset.message || null });
+      update(st => E.state.setPath(st, path, value), { message: el.dataset.message || 'Change saved.' });
       setFieldError(el, null);
     } catch (err) {
       if (err && err.name === 'ValidationError') setFieldError(el, err.message);
@@ -384,6 +390,11 @@
   };
 
   function navigate(view, params = {}, { replace = false, keepFocus = false } = {}) {
+    if (UI.router.href(view, params) === location.hash) {
+      // Same URL: no hashchange will fire, so re-render directly and leave no stale flag behind.
+      scheduleRender({ focusHeading: !keepFocus });
+      return;
+    }
     keepFocusOnNextRender = keepFocus;
     UI.router.go(view, params, { replace });
   }
@@ -407,7 +418,8 @@
         return;
       }
       const el = ev.target.closest('[data-action]');
-      if (!el || el.tagName === 'INPUT' || el.tagName === 'SELECT') return;
+      // Inputs/selects act on change; forms act only on submit (never on clicks inside them).
+      if (!el || ['INPUT', 'SELECT', 'TEXTAREA', 'FORM'].includes(el.tagName)) return;
       if (el.tagName === 'A') ev.preventDefault();
       runAction(el, ev);
     });
@@ -435,10 +447,11 @@
     });
     root.addEventListener('hashchange', () => {
       if (location.hash && !location.hash.startsWith('#/')) return; // not a route
-      const keep = keepFocusOnNextRender;
-      render({ focusHeading: !keep });
+      render({ focusHeading: !keepFocusOnNextRender, fromHash: true });
     });
     installTooltips();
+    // No re-render on resize: it would discard half-typed form input (e.g. when a phone rotates).
+    // Charts pick their phone or desktop drawing size on the next normal render.
   }
 
   // ------------------------------------------------------------------ chart tooltips

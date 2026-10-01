@@ -284,7 +284,7 @@ main { padding: var(--space-6) var(--space-6) var(--space-7); max-width: 1240px;
 .check input { width: 18px; height: 18px; margin-top: 2px; }
 
 /* ------------------------------------------------------------- tables */
-.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.table-wrap { position: relative; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
 .table { width: 100%; border-collapse: collapse; font-size: .9rem; }
 .table th, .table td { padding: 10px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border); }
 .table thead th { position: sticky; top: 0; background: var(--surface-2); font-size: .76rem; text-transform: uppercase; letter-spacing: .04em; color: var(--text-2); font-weight: 700; white-space: nowrap; }
@@ -355,7 +355,7 @@ main { padding: var(--space-6) var(--space-6) var(--space-7); max-width: 1240px;
 .disclosure[open] > summary { border-bottom: 1px solid var(--border); }
 .disclosure-body { padding: 12px 14px; }
 
-.toast { position: fixed; z-index: 60; left: 50%; bottom: 24px; transform: translateX(-50%); display: flex; align-items: center; gap: var(--space-3); max-width: min(560px, calc(100vw - 32px)); padding: 10px 14px; border-radius: 10px; background: var(--text); color: var(--surface); box-shadow: 0 8px 24px rgba(0,0,0,.25); font-size: .9rem; }
+.toast { position: fixed; z-index: 60; left: 16px; right: 16px; bottom: 24px; margin-inline: auto; width: fit-content; display: flex; align-items: center; gap: var(--space-3); max-width: min(560px, calc(100vw - 32px)); padding: 10px 14px; border-radius: 10px; background: var(--text); color: var(--surface); box-shadow: 0 8px 24px rgba(0,0,0,.25); font-size: .9rem; }
 .toast button { background: transparent; border: 1px solid currentColor; color: inherit; border-radius: 6px; padding: 4px 10px; font: inherit; font-weight: 700; cursor: pointer; }
 @media (max-width: 899px) { .toast { bottom: calc(var(--tabbar-h) + 16px); } }
 

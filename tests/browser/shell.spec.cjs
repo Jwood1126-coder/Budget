@@ -3,7 +3,9 @@
 const VIEWS = ['overview', 'spending', 'budget', 'forecast', 'review', 'data'];
 
 async function noHorizontalScroll(page) {
-  return page.evaluate(() => document.scrollingElement.scrollWidth <= window.innerWidth + 1);
+  // Compare with the configured viewport: under mobile emulation innerWidth grows with overflow.
+  const width = page.viewportSize().width;
+  return page.evaluate(w => document.scrollingElement.scrollWidth <= w + 1, width);
 }
 
 module.exports = [

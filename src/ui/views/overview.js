@@ -64,7 +64,7 @@
 
   function flowTable(ctx, plan, actual, month) {
     const p = planBuckets(plan, ctx.state.plan.bills);
-    const href = params => ctx.href('spending', { period: month, ...params });
+    const href = params => ctx.href('spending', { period: month, scope: 'joint', ...params });
     const actualCell = (cents, params, note) => {
       if (!actual) return '<span class="muted">No complete month yet</span>';
       return `<a href="${esc(href(params))}">${esc(fmt.money(cents, { whole: true }))}</a>${note ? `<small>${note}</small>` : ''}`;

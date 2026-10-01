@@ -85,7 +85,7 @@
       <div class="field"><label for="${esc(base)}-reason">Why? <span class="fine">(required, kept in the history)</span></label>
         <input id="${esc(base)}-reason" name="reason" list="${esc(base)}-reasons" maxlength="200" placeholder="e.g. Checked the receipt" required>
         <datalist id="${esc(base)}-reasons">${QUICK_REASONS.map(r => `<option value="${esc(r)}">`).join('')}</datalist></div>
-      <div class="inline-form-actions"><button class="btn btn-primary btn-small" type="submit">Save category</button>
+      <div class="inline-form-actions"><button id="${esc(base)}-save" class="btn btn-primary btn-small" type="submit">Save category</button>
         <label class="check"><input type="checkbox" name="allSame"> Also apply to other uncorrected ${esc(t.merchant)} purchases</label></div>
     </form>`;
   }

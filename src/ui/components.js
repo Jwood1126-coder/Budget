@@ -83,9 +83,9 @@
     </fieldset>`;
   }
 
-  function button(label, { action, variant = 'secondary', data = {}, type = 'button', disabled = false, ariaLabel, cls = '' } = {}) {
+  function button(label, { action, variant = 'secondary', data = {}, type = 'button', disabled = false, ariaLabel, cls = '', id } = {}) {
     const dataAttrs = Object.fromEntries(Object.entries(data).map(([k, v]) => ['data-' + k, v]));
-    return `<button${attrs({ type, class: `btn btn-${variant} ${cls}`.trim(), 'data-action': action, disabled, 'aria-label': ariaLabel, ...dataAttrs })}>${esc(label)}</button>`;
+    return `<button${attrs({ id, type, class: `btn btn-${variant} ${cls}`.trim(), 'data-action': action, disabled, 'aria-label': ariaLabel, ...dataAttrs })}>${esc(label)}</button>`;
   }
 
   function linkButton(label, href, { variant = 'secondary', cls = '' } = {}) {
@@ -138,6 +138,9 @@
   }
 
   // ------------------------------------------------------------------ charts
+  /** Phones get a narrower drawing so axis text is not scaled down to an unreadable size. */
+  function isNarrow() { return typeof root.innerWidth === 'number' && root.innerWidth < 640; }
+
   function niceStep(range, targetTicks = 4) {
     const raw = range / Math.max(1, targetTicks);
     const mag = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 1))));
@@ -167,7 +170,8 @@
    * labels: month strings, same length as values. Null values break the line.
    */
   function lineChart({ id, title, description = '', series, labels, format = v => fmt.money(v, { whole: true }), tableCaption }) {
-    const W = 760, H = 260, padL = 64, padR = 96, padT = 16, padB = 32;
+    const narrow = isNarrow();
+    const W = narrow ? 420 : 760, H = narrow ? 240 : 260, padL = narrow ? 46 : 64, padR = narrow ? 58 : 96, padT = 16, padB = 32;
     const all = series.flatMap(s => s.values).filter(v => v !== null && v !== undefined);
     if (!all.length || !labels.length) return empty('Not enough known values to draw this chart yet.');
     const t = ticks(Math.min(0, ...all), Math.max(0, ...all));
@@ -175,8 +179,10 @@
     const x = i => padL + (labels.length === 1 ? (W - padL - padR) / 2 : (i / (labels.length - 1)) * (W - padL - padR));
     const y = v => padT + (1 - (v - min) / (max - min || 1)) * (H - padT - padB);
     const grid = t.map(v => `<line class="grid${v === 0 ? ' zero' : ''}" x1="${padL}" x2="${W - padR}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}"/><text class="axis" x="${padL - 8}" y="${(y(v) + 4).toFixed(1)}" text-anchor="end">${esc(compactMoney(v))}</text>`).join('');
-    const every = Math.max(1, Math.ceil(labels.length / 8));
-    const xlab = labels.map((m, i) => (i % every === 0 || i === labels.length - 1) ? `<text class="axis" x="${x(i).toFixed(1)}" y="${H - 10}" text-anchor="middle">${esc(fmt.month(m))}</text>` : '').join('');
+    const every = Math.max(1, Math.ceil(labels.length / (narrow ? 4 : 8)));
+    // Show evenly spaced labels; the last label replaces a near neighbour instead of colliding with it.
+    const showX = i => i === labels.length - 1 || (i % every === 0 && labels.length - 1 - i >= every * 0.6);
+    const xlab = labels.map((m, i) => showX(i) ? `<text class="axis" x="${x(i).toFixed(1)}" y="${H - 10}" text-anchor="middle">${esc(fmt.month(m))}</text>` : '').join('');
     const lines = series.map((s, si) => {
       let d = '', pen = false;
       s.values.forEach((v, i) => {
@@ -215,17 +221,27 @@
   function columnChart({ title, items, format = v => fmt.money(v, { whole: true }), highlight }) {
     const vals = items.map(i => i.value).filter(v => v !== null && v !== undefined);
     if (!vals.length) return empty('No known values to chart yet.');
-    const W = 760, H = 220, padL = 60, padR = 12, padT = 18, padB = 30;
+    const narrow = isNarrow();
+    const W = narrow ? 420 : 760, H = narrow ? 220 : 220, padL = narrow ? 44 : 60, padR = 12, padT = 18, padB = 30;
     const t = ticks(Math.min(0, ...vals), Math.max(0, ...vals));
     const min = t[0], max = t[t.length - 1];
     const y = v => padT + (1 - (v - min) / (max - min || 1)) * (H - padT - padB);
     const band = (W - padL - padR) / items.length;
     const bw = Math.max(4, Math.min(24, band * 0.6));
     const grid = t.map(v => `<line class="grid${v === 0 ? ' zero' : ''}" x1="${padL}" x2="${W - padR}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}"/><text class="axis" x="${padL - 8}" y="${(y(v) + 4).toFixed(1)}" text-anchor="end">${esc(compactMoney(v))}</text>`).join('');
-    const every = Math.max(1, Math.ceil(items.length / 12));
+    const every = Math.max(1, Math.ceil(items.length / (narrow ? 6 : 12)));
+    let yearShown = null;
     const cols = items.map((it, i) => {
       const cx = padL + band * i + band / 2;
-      const label = (i % every === 0 || i === items.length - 1) ? `<text class="axis" x="${cx.toFixed(1)}" y="${H - 10}" text-anchor="middle">${esc(fmt.month(it.label).replace(/ \d{4}$/, m => (i === 0 || it.label.endsWith('-01') ? m : '')))}</text>` : '';
+      const shown = i % every === 0 || i === items.length - 1;
+      let text = fmt.month(it.label);
+      if (shown) {
+        // Print the year only when it changes from the previous printed label.
+        const year = String(it.label).slice(0, 4);
+        if (year === yearShown) text = text.replace(/ \d{4}$/, '');
+        yearShown = year;
+      }
+      const label = shown ? `<text class="axis" x="${cx.toFixed(1)}" y="${H - 10}" text-anchor="middle">${esc(text)}</text>` : '';
       if (it.value === null || it.value === undefined) return label;
       const top = Math.min(y(it.value), y(0)), h = Math.max(1, Math.abs(y(it.value) - y(0)));
       const r = Math.min(4, h / 2), neg = it.value < 0;
@@ -245,25 +261,32 @@
   }
 
   // ------------------------------------------------------------------ form fields
+  /** Extra attributes for bound fields: data-message (toast text, enables Undo) and data-* pairs. */
+  function extraAttrs(message, data) {
+    const out = {};
+    if (message) out['data-message'] = message;
+    for (const [k, v] of Object.entries(data || {})) out['data-' + k] = v;
+    return attrs(out);
+  }
   /**
    * Money input bound to a state path. Value in cents (null = unknown, shown as empty).
    * The app parses dollars on change and validates; errors render into #<id>-error.
    */
-  function moneyField({ id, label, path, cents, help = '', placeholder = 'Unknown', status, allowNegative = false, compact = false }) {
+  function moneyField({ id, label, path, cents, help = '', placeholder = 'Unknown', status, allowNegative = false, compact = false, message, data }) {
     const fid = id || UI.dom.domId('f', path);
     return `<div class="field${compact ? ' field-compact' : ''}">
       <label for="${esc(fid)}">${esc(label)}${status ? ' ' + status : ''}</label>
-      <div class="input-money"><span aria-hidden="true">$</span><input id="${esc(fid)}" type="text" inputmode="decimal" autocomplete="off" data-bind="${esc(path)}" data-type="money"${allowNegative ? ' data-allow-negative="1"' : ''} value="${esc(UI.dom.centsToInput(cents))}" placeholder="${esc(placeholder)}" aria-describedby="${esc(fid)}-help ${esc(fid)}-error"></div>
+      <div class="input-money"><span aria-hidden="true">$</span><input id="${esc(fid)}" type="text" inputmode="decimal" autocomplete="off" data-bind="${esc(path)}" data-type="money"${allowNegative ? ' data-allow-negative="1"' : ''}${extraAttrs(message, data)} value="${esc(UI.dom.centsToInput(cents))}" placeholder="${esc(placeholder)}" aria-describedby="${esc(fid)}-help ${esc(fid)}-error"></div>
       <p class="field-help" id="${esc(fid)}-help">${help}</p>
       <p class="field-error" id="${esc(fid)}-error" role="alert" hidden></p>
     </div>`;
   }
 
-  function selectField({ id, label, path, value, options, help = '', status, action }) {
+  function selectField({ id, label, path, value, options, help = '', status, action, message, data }) {
     const fid = id || UI.dom.domId('f', path || label);
     return `<div class="field">
       <label for="${esc(fid)}">${esc(label)}${status ? ' ' + status : ''}</label>
-      <select id="${esc(fid)}"${path ? ` data-bind="${esc(path)}" data-type="select"` : ''}${action ? ` data-action="${esc(action)}"` : ''} aria-describedby="${esc(fid)}-help ${esc(fid)}-error">
+      <select id="${esc(fid)}"${path ? ` data-bind="${esc(path)}" data-type="select"` : ''}${action ? ` data-action="${esc(action)}"` : ''}${extraAttrs(message, data)} aria-describedby="${esc(fid)}-help ${esc(fid)}-error">
         ${options.map(o => `<option value="${esc(o.value)}"${String(o.value) === String(value ?? '') ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}
       </select>
       <p class="field-help" id="${esc(fid)}-help">${help}</p>
@@ -271,21 +294,21 @@
     </div>`;
   }
 
-  function monthField({ id, label, path, value, help = '', min, max }) {
+  function monthField({ id, label, path, value, help = '', min, max, message, data }) {
     const fid = id || UI.dom.domId('f', path);
     return `<div class="field">
       <label for="${esc(fid)}">${esc(label)}</label>
-      <input id="${esc(fid)}" type="month" data-bind="${esc(path)}" data-type="month" value="${esc(value || '')}"${min ? ` min="${esc(min)}"` : ''}${max ? ` max="${esc(max)}"` : ''} placeholder="YYYY-MM" aria-describedby="${esc(fid)}-help ${esc(fid)}-error">
+      <input id="${esc(fid)}" type="month" data-bind="${esc(path)}" data-type="month"${extraAttrs(message, data)} value="${esc(value || '')}"${min ? ` min="${esc(min)}"` : ''}${max ? ` max="${esc(max)}"` : ''} placeholder="YYYY-MM" aria-describedby="${esc(fid)}-help ${esc(fid)}-error">
       <p class="field-help" id="${esc(fid)}-help">${help}</p>
       <p class="field-error" id="${esc(fid)}-error" role="alert" hidden></p>
     </div>`;
   }
 
-  function textField({ id, label, path, value, help = '', maxlength = 80, type = 'text', dataType = 'text', placeholder = '' }) {
+  function textField({ id, label, path, value, help = '', maxlength = 80, type = 'text', dataType = 'text', placeholder = '', message, data }) {
     const fid = id || UI.dom.domId('f', path);
     return `<div class="field">
       <label for="${esc(fid)}">${esc(label)}</label>
-      <input id="${esc(fid)}" type="${esc(type)}" data-bind="${esc(path)}" data-type="${esc(dataType)}" value="${esc(value ?? '')}" maxlength="${maxlength}" placeholder="${esc(placeholder)}" aria-describedby="${esc(fid)}-help ${esc(fid)}-error">
+      <input id="${esc(fid)}" type="${esc(type)}" data-bind="${esc(path)}" data-type="${esc(dataType)}"${extraAttrs(message, data)} value="${esc(value ?? '')}" maxlength="${maxlength}" placeholder="${esc(placeholder)}" aria-describedby="${esc(fid)}-help ${esc(fid)}-error">
       <p class="field-help" id="${esc(fid)}-help">${help}</p>
       <p class="field-error" id="${esc(fid)}-error" role="alert" hidden></p>
     </div>`;
@@ -297,6 +320,8 @@
       confirmed: ['Confirmed', 'good'], statement: ['From statement', 'good'], observed: ['Observed in data', 'info'],
       estimate: ['Estimate', 'warn'], approximate: ['Approximate', 'warn'], planned: ['Planned', 'info'],
       illustrative: ['Illustrative', 'warn'], unknown: ['Unknown', 'bad'], displayed: ['As displayed', 'info'],
+      info: ['Information', 'info'], needs_info: ['Needs details', 'warn'], on_track: ['On track', 'good'], short: ['Short', 'bad'],
+      missing: ['Missing', 'bad'], assumed: ['Assumed', 'warn'],
     };
     const [text, tone] = map[status] || [status, 'neutral'];
     return badge(text, tone);
