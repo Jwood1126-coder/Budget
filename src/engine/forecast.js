@@ -17,7 +17,9 @@
  *     and optional growth rates (default 0).
  *
  * Unknown is not zero: unknown amounts are listed in `missing` and left out of totals; when
- * income is unknown, net and cumulative values are null.
+ * income is unknown, or (household scope) someone's personal spending cannot be worked out because
+ * their transfer to joint is unknown, net and cumulative values are null (row.netUnknownReason
+ * says which), so an unknown never makes a scenario look better than the baseline.
  * project() never mutates its inputs.
  */
 (function (root) {
@@ -368,7 +370,8 @@
    * @param {{startMonth:string, months:number, scope?:'joint'|'household', now?:string}} opts
    *   `now` (optional 'YYYY-MM'): goal contributions start at max(startMonth, now).
    * @returns {object} Projection (see the contract), with extra row fields incomeKnownCents,
-   *   outCents, goalDrawsCents and summary fields totalIncomeKnownCents, totalContributionsCents, unknownNetMonths.
+   *   outCents, goalDrawsCents, netUnknownReason (null | 'income' | 'personal_spending') and
+   *   summary fields totalIncomeKnownCents, totalContributionsCents, unknownNetMonths.
    */
   function project(plan, scenario, opts) {
     const cfg = normalizeOptions(plan, scenario, opts);
@@ -396,7 +399,9 @@
 
       for (const m of s.missing) {
         if (!BUDGET_AREAS.includes(m.area)) continue;
-        const ev = nulledBy.get(m.id);
+        // Personal spending blocked by an unknown transfer is credited to the event that made the
+        // transfer unknown (m.streamIds lists those contribution streams).
+        const ev = nulledBy.get(m.id) || arr(m.streamIds).map(id => nulledBy.get(id)).find(Boolean);
         if (ev) missing.add({ label: (ev.label || ev.id) + ': ' + m.label, source: 'event', id: ev.id });
         else missing.add({ label: m.label, source: 'plan', id: m.id });
       }
@@ -515,7 +520,9 @@
       const billsCents = s.bills.totalCents;
       const oneTimeCents = oneTimeSpend;
       const outCents = spendingCents + billsCents + oneTimeCents;
-      const netCents = incomeCents === null ? null : incomeCents - outCents;
+      // Net is unknown when income is, or when personal spending cannot be worked out (household).
+      const netUnknownReason = incomeCents === null ? 'income' : (s.remainingUnknownReason === 'personal_spending' ? 'personal_spending' : null);
+      const netCents = netUnknownReason ? null : incomeCents - outCents;
       // Cash not set aside this month: contributions earmark cash; money drawn from goals was
       // set aside earlier, so it does not reduce what is unassigned now.
       const unassignedCents = netCents === null ? null : netCents - contributions + goalDraws;
@@ -544,6 +551,7 @@
         outCents,
         eventLines,
         netCents,
+        netUnknownReason,
         contributionsCents: contributions,
         goalDrawsCents: goalDraws,
         unassignedCents,
@@ -573,7 +581,7 @@
       goals: goalResults,
       missing: missingList,
       assumptions,
-      complete: missingList.length === 0 && rows.every(r => r.incomeCents !== null)
+      complete: missingList.length === 0 && rows.every(r => r.incomeCents !== null && r.netCents !== null)
     };
   }
 

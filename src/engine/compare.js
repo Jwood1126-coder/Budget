@@ -10,12 +10,24 @@
  *   - A difference is flagged only when it is both at least RULE.minDiffCents and at least
  *     RULE.minPct of the usual amount, and there are at least RULE.minMonths usable months.
  *   - Seasonal categories (heating, cooling) are judged against the same month last year.
+ *   - Irregular categories are not judged against an average: with at least IRREGULAR_MIN_MONTHS
+ *     usable baseline months and activity in exactly one of them, a payment (an annual bill such
+ *     as home insurance, an occasional purchase), a monthly average is not meaningful. Such a
+ *     category is signalled 'irregular' (never 'higher'/'lower'; diffCents and pct are null) and
+ *     the explanation cites the one month and amount. A baseline with no activity stays 'new'.
+ *     A partial selected month is still 'partial_month'; seasonal categories keep their own rule.
  *   - Every result carries a plain-language explanation that cites the numbers used.
+ *
+ * Signals: 'higher' | 'lower' | 'typical' | 'new' | 'irregular' | 'no_history' | 'limited_history'
+ *   | 'refund_baseline' | 'partial_month' | 'seasonal_higher' | 'seasonal_typical' | 'seasonal_lower'
+ *   | 'seasonal_unknown'.
  */
 (function (root) {
   const E = root.BudgetEngine || (root.BudgetEngine = {});
 
   const RULE = Object.freeze({ minDiffCents: 10000, minPct: 25, minMonths: 2 });
+  /** Usable baseline months needed before a category with a single active month is 'irregular'. */
+  const IRREGULAR_MIN_MONTHS = 3;
 
   const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
   const nonEmpty = v => typeof v === 'string' && v.trim() !== '';
@@ -189,12 +201,13 @@
 
     let rawSum = 0, adjustedSum = 0, monthsWithActivity = 0;
     const planningOut = [];
+    const active = [];
     for (const m of baselineMonths) {
       const c = cell(data, m, category);
       if (!c) continue; // a covered month with no activity counts as $0
       rawSum += c.cents;
       adjustedSum += c.adjustedCents;
-      if (c.count > 0) monthsWithActivity += 1;
+      if (c.count > 0) { monthsWithActivity += 1; active.push({ month: m, cents: c.cents }); }
       if (c.excludedCents !== 0) planningOut.push({ month: m, cents: c.excludedCents });
     }
     const averageCents = usableCount ? div(planning ? adjustedSum : rawSum, usableCount) : null;
@@ -218,6 +231,7 @@
     let pct = null;
     let basis = 'average';
     let basisCents = averageCents;
+    let irregular = null;
 
     if (selectedCoverage.status !== 'full') {
       signal = 'partial_month';
@@ -263,6 +277,14 @@
       pct = averageCents > 0 ? percent(diffCents, averageCents) : null;
       explanation = label(month) + ' ' + money(actualCents) + ' vs ' + money(averageCents) + ' (' + basisText + '). Only '
         + plural(usableCount, 'full month') + ' of history; at least ' + rule.minMonths + ' are needed before anything is flagged.';
+    } else if (usableCount >= IRREGULAR_MIN_MONTHS && monthsWithActivity === 1 && active[0].cents > 0) {
+      // One payment in the whole baseline (an annual bill, an occasional purchase): the average
+      // would mark every other month 'lower' and the month it is paid 'higher', so neither is said.
+      signal = 'irregular';
+      irregular = { month: active[0].month, cents: active[0].cents };
+      explanation = 'Paid in only 1 of the last ' + plural(usableCount, 'full month') + ' (' + label(irregular.month) + ': ' + money(irregular.cents)
+        + "), so a monthly average isn't meaningful. " + label(month) + ' (' + money(actualCents) + ') is not marked higher or lower.'
+        + (excludedMonths.length ? ' Left out: ' + excludedMonths.map(e => label(e.month) + ' (' + lowerFirst(e.reason) + ')').join(', ') + '.' : '');
     } else if (averageCents === 0) {
       diffCents = actualCents;
       signal = actualCents === 0 ? 'typical' : 'new';
@@ -307,6 +329,7 @@
       explanation,
       seasonal,
       monthsWithActivity,
+      irregular,
       basis,
       basisCents,
       planningExcludedCents: planningOut.reduce((s, p) => s + p.cents, 0),
@@ -319,7 +342,8 @@
    * @param {object[]} txns effective transactions (ledger.applyEdits)
    * @param {object} dataset normalized dataset (for coverage)
    * @param {{month: string, window?: number, category?: string, planning?: boolean, rule?: object, seasonalCategories?: string[]}} opts
-   * @returns {object} ComparisonResult (contract §8) plus `basis`/`basisCents` per category
+   * @returns {object} ComparisonResult (contract §8) plus `basis`/`basisCents` per category and
+   *   `irregular` ({month, cents} of the single active baseline month when signal is 'irregular', else null)
    */
   function usual(txns, dataset, opts = {}) {
     const month = requireMonth(opts.month);
@@ -509,5 +533,5 @@
     return rows.concat(unplanned);
   }
 
-  E.compare = { RULE, usual, trend, planningBaseline, planVsActual, describeMonths };
+  E.compare = { RULE, IRREGULAR_MIN_MONTHS, usual, trend, planningBaseline, planVsActual, describeMonths };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

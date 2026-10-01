@@ -1,1 +1,230 @@
-/* Forecast view */
+/* Forecast view (scoped with .fc-). Tokens only, so light and dark themes both work. */
+
+/* ------------------------------------------------------------- header controls */
+.fc-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-3) var(--space-4); }
+.fc-start { width: 11rem; }
+.fc-start label { font-size: .78rem; color: var(--text-2); }
+.fc-start input { min-height: 38px; padding: 6px 8px; }
+.fc-rule { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0; font-size: .9rem; color: var(--text-2); }
+.fc-range { margin: 0; }
+.fc-page > .notice { margin: 0; }
+
+/* ------------------------------------------------------------- scenario bar */
+.fc-sc-list { list-style: none; margin: 0 0 var(--space-4); padding: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.fc-sc { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: var(--space-2) var(--space-4); align-items: center; padding: var(--space-3) var(--space-4); border-top: 1px solid var(--border); }
+.fc-sc:first-child { border-top: 0; }
+.fc-sc.is-selected { background: var(--brand-soft); box-shadow: inset 4px 0 0 var(--brand); }
+.fc-sc-main { min-width: 0; }
+.fc-sc-name { font-weight: 700; font-size: 1rem; margin-right: 4px; overflow-wrap: anywhere; }
+.fc-sc-name[aria-current] { color: var(--text); }
+.fc-sc-meta { margin: 2px 0 0; font-size: .84rem; color: var(--text-2); overflow-wrap: anywhere; }
+.fc-sc-compare .check { font-weight: 650; white-space: nowrap; align-items: center; }
+.fc-sc-compare input[disabled] + * , .fc-sc-compare input[disabled] { cursor: not-allowed; }
+.fc-sc-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: flex-end; }
+.fc-rename { grid-column: 1 / -1; }
+@media (max-width: 759px) {
+  .fc-sc { grid-template-columns: minmax(0, 1fr) auto; padding: var(--space-3); }
+  .fc-sc-actions { grid-column: 1 / -1; justify-content: flex-start; }
+}
+
+.fc-new { border-top: 1px solid var(--border); padding-top: var(--space-4); }
+.fc-new h3 { margin-bottom: var(--space-3); }
+.fc-new-grid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) auto; gap: var(--space-3); align-items: start; }
+.fc-new-submit { padding-top: 26px; }
+@media (max-width: 759px) {
+  .fc-new-grid { grid-template-columns: minmax(0, 1fr); }
+  .fc-new-submit { padding-top: 0; }
+  .fc-new-submit .btn { width: 100%; }
+}
+
+/* ------------------------------------------------------------- comparison */
+.fc-compare .chart { margin-bottom: var(--space-3); }
+.fc-compare > .notice { margin-bottom: var(--space-4); }
+.fc-unknown-list { margin: 0 0 var(--space-3); padding-left: 1.1rem; font-size: .86rem; color: var(--text-2); }
+.fc-unknown-list li { margin-bottom: 6px; }
+.fc-unknown-list .btn { margin-left: 6px; }
+/* Positioned, so screen-reader-only text inside a scrolled table is clipped with it and cannot
+   widen the page on phones. */
+.fc-compare .table-wrap, .fc-full .table-wrap, .fc-months { position: relative; }
+.fc-cmp-table tbody th { font-weight: 600; color: var(--text-2); min-width: 8rem; }
+.fc-cmp-table tbody th strong { color: var(--text); }
+.fc-cmp-table td.num { white-space: normal; min-width: 6.5rem; }
+.fc-cmp-table thead th.num { white-space: normal; }
+@media (max-width: 599px) {
+  .fc-cmp-table th, .fc-cmp-table td { padding: 8px 6px; }
+  .fc-cmp-table tbody th { min-width: 6.5rem; font-size: .84rem; }
+  .fc-cmp-table td.num { min-width: 5.5rem; }
+  /* The shared line chart scales its text down with its width; keep it readable on phones by
+     letting the drawing scroll sideways inside its box (the legend and table stay put). */
+  .fc-compare .chart { overflow-x: auto; }
+  .fc-compare .chart svg { min-width: 600px; }
+}
+.fc-cmp-table small { color: var(--text-3); }
+.fc-v { font-weight: 700; font-variant-numeric: tabular-nums; }
+.fc-delta { font-weight: 650; }
+.fc-unknown { font-weight: 650; color: var(--warn); }
+.fc-settings-text { font-weight: 500; }
+
+/* ------------------------------------------------------------- selected scenario layout */
+.fc-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: var(--space-5); align-items: start; }
+@media (max-width: 1199px) { .fc-grid { grid-template-columns: minmax(0, 1fr); } }
+.fc-editor h2:focus { outline: none; }
+.fc-editor .eyebrow { margin-bottom: 2px; }
+.fc-editor { container-type: inline-size; }
+.fc-result { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); margin-bottom: var(--space-4); }
+@container (min-width: 760px) { .fc-result { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.fc-result .metric { padding: var(--space-3); }
+.fc-result .metric-value { font-size: 1.3rem; }
+.fc-desc { margin-bottom: var(--space-4); }
+.fc-desc textarea, .fc-note textarea { resize: vertical; min-height: 60px; }
+.fc-note { grid-column: 1 / -1; }
+.fc-base-note { margin-bottom: var(--space-4); }
+
+/* ------------------------------------------------------------- events */
+.fc-events { border-top: 1px solid var(--border); padding-top: var(--space-4); margin-bottom: var(--space-4); }
+.fc-events > h3 { margin-bottom: 4px; }
+.fc-events h3:focus, .fc-add h3:focus { outline: none; }
+.fc-ev-list { list-style: none; margin: var(--space-3) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.fc-ev-details { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.fc-ev.has-gaps .fc-ev-details { border-color: var(--warn); box-shadow: inset 4px 0 0 var(--warn); }
+.fc-ev-sum { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px var(--space-3); align-items: start; padding: 10px 14px 10px 34px; cursor: pointer; list-style: none; position: relative; }
+.fc-ev-sum::-webkit-details-marker { display: none; }
+.fc-ev-sum::before { content: ""; position: absolute; left: 14px; top: 17px; width: 7px; height: 7px; border-right: 2px solid var(--text-3); border-bottom: 2px solid var(--text-3); transform: rotate(-45deg); transition: transform .15s; }
+.fc-ev-details[open] > .fc-ev-sum::before { transform: rotate(45deg); }
+.fc-ev-details[open] > .fc-ev-sum { border-bottom: 1px solid var(--border); }
+.fc-ev-main { min-width: 0; }
+.fc-ev-h { font-size: .98rem; display: inline; overflow-wrap: anywhere; }
+.fc-ev-meta { display: block; font-size: .8rem; color: var(--text-3); }
+.fc-ev-amt { text-align: right; font-weight: 650; font-size: .9rem; font-variant-numeric: tabular-nums; }
+.fc-ev-amt .fc-usual { display: block; font-weight: 500; font-size: .76rem; font-style: italic; color: var(--text-3); }
+.fc-usual-note { display: block; font-style: italic; }
+.fc-target-tag { font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--brand); }
+.fc-ev-missing { color: var(--warn); }
+.fc-ev-badges { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; }
+.fc-ev-body { padding: var(--space-3) var(--space-4) var(--space-4); }
+.fc-ev-body > .fine { margin-bottom: var(--space-3); }
+.fc-ev-form { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: var(--space-3); }
+.fc-ev-foot { margin-top: var(--space-3); display: flex; justify-content: flex-end; }
+.fc-mode-field { display: flex; flex-direction: column; gap: 4px; }
+.fc-mode-field .btn-ghost { align-self: flex-start; padding-left: 0; }
+.fc-label { margin: 0; font-size: .86rem; font-weight: 650; }
+.fc-unchanged { margin: 0; font-size: .84rem; color: var(--text-2); }
+@media (max-width: 599px) {
+  .fc-ev-sum { grid-template-columns: minmax(0, 1fr); padding-right: 10px; }
+  .fc-ev-amt { text-align: left; }
+  .fc-ev-body { padding: var(--space-3); }
+}
+
+.fc-add { margin-top: var(--space-4); padding: var(--space-4); background: var(--surface-2); border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); }
+.fc-add > h3 { margin-bottom: 4px; }
+.fc-tpl-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: var(--space-3) var(--space-4); margin-top: var(--space-3); }
+.fc-tpl-group-label { margin: 0 0 6px; font-size: .74rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text-2); }
+.fc-tpl-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.fc-tpl-buttons .btn { text-align: left; }
+.fc-tpl-form { margin-top: var(--space-4); padding: var(--space-4); background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); }
+.fc-tpl-form h4 { margin-bottom: 4px; }
+.fc-tpl-form .form-grid { margin: var(--space-3) 0; }
+
+/* ------------------------------------------------------------- settings (assumptions) */
+.fc-settings > summary { font-weight: 650; }
+.fc-settings > summary .fc-settings-text { color: var(--text-2); }
+.fc-settings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--space-3); margin-bottom: var(--space-3); }
+.fc-hypo { font-size: .72rem; font-weight: 650; color: var(--warn); background: var(--warn-soft); border-radius: 999px; padding: 0 7px; }
+.fc-pct { display: flex; align-items: center; gap: 6px; }
+.fc-pct input { max-width: 8rem; font-variant-numeric: tabular-nums; }
+.fc-pct span { color: var(--text-2); font-weight: 650; }
+.fc-timing-help { font-size: .86rem; color: var(--text-2); border-top: 1px solid var(--border); padding-top: var(--space-3); }
+.fc-help-list { margin: 0 0 var(--space-3); padding-left: 1.1rem; }
+.fc-help-list li { margin-bottom: 4px; }
+
+/* ------------------------------------------------------------- missing, assumptions */
+.fc-miss-group { margin: var(--space-2) 0 4px; font-size: .76rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-2); }
+.fc-miss-list { list-style: none; margin: 0 0 var(--space-2); padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.fc-miss-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-2) var(--space-3); font-size: .86rem; padding: 6px 0; border-top: 1px solid var(--border); }
+.fc-miss-list li:first-child { border-top: 0; }
+.fc-miss-list li > span { min-width: 0; overflow-wrap: anywhere; }
+.fc-miss-list .btn { white-space: nowrap; }
+@media (max-width: 599px) {
+  .fc-miss-list li { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .fc-miss-list .btn { justify-self: start; }
+}
+.fc-key-assumptions { margin: var(--space-4) 0 var(--space-2); padding-left: 1.1rem; font-size: .84rem; color: var(--text-2); display: flex; flex-direction: column; gap: 4px; }
+.fc-missing .notice-body { flex: 1 1 auto; }
+.fc-missing > .fine { margin: var(--space-3) 0 0; }
+.fc-assumptions { margin-top: var(--space-2); }
+.fc-assume-list { margin: 0; padding-left: 1.1rem; font-size: .84rem; color: var(--text-2); display: flex; flex-direction: column; gap: 6px; }
+
+/* ------------------------------------------------------------- goals */
+.fc-goal-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.fc-goal { padding: var(--space-3) 0; border-top: 1px solid var(--border); }
+.fc-goal:first-child { border-top: 0; padding-top: 0; }
+.fc-goal-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px var(--space-2); margin-bottom: var(--space-2); }
+.fc-goal-head h3 { font-size: .98rem; margin-right: auto; }
+.fc-goal-kv { font-size: .86rem; margin-bottom: var(--space-2); }
+.fc-goal .fine { margin-bottom: var(--space-2); }
+.fc-goal-fix { display: flex; justify-content: flex-end; }
+
+/* ------------------------------------------------------------- month by month */
+.fc-months { container-type: inline-size; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; margin-bottom: var(--space-3); }
+.fc-month-list { list-style: none; margin: 0; padding: 0; }
+.fc-month-list > li { border-top: 1px solid var(--border); }
+.fc-month-list > li:first-child { border-top: 0; }
+.fc-row {
+  display: grid;
+  grid-template-columns: minmax(10.5rem, 1.7fr) minmax(5.5rem, 1.05fr) repeat(8, minmax(0, 1fr));
+  gap: var(--space-2); align-items: start; padding: 8px 12px; font-size: .86rem;
+}
+.fc-row.has-balance { grid-template-columns: minmax(10.5rem, 1.7fr) minmax(5.5rem, 1.05fr) repeat(9, minmax(0, 1fr)); }
+.fc-row-head { background: var(--surface-2); border-bottom: 1px solid var(--border); font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--text-2); align-items: end; line-height: 1.25; }
+.fc-row-head .fc-c.num { white-space: normal; }
+.fc-c { min-width: 0; }
+.fc-c.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fc-l { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.fc-phone { display: none; }
+.fc-c-month { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.fc-c-month strong { white-space: nowrap; }
+.fc-flags { display: flex; flex-wrap: wrap; gap: 4px; width: 100%; padding-left: 18px; }
+.fc-c-pay { color: var(--text-2); font-size: .8rem; }
+.fc-pay-extra { font-weight: 750; color: var(--info); }
+.fc-c-net, .fc-c-cum, .fc-c-bal { font-weight: 700; }
+summary.fc-row { cursor: pointer; list-style: none; }
+summary.fc-row::-webkit-details-marker { display: none; }
+summary.fc-row:hover { background: var(--surface-2); }
+.fc-chev { display: inline-block; width: 12px; height: 12px; position: relative; flex: 0 0 12px; }
+.fc-chev::before { content: ""; position: absolute; left: 1px; top: 2px; width: 6px; height: 6px; border-right: 2px solid var(--text-3); border-bottom: 2px solid var(--text-3); transform: rotate(-45deg); transition: transform .15s; }
+.fc-month[open] .fc-chev::before { transform: rotate(45deg); top: 0; }
+.fc-month[open] > summary { background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.fc-month.is-negative > summary, .fc-month.is-below-zero > summary { box-shadow: inset 4px 0 0 var(--bad); }
+.fc-month.is-unknown > summary { box-shadow: inset 4px 0 0 var(--warn); }
+
+.fc-month-body { padding: var(--space-3) var(--space-4) var(--space-4); background: var(--surface); }
+.fc-mb-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); }
+.fc-mb-title { margin: 0 0 4px; font-size: .74rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-2); }
+.fc-mb-title:not(:first-child) { margin-top: var(--space-3); }
+.fc-mb-list { list-style: none; margin: 0; padding: 0; font-size: .86rem; }
+.fc-mb-list li { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-3); padding: 4px 0; border-top: 1px dashed var(--border); }
+.fc-mb-list li:first-child { border-top: 0; }
+.fc-mb-list li > span { min-width: 0; overflow-wrap: anywhere; }
+.fc-mb-list small { display: block; color: var(--text-3); }
+.fc-mb-list .num { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.fc-mb-total { border-top: 1px solid var(--border-strong) !important; }
+.fc-warn-list { list-style: none; margin: var(--space-3) 0 0; padding: 0; font-size: .84rem; color: var(--text-2); display: flex; flex-direction: column; gap: 4px; }
+.fc-month-body > .fine { margin: var(--space-3) 0 0; }
+.fc-full { margin-top: var(--space-3); }
+.fc-full .table-wrap { max-height: 480px; overflow: auto; }
+.fc-full-table { font-size: .82rem; }
+
+/* Narrow containers (phones, tablets, a narrow main column): each month becomes a small card. */
+@container (max-width: 860px) {
+  .fc-row-head { display: none; }
+  .fc-row, .fc-row.has-balance { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px var(--space-3); padding: 10px 12px; }
+  .fc-c-month { grid-column: 1 / -1; }
+  .fc-desk { display: none; }
+  .fc-phone { display: block; }
+  .fc-c.num { text-align: left; white-space: normal; }
+  .fc-l { position: static !important; width: auto; height: auto; margin: 0; overflow: visible; clip: auto; display: block; font-size: .72rem; font-weight: 650; color: var(--text-3); text-transform: uppercase; letter-spacing: .03em; }
+  .fc-n { font-size: .95rem; }
+  .fc-flags { padding-left: 18px; }
+  .fc-mb-grid { grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
+  .fc-month-body { padding: var(--space-3); }
+}

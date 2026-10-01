@@ -19,6 +19,12 @@
  * Unknown is not zero: null amounts are left out of totals and listed in `missing`. When any
  * take-home pay is unknown the income total and the remaining amount are null; the known part
  * and a lower bound are reported separately.
+ *
+ * Unknown never makes the budget look better. In household scope, when someone's take-home pay
+ * is known but their transfer to joint is not, their personal spending (allocation − personal
+ * bills − transfers) cannot be worked out. It is not dropped or replaced by an estimate (either
+ * would change the result just because a number is unknown): it is listed as missing and the
+ * remaining amount is null, with `remainingUnknownReason` saying why.
  */
 (function (root) {
   const E = root.BudgetEngine || (root.BudgetEngine = {});
@@ -39,6 +45,7 @@
   const isCents = v => E.money.isCents(v);
   const arr = v => (Array.isArray(v) ? v : []);
   const money = c => (c === null || c === undefined ? 'not entered' : E.money.format(c));
+  const plural = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
 
   function peopleOf(plan) {
     const list = arr(plan.people).filter(p => p && typeof p.id === 'string');
@@ -92,6 +99,24 @@
     return arr(plan.incomes).some(s => s && s.kind === 'contribution' && s.personId === personId);
   }
 
+  /**
+   * Schedule assumption for a contribution, worded in transfers rather than paychecks
+   * (BudgetEngine.schedule words every stream as pay). Covers the same cases schedule.count
+   * assumes: an unknown frequency, a frequency marked unknown, and actual timing without dates.
+   */
+  function transferAssumption(stream, c, timing) {
+    if (!c.assumption) return null;
+    const name = stream.label || stream.id || 'This transfer';
+    if (c.basis === 'assumed') return 'Transfer schedule not confirmed: assuming ' + plural(c.count, 'transfer') + ' a month for ' + name + '.';
+    const parts = [];
+    if (stream.frequencyStatus === 'unknown') parts.push('Transfer schedule not confirmed: assuming ' + stream.frequency + ' transfers for ' + name + '.');
+    if (timing === 'actual' && c.basis === 'typical') {
+      parts.push('No transfer ' + (stream.frequency === 'monthly' ? 'day of the month' : 'date') + ' entered for ' + name + ': counting a typical month of ' +
+        plural(c.count, 'transfer') + ' (' + stream.frequency + ') instead of actual transfer dates.');
+    }
+    return parts.length ? parts.join(' ') : c.assumption;
+  }
+
   // ------------------------------------------------------------------ income
 
   /**
@@ -102,9 +127,11 @@
     const lines = [];
     const notCounted = [];
     // personId -> per-person facts: known take-home, joint portion, allocation and contributions
-    const persons = new Map(people.map(p => [p.id, { netCents: 0, netKnown: true, jointCents: 0, allocationCents: 0, allocationKnown: true, hasPaycheck: false, contributionsCents: 0, contributionsKnown: true, hasContribution: false }]));
+    // (unknownContributionIds: contribution streams whose amount this month is unknown).
+    const newFacts = () => ({ netCents: 0, netKnown: true, jointCents: 0, allocationCents: 0, allocationKnown: true, hasPaycheck: false, contributionsCents: 0, contributionsKnown: true, hasContribution: false, unknownContributionIds: [] });
+    const persons = new Map(people.map(p => [p.id, newFacts()]));
     const personFacts = id => {
-      if (!persons.has(id)) persons.set(id, { netCents: 0, netKnown: true, jointCents: 0, allocationCents: 0, allocationKnown: true, hasPaycheck: false, contributionsCents: 0, contributionsKnown: true, hasContribution: false });
+      if (!persons.has(id)) persons.set(id, newFacts());
       return persons.get(id);
     };
     let incomeUnknown = false;
@@ -119,7 +146,8 @@
       const pid = stream.personId;
       const isPerson = FUNDING_PEOPLE.includes(pid) || persons.has(pid);
       const pname = nameOf(plan, pid);
-      const base = { id: stream.id, label, personId: pid ?? null, kind, count: c.count, basis: c.basis, dates: c.dates, assumption: c.assumption };
+      const assumption = kind === 'contribution' ? transferAssumption(stream, c, timing) : c.assumption;
+      const base = { id: stream.id, label, personId: pid ?? null, kind, count: c.count, basis: c.basis, dates: c.dates, assumption };
       // Outside its start/end window a stream pays nothing this month: a known $0, even if its amount is unknown.
       const inactive = c.count === 0;
       const amount = per => (inactive ? 0 : centsFor(per, c));
@@ -145,7 +173,7 @@
         const f = personFacts(pid);
         f.hasContribution = true;
         const cents = amount(joint !== null ? joint : net);
-        if (cents === null) f.contributionsKnown = false; else f.contributionsCents += cents;
+        if (cents === null) { f.contributionsKnown = false; f.unknownContributionIds.push(stream.id); } else f.contributionsCents += cents;
       }
 
       if (scope === 'joint') {
@@ -299,7 +327,8 @@
       const billsCents = E.money.sum(own.map(b => knownOrNull(b.monthlyCents)));
       const unknownBills = own.filter(b => knownOrNull(b.monthlyCents) === null).map(b => b.label || b.id);
       const contributionsCents = f && f.contributionsKnown ? f.contributionsCents : null;
-      const entry = { personId: pid, name, allocationCents: null, billsCents, contributionsCents, spendingCents: null, leftoverCents: null, shortfallCents: 0, source: 'missing', note: '' };
+      // unknownBecause: 'contribution' when the personal share is known but the transfer to joint is not.
+      const entry = { personId: pid, name, allocationCents: null, billsCents, contributionsCents, spendingCents: null, leftoverCents: null, shortfallCents: 0, source: 'missing', unknownBecause: null, note: '' };
 
       if (f && f.hasPaycheck && f.allocationKnown && contributionsCents !== null) {
         // The allocation pays personal bills and any transfer to joint first; the rest is
@@ -320,8 +349,18 @@
         if (scope === 'household' && estimate && knownOrNull(estimate.monthlyCents) !== null) {
           acc.assumptions.push(possessive(name) + ' personal spending is the personal share of pay left after personal bills (' + money(entry.spendingCents) + '); the separate personal-spending estimate is not added on top.');
         }
+      } else if (f && f.hasPaycheck && f.allocationKnown && contributionsCents === null) {
+        // The personal share of pay is known but not how much of it goes to joint, so what is left
+        // for personal spending is unknown. Leaving it out, or swapping in a personal-spending
+        // estimate, would change the result only because a number is unknown (the estimate is
+        // not used when the transfer is known), so it stays unknown and blocks the remaining amount.
+        entry.allocationCents = f.allocationCents;
+        entry.unknownBecause = 'contribution';
+        entry.note = 'Personal share of pay is known, but the transfer to joint is not, so personal spending cannot be worked out.';
+        if (scope === 'household') {
+          acc.missing.push({ id: 'personal:' + pid, label: possessive(name) + " personal spending can't be worked out while their transfer to joint is unknown", area: 'targets', streamIds: f.unknownContributionIds.slice() });
+        }
       } else {
-        if (f && f.hasPaycheck && f.allocationKnown && contributionsCents === null) entry.allocationCents = f.allocationCents;
         const estimate = arr(plan.personalSpending).find(p => p && p.personId === pid);
         if (estimate && knownOrNull(estimate.monthlyCents) !== null) {
           entry.spendingCents = estimate.monthlyCents;
@@ -360,7 +399,9 @@
    * @param {object} plan Plan
    * @param {{scope?:'joint'|'household', month?:string, timing?:'actual'|'conservative'|'average'}} [opts]
    * @returns {object} PlanSummary, plus income.lowerBoundCents / income.notCounted,
-   *   bills.excludedPersonal, personalSpendingCents, warnings and complete.
+   *   bills.excludedPersonal, personalSpendingCents, warnings, complete, and
+   *   remainingUnknownReason (null | 'income' | 'personal_spending') with remainingUnknownNote
+   *   (a sentence, or null) saying why remainingCents is null.
    */
   function monthly(plan, opts) {
     const { scope, month, timing: requested } = normalizeOptions(plan, opts);
@@ -402,7 +443,17 @@
       }
     }
     const outflowCents = spending.targetsCents + bills.totalCents + personalSpendingCents;
-    const remainingCents = income.totalCents === null ? null : income.totalCents - outflowCents - savings.totalCents;
+    // Why the remaining amount is unknown: income first, then personal spending that cannot be
+    // worked out (household scope only; personal spending is not part of the joint budget).
+    const blocked = scope === 'household' ? personal.filter(p => p.unknownBecause === 'contribution') : [];
+    const remainingUnknownReason = income.totalCents === null ? 'income' : (blocked.length ? 'personal_spending' : null);
+    const remainingCents = remainingUnknownReason ? null : income.totalCents - outflowCents - savings.totalCents;
+    let remainingUnknownNote = null;
+    if (remainingUnknownReason === 'income') remainingUnknownNote = 'Money left over cannot be worked out because some income is unknown.';
+    else if (remainingUnknownReason === 'personal_spending') {
+      remainingUnknownNote = 'Money left over cannot be worked out because ' + blocked.map(p => possessive(p.name) + " personal spending can't be worked out").join(' and ') +
+        ' while ' + (blocked.length === 1 ? 'their transfer' : 'their transfers') + ' to joint ' + (blocked.length === 1 ? 'is' : 'are') + ' unknown.';
+    }
 
     if (!plan.balances || !isCents(plan.balances.jointCashCents)) acc.missing.push({ id: 'jointCash', label: 'Joint cash balance not entered', area: 'balances' });
     for (const debt of arr(plan.debts)) {
@@ -425,6 +476,8 @@
       personalSpendingCents,
       outflowCents,
       remainingCents,
+      remainingUnknownReason,
+      remainingUnknownNote,
       missing: acc.missing,
       assumptions: [...new Set(acc.assumptions)],
       warnings: [...new Set(acc.warnings)],
@@ -441,6 +494,12 @@
   }
 
   function signed(c) { return E.money.format(c, { signed: true }); }
+
+  /** Why a summary's remaining amount is unknown, as a clause ("some income is unknown"). */
+  function unknownWhy(summary) {
+    if (summary.remainingUnknownReason !== 'personal_spending') return 'some income is unknown';
+    return summary.missing.filter(m => /^personal:/.test(m.id) && Array.isArray(m.streamIds)).map(m => m.label).join(' and ');
+  }
 
   function diffList(before, after, noun, fields, describe) {
     const lines = [];
@@ -533,7 +592,7 @@
 
     const scopeText = after.scope === 'joint' ? 'joint accounts' : 'whole household';
     if (remainingDeltaCents === null) {
-      lines.push('The effect on money left each month (' + scopeText + ') cannot be calculated because some income is unknown.');
+      lines.push('The effect on money left each month (' + scopeText + ') cannot be calculated because ' + unknownWhy(after.remainingCents === null ? after : before) + '.');
     } else {
       lines.push('Money left each month (' + scopeText + '): ' + E.money.format(before.remainingCents) + ' → ' + E.money.format(after.remainingCents) + ' (' + signed(remainingDeltaCents) + ').');
       if (annualDeltaCents !== null) lines.push((o.month ? 'Over the 12 months from ' + E.months.label(o.month) : 'Over a year (12 × the monthly change)') + ': ' + signed(annualDeltaCents) + '.');

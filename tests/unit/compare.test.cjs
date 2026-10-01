@@ -124,11 +124,88 @@ test('usual: computed partial months give a days-covered reason', () => {
 });
 
 test('usual: a covered month with no activity counts as $0', () => {
-  const r = usualFor([spend('2026-07', 30000, 'Dental'), spend('2026-09', 30000, 'Dental')], { month: '2026-09', window: 3 });
+  const r = usualFor([spend('2026-07', 30000, 'Dental'), spend('2026-08', 30000, 'Dental'), spend('2026-09', 60000, 'Dental')], { month: '2026-09', window: 3 });
   const d = cat(r, 'Dental');
-  assert.equal(d.averageCents, 10000);
-  assert.equal(d.monthsWithActivity, 1);
+  assert.equal(d.averageCents, 20000); // June counts as $0
+  assert.equal(d.monthsWithActivity, 2);
   assert.equal(d.signal, 'higher');
+  // With activity in only one of the three months, the average is still computed with $0 months.
+  const q = usualFor([spend('2026-07', 30000, 'Dental'), spend('2026-09', 30000, 'Dental')], { month: '2026-09', window: 3 });
+  assert.equal(cat(q, 'Dental').averageCents, 10000);
+  assert.equal(cat(q, 'Dental').monthsWithActivity, 1);
+});
+
+// ======================================================================= irregular categories
+
+/** Annual home insurance: $1,104 every March. */
+const annual = (...years) => years.map(y => spend(y + '-03', 110400, 'Home insurance'));
+
+test('usual: a category paid once in the baseline is irregular, not lower, in the months it is not paid', () => {
+  const r = usualFor(annual(2025, 2026).concat([spend('2026-09', 26000)]), { month: '2026-09', window: 6 });
+  const h = cat(r, 'Home insurance');
+  assert.equal(r.usableCount, 6);
+  assert.equal(h.actualCents, 0);
+  assert.equal(h.monthsWithActivity, 1);
+  assert.equal(h.averageCents, 18400);
+  assert.equal(h.signal, 'irregular');
+  assert.equal(h.diffCents, null);
+  assert.equal(h.pct, null);
+  assert.deepEqual(h.irregular, { month: '2026-03', cents: 110400 });
+  assert.equal(h.explanation, "Paid in only 1 of the last 6 full months (Mar 2026: $1,104), so a monthly average isn't meaningful. Sep 2026 ($0) is not marked higher or lower.");
+});
+
+test('usual: an annual payment is irregular, not higher, in the month it is paid', () => {
+  const r = usualFor(annual(2025, 2026), { month: '2026-03', window: 12 });
+  const h = cat(r, 'Home insurance');
+  assert.equal(h.actualCents, 110400);
+  assert.equal(h.signal, 'irregular');
+  assert.equal(h.explanation, "Paid in only 1 of the last 12 full months (Mar 2025: $1,104), so a monthly average isn't meaningful. Mar 2026 ($1,104) is not marked higher or lower.");
+});
+
+test('usual: a baseline with no activity at all is still "new", not irregular', () => {
+  const r = usualFor(annual(2025, 2026), { month: '2026-03', window: 6 });
+  const h = cat(r, 'Home insurance');
+  assert.equal(h.monthsWithActivity, 0);
+  assert.equal(h.signal, 'new');
+});
+
+test('usual: irregular needs at least 3 usable months; with fewer the usual rule applies', () => {
+  // June is partial, so only July and August are usable: one active month of two.
+  const r = usualFor([spend('2026-07', 30000, 'Clothing'), spend('2026-09', 100)], { month: '2026-09', window: 3 }, { cardStart: '2026-06-15' });
+  const c = cat(r, 'Clothing');
+  assert.equal(r.usableCount, 2);
+  assert.equal(c.signal, 'lower');
+  assert.equal(c.diffCents, -15000);
+});
+
+test('usual: irregular explanations list months left out of the baseline', () => {
+  const r = usualFor([spend('2026-04', 30000, 'Clothing'), spend('2026-09', 100)], { month: '2026-09', window: 6 }, { cardStart: '2026-03-20' });
+  const c = cat(r, 'Clothing');
+  assert.equal(r.usableCount, 5);
+  assert.equal(c.signal, 'irregular');
+  assert.equal(c.explanation, "Paid in only 1 of the last 5 full months (Apr 2026: $300), so a monthly average isn't meaningful. Sep 2026 ($0) is not marked higher or lower. Left out: Mar 2026 (only 12 of 31 days covered).");
+});
+
+test('usual: a partial selected month stays partial_month even for an irregular category', () => {
+  const r = usualFor(annual(2025, 2026).concat([spend('2026-09', 1000, 'Groceries', { day: 2 })]), { month: '2026-09', window: 6 }, { cardEnd: '2026-09-12' });
+  assert.equal(cat(r, 'Home insurance').signal, 'partial_month');
+});
+
+test('usual: two or more active baseline months use the usual rule', () => {
+  const r = usualFor([spend('2026-04', 30000, 'Clothing'), spend('2026-07', 30000, 'Clothing'), spend('2026-09', 100)], { month: '2026-09', window: 6 });
+  const c = cat(r, 'Clothing');
+  assert.equal(c.monthsWithActivity, 2);
+  assert.equal(c.signal, 'lower');
+});
+
+test('usual: on the sample data, annual home insurance is irregular in 6- and 12-month windows', () => {
+  const ds = L.normalizeDataset(require('../../fixtures/sample-data.json'));
+  const rows = effective(ds);
+  const s6 = cat(C.usual(rows, ds, { month: '2026-09', window: 6 }), 'Home insurance');
+  assert.equal(s6.signal, 'irregular');
+  assert.match(s6.explanation, /^Paid in only 1 of the last 6 full months \(Mar 2026: \$1,104\), so a monthly average isn't meaningful\./);
+  assert.equal(cat(C.usual(rows, ds, { month: '2026-03', window: 12 }), 'Home insurance').signal, 'irregular');
+  assert.equal(cat(C.usual(rows, ds, { month: '2026-08', window: 6 }), 'Home insurance').signal, 'irregular');
 });
 
 test('usual: a zero baseline is "new" with no percentage', () => {
@@ -157,6 +234,7 @@ test('usual: a negative (net refund) baseline is refund_baseline with no percent
   assert.equal(c.pct, null);
   assert.equal(c.diffCents, 3667);
   assert.match(c.explanation, /net refund of \$16\.67/);
+  assert.equal(c.irregular, null); // a single refund is not a payment, so not 'irregular'
 });
 
 test('usual: fewer usable months than minMonths is limited_history and never flagged', () => {
@@ -284,7 +362,8 @@ test('usual: seasonal with a covered but empty last-year month is new', () => {
 });
 
 test('usual: extra seasonal categories can be supplied', () => {
-  const txns = [spend('2025-12', 10000, 'Gifts & donations'), spend('2026-11', 1000, 'Gifts & donations'), spend('2026-12', 11000, 'Gifts & donations')];
+  const txns = [spend('2025-12', 10000, 'Gifts & donations'), spend('2026-09', 1000, 'Gifts & donations'), spend('2026-10', 1000, 'Gifts & donations'),
+    spend('2026-11', 1000, 'Gifts & donations'), spend('2026-12', 11000, 'Gifts & donations')];
   assert.equal(cat(usualFor(txns, { month: '2026-12' }), 'Gifts & donations').signal, 'higher');
   assert.equal(cat(usualFor(txns, { month: '2026-12', seasonalCategories: ['Gifts & donations'] }), 'Gifts & donations').signal, 'seasonal_typical');
 });

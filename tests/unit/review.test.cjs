@@ -304,6 +304,71 @@ test('spikes: excluded rows do not count and planning-excluded amounts are repor
   assert.deepEqual(s.ids, ['dent1', 'dent2']);
 });
 
+// ======================================================================= annual bills are not spikes
+
+const TWO_YEARS = [
+  { id: 'chk', label: 'Joint checking', type: 'checking', scope: 'joint', coverage: [{ start: '2025-01-01', end: '2026-09-30' }] },
+  { id: 'card', label: 'Joint card', type: 'credit_card', scope: 'joint', coverage: [{ start: '2025-01-01', end: '2026-09-30' }] }
+];
+
+/** Groceries every month plus `rows`, over Jan 2025 – Sep 2026. */
+function yearsDataset(rows, extra) {
+  const base = E.months.range('2025-01', '2026-09').map(m => tx(m + '-03', -30000, { category: 'Groceries' }));
+  return build(base.concat(rows), TWO_YEARS, extra);
+}
+const insurance = (date, cents = -110400) => tx(date, cents, { accountId: 'chk', description: 'SAMPLE MUTUAL HOME POLICY', category: 'Home insurance' });
+
+test('spikes: a bill paid once a year is not a spike, in either year', () => {
+  const ds = yearsDataset([insurance('2025-03-20'), insurance('2026-03-20')]);
+  const rows = L.applyEdits(ds, {});
+  assert.deepEqual(R.spikes(rows, ds).filter(s => s.category === 'Home insurance'), []);
+  // On request they are returned, marked annual, with the matching payment.
+  const all = R.spikes(rows, ds, { includeAnnual: true }).filter(s => s.category === 'Home insurance');
+  assert.deepEqual(all.map(s => [s.month, s.annual, s.annualMatch]), [
+    ['2026-03', true, { month: '2025-03', cents: 110400 }],
+    ['2025-03', true, { month: '2026-03', cents: 110400 }]
+  ]);
+});
+
+test('spikes: a payment 11 or 13 months earlier also marks an annual bill; 10 months does not', () => {
+  for (const [earlier, annual] of [['2025-02-20', true], ['2025-04-20', true], ['2025-05-20', false]]) {
+    const ds = yearsDataset([insurance(earlier), insurance('2026-03-20')]);
+    const s = R.spikes(L.applyEdits(ds, {}), ds, { includeAnnual: true }).find(x => x.month === '2026-03');
+    assert.equal(s.annual, annual, earlier);
+    assert.equal(R.spikes(L.applyEdits(ds, {}), ds).some(x => x.month === '2026-03'), !annual, earlier);
+  }
+});
+
+test('spikes: the year-apart payment must be at least half of this month', () => {
+  const half = yearsDataset([insurance('2025-03-20', -55200), insurance('2026-03-20')]);
+  assert.ok(!R.spikes(L.applyEdits(half, {}), half).some(s => s.month === '2026-03'));
+  const small = yearsDataset([insurance('2025-03-20', -55199), insurance('2026-03-20')]);
+  const [s] = R.spikes(L.applyEdits(small, {}), small).filter(x => x.month === '2026-03');
+  assert.equal(s.category, 'Home insurance');
+  assert.equal(s.annual, false);
+  assert.equal(s.annualMatch, null);
+});
+
+test('spikes: a year-apart payment in a month that is not fully covered does not count', () => {
+  const ds = yearsDataset([insurance('2025-03-20'), insurance('2026-03-20')], { coverageOverrides: { '2025-03': { status: 'partial', note: 'Statement missing' } } });
+  const out = R.spikes(L.applyEdits(ds, {}), ds);
+  assert.deepEqual(out.filter(s => s.category === 'Home insurance').map(s => s.month), ['2026-03']);
+});
+
+test('spikes: on the sample data, annual home insurance is not a spike but the August 2026 dental episode is', () => {
+  const ds = L.normalizeDataset(require('../../fixtures/sample-data.json'));
+  const rows = L.applyEdits(ds, {});
+  const out = R.spikes(rows, ds);
+  assert.ok(!out.some(s => s.category === 'Home insurance'), JSON.stringify(out.map(s => s.month + ' ' + s.category)));
+  const dental = out.find(s => s.category === 'Dental');
+  assert.equal(dental.month, '2026-08');
+  assert.equal(dental.annual, false);
+  const q = R.queues(ds, rows, {});
+  assert.equal(q.counts.spikes, out.length);
+  assert.ok(!q.spikes.some(s => s.category === 'Home insurance'));
+  assert.deepEqual(q.annualSpikes.map(s => s.month + ' ' + s.category), ['2026-03 Home insurance', '2025-03 Home insurance']);
+});
+
 // ======================================================================= reimbursement pairs
 
 test('reimbursementPairs: links work from either side and carry the edited status', () => {

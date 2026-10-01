@@ -600,6 +600,78 @@ test('household scope with unknown income: net and cumulative null, known part r
   assert.notEqual(j.summary.endCumulativeCents, null);
 });
 
+/**
+ * Two-earner plan with both take-home pays known: Alex as in simplePlan; Sam earns $3,000 net on
+ * the 1st, all paid into Sam's personal account, and transfers $1,325 into joint on the 1st and
+ * 15th. Household scope: Sam's personal spending = 3,000 − 2,650 = $350.
+ */
+function twoEarnerPlan() {
+  return simplePlan({
+    people: [{ id: 'p1', name: 'Alex' }, { id: 'p2', name: 'Sam' }],
+    incomes: [
+      simplePlan().incomes[0],
+      { id: 'sam-pay', label: 'Sam paycheck', personId: 'p2', kind: 'paycheck', netPerPaycheckCents: 300000, jointPerPaycheckCents: null, frequency: 'monthly', frequencyStatus: 'confirmed', monthlyDay: 1 },
+      { id: 'sam-contrib', label: 'Sam contribution', personId: 'p2', kind: 'contribution', netPerPaycheckCents: null, jointPerPaycheckCents: 132500, frequency: 'semimonthly', frequencyStatus: 'observed', semimonthlyDays: [1, 15] }
+    ]
+  });
+}
+
+/** Sam's transfer to joint becomes unknown May–Jul 2027 (parental leave). */
+const leave = () => scenario([{ id: 'leave', type: 'income_change', label: 'Sam parental leave', streamId: 'sam-contrib', startMonth: '2027-05', endMonth: '2027-07', jointPerPaycheckCents: null }]);
+
+test('household scope: an unknown transfer to joint makes net and cumulative unknown instead of looking better', () => {
+  const plan = deepFreeze(twoEarnerPlan());
+  const sc = deepFreeze(leave());
+  const base = run(plan, baseline(), { scope: 'household' });
+  const p = run(plan, sc, { scope: 'household' });
+  // Before the leave both agree.
+  for (const m of ['2026-10', '2026-11', '2027-04']) {
+    assert.equal(row(p, m).netCents, row(base, m).netCents);
+    assert.equal(row(p, m).cumulativeCents, row(base, m).cumulativeCents);
+  }
+  assert.equal(row(base, '2027-05').netCents, 800000 - 160000 - 60000 - 100000 - 35000);
+  for (const m of ['2027-05', '2027-06', '2027-07']) {
+    const r = row(p, m);
+    assert.equal(r.incomeCents, 800000, 'take-home pay is still known');
+    assert.equal(r.netCents, null);
+    assert.equal(r.unassignedCents, null);
+    assert.equal(r.netUnknownReason, 'personal_spending');
+  }
+  // Cumulative stays unknown from the first unknown month on, as for unknown income.
+  for (const r of p.rows.filter(x => x.month >= '2027-05')) assert.equal(r.cumulativeCents, null);
+  assert.equal(row(p, '2027-08').netCents, row(base, '2027-08').netCents);
+  assert.equal(row(p, '2027-08').netUnknownReason, null);
+  assert.equal(p.summary.endCumulativeCents, null);
+  assert.deepEqual(p.summary.unknownNetMonths, ['2027-05', '2027-06', '2027-07']);
+  assert.equal(p.complete, false);
+  const m = p.missing.find(x => /personal spending/.test(x.label));
+  assert.deepEqual(m, { label: "Sam parental leave: Sam's personal spending can't be worked out while their transfer to joint is unknown", source: 'event', id: 'leave' });
+  assert.equal(base.complete, true);
+  assert.equal(base.rows[0].netUnknownReason, null);
+});
+
+test('joint scope: an unknown transfer to joint makes joint income unknown (unchanged)', () => {
+  const plan = deepFreeze(twoEarnerPlan());
+  const p = run(plan, deepFreeze(leave()), { scope: 'joint' });
+  const r = row(p, '2027-06');
+  assert.equal(r.incomeCents, null);
+  assert.equal(r.incomeKnownCents, 400000);
+  assert.equal(r.netCents, null);
+  assert.equal(r.netUnknownReason, 'income');
+  assert.equal(row(p, '2026-12').incomeCents, 400000 + 265000);
+  assert.ok(p.missing.some(x => x.source === 'event' && x.id === 'leave' && /amount reaching the joint account is not entered/.test(x.label)));
+  assert.ok(!p.missing.some(x => /personal spending/.test(x.label)));
+});
+
+test('contribution streams with an unconfirmed schedule are described in transfers', () => {
+  const plan = twoEarnerPlan();
+  plan.incomes[2] = Object.assign({}, plan.incomes[2], { frequency: 'unknown', frequencyStatus: 'observed' });
+  const p = run(deepFreeze(plan), baseline());
+  assert.ok(p.assumptions.includes('Transfer schedule not confirmed: assuming 2 transfers a month for Sam contribution.'), p.assumptions.join('\n'));
+  assert.ok(!p.assumptions.some(a => /paychecks a month for Sam contribution/.test(a)));
+  assert.equal(p.rows[0].incomeLines.find(l => l.id === 'sam-contrib').assumption, 'Transfer schedule not confirmed: assuming 2 transfers a month for Sam contribution.');
+});
+
 test('unknown pay frequency appears as a readable assumption', () => {
   const plan = simplePlan();
   plan.incomes = [Object.assign({}, plan.incomes[0], { frequency: 'unknown', frequencyStatus: 'unknown', netPerPaycheckCents: 250000, jointPerPaycheckCents: 200000 })];

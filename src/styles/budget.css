@@ -1,1 +1,230 @@
-/* Budget view */
+/* Budget view. Classes are prefixed bud- (and bt- for the targets table); colours come from base.css tokens. */
+
+/* ------------------------------------------------------------- layout: editor + sticky summary */
+.bud-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: var(--space-5); align-items: start; }
+.bud-main { grid-column: 1; grid-row: 1; min-width: 0; }
+.bud-summary {
+  grid-column: 2; grid-row: 1;
+  position: sticky; top: calc(var(--topbar-h) + var(--space-4));
+  max-height: calc(100vh - var(--topbar-h) - var(--space-6));
+  overflow-y: auto; overscroll-behavior: contain;
+  padding: var(--space-4);
+}
+@media (max-width: 1099px) {
+  .bud-layout { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
+  .bud-main, .bud-summary { grid-column: auto; grid-row: auto; }
+  .bud-summary { position: static; max-height: none; overflow: visible; }
+}
+
+/* ------------------------------------------------------------- summary panel */
+.bud-summary-head { margin-bottom: var(--space-3); }
+.bud-summary-head .card-sub { font-size: .82rem; }
+.bud-sum-list { margin: 0; display: flex; flex-direction: column; }
+.bud-sum-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--space-3); align-items: baseline; padding: 8px 0; border-top: 1px solid var(--border); }
+.bud-sum-row:first-child { border-top: 0; padding-top: 0; }
+.bud-sum-row dt { font-weight: 650; font-size: .9rem; min-width: 0; }
+.bud-sum-row dt a { color: var(--text); text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 3px; }
+.bud-sum-row dt a:hover { color: var(--brand); text-decoration-color: currentColor; }
+.bud-sum-row dd { margin: 0; text-align: right; font-weight: 700; font-size: 1rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bud-sum-sub { grid-column: 1 / -1; margin: 2px 0 0; font-size: .76rem; line-height: 1.4; color: var(--text-3); }
+.bud-sum-total { margin-top: 2px; padding-top: 10px; border-top: 2px solid var(--border-strong); }
+.bud-sum-total dt { font-size: 1rem; }
+.bud-sum-total dd { font-size: 1.45rem; letter-spacing: -.02em; }
+
+@media (max-width: 599px) {
+  .bud-sum-list { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 var(--space-3); }
+  .bud-sum-row { grid-template-columns: minmax(0, 1fr); align-items: start; align-content: start; padding: 8px 0; }
+  .bud-sum-row:nth-child(2) { border-top: 0; padding-top: 0; }
+  .bud-sum-row dd { text-align: left; grid-row: 2; }
+  .bud-sum-row .bud-sum-sub { grid-row: 3; }
+  .bud-sum-total { grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) auto; }
+  .bud-sum-total dd { grid-row: auto; text-align: right; }
+  .bud-sum-total .bud-sum-sub { grid-row: auto; }
+}
+.bud-change { margin-top: var(--space-3); padding: var(--space-3); border-radius: var(--radius-sm); background: var(--info-soft); border-left: 3px solid var(--info); font-size: .86rem; }
+.bud-change h3 { font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; color: var(--info); margin-bottom: 4px; }
+.bud-change p { margin: 0 0 6px; }
+.bud-change-lines { margin: 0 0 var(--space-2); padding-left: 1.1rem; color: var(--text-2); font-size: .82rem; }
+.bud-change .btn { background: var(--surface); }
+
+.bud-summary .notice { margin-top: var(--space-3); font-size: .84rem; }
+.bud-sum-note { margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border); font-size: .86rem; color: var(--text-2); }
+.bud-sum-note h3 { font-size: .86rem; color: var(--text); margin-bottom: 4px; }
+.bud-sum-note p { margin: 0 0 4px; }
+.bud-sum-details { margin-top: var(--space-3); font-size: .84rem; border-top: 1px solid var(--border); padding-top: var(--space-3); }
+.bud-sum-details > summary { cursor: pointer; font-weight: 650; color: var(--brand); }
+.bud-sum-details[open] > summary { margin-bottom: var(--space-2); }
+.bud-missing-list, .bud-assume-list { margin: 0 0 var(--space-2); padding-left: 1.1rem; color: var(--text-2); }
+.bud-missing-list li, .bud-assume-list li { margin-bottom: 4px; }
+.bud-fix { font-weight: 650; white-space: nowrap; }
+.bud-complete { margin: var(--space-3) 0 0; }
+
+/* ------------------------------------------------------------- section tabs */
+.bud-tabs .section-nav { margin-bottom: var(--space-4); }
+.bud-tab-count { padding: 0 7px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); font-size: .72rem; font-weight: 700; line-height: 18px; }
+.bud-tabs a[aria-current] .bud-tab-count { background: var(--surface); color: var(--brand); }
+
+/* ------------------------------------------------------------- shared bits */
+.bud-grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+.bud-grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); margin-top: var(--space-4); }
+@media (max-width: 759px) {
+  .bud-grid-2, .bud-grid-3, .bud-sched { grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
+}
+.bud-meta { margin: 2px 0 var(--space-3); font-size: .82rem; color: var(--text-3); }
+.bud-note { display: block; margin-top: 4px; font-size: .82rem; color: var(--text-3); }
+.bud-counts { margin: var(--space-3) 0 0; font-size: .88rem; }
+.bud-k { display: block; font-size: .76rem; font-weight: 650; color: var(--text-3); }
+.bud-more { margin-top: var(--space-3); }
+.bud-more .disclosure-body > .field { margin-top: var(--space-3); }
+.bud-more > summary { font-size: .88rem; }
+.bud-remove-row { margin-top: var(--space-3); display: flex; justify-content: flex-end; }
+.bud-badges { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.bud-item-title { font-size: 1rem; }
+
+.bud-days, .bud-range { border: 0; margin: 0; padding: 0; min-width: 0; }
+.bud-days legend, .bud-range legend { font-size: .86rem; font-weight: 650; padding: 0; margin-bottom: 4px; }
+.bud-days-row { display: flex; align-items: center; gap: var(--space-2); }
+.bud-days-row select, .bud-days-row input { flex: 1 1 0; min-width: 0; }
+.bud-days-row > span { color: var(--text-3); font-size: .86rem; }
+
+.bud-add-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--space-3); align-items: start; }
+.bud-add-actions { display: flex; align-items: flex-end; min-height: 66px; }
+.bud-add-form + .fine { margin-top: var(--space-3); }
+
+/* ------------------------------------------------------------- spending targets */
+.bud-legend { margin-bottom: var(--space-3); }
+.bud-key { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 4px; }
+.bud-key-target { background: var(--surface); border: 2px solid var(--brand); }
+.bud-key-usual { background: var(--surface-3); border: 1px dashed var(--border-strong); margin-left: 4px; }
+
+.bud-fill { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); margin: 0 0 var(--space-4); padding: var(--space-3); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.bud-fill p { flex: 1 1 260px; margin: 0; }
+
+.bud-tt { table-layout: fixed; }
+.bud-tt thead th:nth-child(1) { width: 25%; }
+.bud-tt thead th:nth-child(2) { width: 23%; }
+.bud-tt thead th:nth-child(3) { width: 25%; }
+.bud-tt thead th:nth-child(4) { width: 27%; }
+.bud-tt thead th { white-space: normal; }
+.bud-tt th, .bud-tt td { padding: 8px 10px; }
+.bud-tt .bt-row > th { font-weight: 650; }
+.bud-tt .bt-row > th .badge { margin-top: 2px; }
+.bud-tt .bt-cat { overflow-wrap: anywhere; }
+.bud-tt .num { white-space: normal; }
+.bud-tt td a { font-weight: 650; }
+.bud-tt small { margin-top: 2px; font-size: .76rem; line-height: 1.35; color: var(--text-3); }
+.bud-tt small.tone-warn { color: var(--warn); }
+.bud-tt .bt-group th { padding: 6px 10px; background: var(--surface-3); font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text-2); }
+.bud-tt .bt-target .field { gap: 2px; }
+.bud-tt .bt-target input { min-height: 36px; padding-top: 6px; padding-bottom: 6px; font-weight: 650; border-color: var(--brand); }
+.bud-tt .is-unset .bt-target input { border-style: dashed; border-color: var(--border-strong); font-weight: 400; }
+.bt-note { margin: 2px 0 0; font-size: .74rem; }
+.bt-note:empty { display: none; }
+.bud-status { display: block; margin-top: 4px; }
+.bud-status .badge { white-space: normal; text-align: left; }
+/* History stays visually apart from the plan: a tinted, dashed-edged column. */
+.bud-tt .bt-usual { background: var(--surface-2); color: var(--text-2); border-left: 1px dashed var(--border-strong); }
+.bud-tt .bt-usual a { color: var(--text-2); }
+.bud-tt thead .bt-h-usual { border-left: 1px dashed var(--border-strong); }
+.bt-remove { display: block; margin-top: 4px; padding: 2px 0; border: 0; background: none; font: inherit; font-size: .76rem; font-weight: 600; color: var(--text-3); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.bt-remove:hover { color: var(--bad); }
+.bt-use { display: flex; width: max-content; max-width: 100%; margin: 4px 0 0 auto; white-space: normal; text-align: right; }
+.bt-label { display: none; }
+.bud-billcats { margin-top: var(--space-3); }
+
+.bud-unbudgeted { margin-top: var(--space-5); }
+.bud-unbudgeted h3 { margin-bottom: 4px; }
+.bud-unb-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; }
+.bud-unb-list li { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); padding: var(--space-2) 0; border-top: 1px solid var(--border); }
+.bud-unb-list small { display: block; }
+.bud-unb-list .btn { flex: 0 0 auto; }
+
+/* Phones: each target row becomes a small card; labels appear inside the cells. */
+@media (max-width: 699px) {
+  .bud-tt-wrap { overflow: visible; border: 0; background: transparent; }
+  .bud-tt, .bud-tt tbody, .bud-tt tfoot, .bud-tt tr, .bud-tt th, .bud-tt td { display: block; }
+  .bud-tt thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .bud-tt tr.bt-row, .bud-tt tfoot tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-2) var(--space-3); margin-bottom: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+  .bud-tt tr.bt-row > th, .bud-tt tfoot tr > th { grid-column: 1 / -1; padding: 0; border: 0; }
+  .bud-tt tr > td, .bud-tt td.num { padding: 0; border: 0; text-align: left; }
+  .bud-tt .bt-use { margin-left: 0; text-align: left; }
+  .bud-tt .bt-target { grid-column: 1 / -1; }
+  .bud-tt .bt-usual { padding: 6px 8px; border-left: 1px dashed var(--border-strong); border-radius: 6px; }
+  .bud-tt .bt-row > th { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+  .bud-tt .bt-row > th .bt-remove { margin: 0 0 0 auto; }
+  .bud-tt .bt-group th { margin: var(--space-3) 0 var(--space-2); padding: 0; background: none; border: 0; }
+  .bud-tt tfoot th, .bud-tt tfoot td { background: none; border: 0; }
+  .bud-tt tfoot tr { background: var(--surface-2); }
+  .bt-label { display: block; margin-bottom: 2px; font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-3); }
+}
+
+/* ------------------------------------------------------------- bills */
+.bud-bill-group + .bud-bill-group { margin-top: var(--space-5); }
+.bud-group-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px var(--space-3); }
+.bud-group-total { font-weight: 700; font-size: .92rem; }
+.bud-bill-group > .fine { margin: 2px 0 var(--space-3); }
+.bud-bill-list, .bud-goal-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.bud-bill, .bud-goal { padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); min-width: 0; }
+.bud-bill-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px var(--space-3); }
+.bud-bill-grid { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(170px, 1.2fr) minmax(0, 1.3fr); gap: var(--space-3); align-items: start; }
+.bud-bill-actual { padding-top: 22px; font-size: .86rem; min-width: 0; overflow-wrap: anywhere; }
+.bud-bill-actual a { font-weight: 700; }
+@media (max-width: 759px) {
+  .bud-bill-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .bud-bill-actual { grid-column: 1 / -1; padding-top: 0; }
+}
+@media (max-width: 479px) {
+  .bud-bill, .bud-goal { padding: var(--space-3); }
+  .bud-bill-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ------------------------------------------------------------- income */
+.bud-timing { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(0, 1.6fr); gap: var(--space-5); align-items: start; }
+.bud-timing-text { font-size: .88rem; color: var(--text-2); }
+@media (max-width: 759px) { .bud-timing { grid-template-columns: minmax(0, 1fr); gap: var(--space-3); } }
+.bud-contrib-note { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; margin: 0 0 var(--space-4); padding: var(--space-2) var(--space-3); background: var(--info-soft); border-radius: var(--radius-sm); font-size: .88rem; }
+.bud-alloc { margin: var(--space-3) 0 0; padding: var(--space-2) var(--space-3); background: var(--surface-2); border-radius: var(--radius-sm); font-size: .88rem; }
+.bud-freq { margin-top: var(--space-3); }
+.bud-freq > summary { font-size: .9rem; }
+.bud-freq-table { font-size: .82rem; }
+.bud-freq-table th, .bud-freq-table td { padding: 8px; }
+.bud-freq-table thead th { white-space: normal; }
+.bud-freq-table .badge { display: inline-flex; margin: 4px 0 0; }
+.bud-freq-table tbody th { min-width: 140px; }
+.bud-freq-table small strong { color: var(--text-2); }
+.bud-sched { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr); }
+@media (max-width: 759px) { .bud-sched { grid-template-columns: minmax(0, 1fr); } }
+.bud-freq-table tr.bud-freq-current > th, .bud-freq-table tr.bud-freq-current > td { background: var(--brand-soft); }
+.bud-people { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-5); }
+.bud-person h3 { margin-bottom: var(--space-2); }
+.bud-person .kv { margin-bottom: var(--space-2); }
+.bud-person > .fine { margin-bottom: var(--space-3); }
+@media (max-width: 759px) { .bud-people { grid-template-columns: minmax(0, 1fr); } }
+
+/* ------------------------------------------------------------- savings */
+.bud-goal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); gap: var(--space-3); }
+
+/* ------------------------------------------------------------- debts */
+.bud-facts { display: grid; grid-template-columns: minmax(130px, max-content) minmax(0, 1fr); gap: 6px var(--space-4); margin: 0 0 var(--space-3); font-size: .9rem; }
+.bud-facts dt { color: var(--text-2); }
+.bud-facts dd { margin: 0; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.bud-facts .badge { margin-left: 4px; }
+.bud-floor { margin: 0 0 var(--space-3); padding: var(--space-2) var(--space-3); background: var(--surface-2); border-radius: var(--radius-sm); font-size: .88rem; }
+.bud-tocheck { font-size: .86rem; color: var(--text-2); }
+.bud-tocheck h3 { font-size: .86rem; color: var(--text); margin-bottom: 4px; }
+.bud-tocheck ul { margin: 0; padding-left: 1.1rem; }
+.bud-promo, .bud-escrow { margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--border); }
+.bud-promo h3 { margin-bottom: var(--space-2); }
+.bud-promo-result { margin: var(--space-3) 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); font-size: .88rem; }
+.bud-promo-result p { margin: var(--space-2) 0 0; }
+.bud-promo-result ul { margin: 4px 0 0; padding-left: 1.1rem; }
+.bud-promo-result .kv { margin-top: var(--space-2); }
+.bud-escrow .field { max-width: 520px; }
+.bud-escrow p { margin: var(--space-2) 0 0; font-size: .86rem; }
+.bud-illus { margin-top: var(--space-3); }
+.bud-promo-add { margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border); }
+.bud-illus p { font-size: .88rem; }
+@media (max-width: 599px) {
+  .bud-facts { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .bud-facts dd { margin-bottom: var(--space-2); }
+}

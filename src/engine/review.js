@@ -21,7 +21,10 @@
   };
   const DUPLICATE_DAYS = 3;
   const DUPLICATE_SIMILARITY = 0.6;
-  const SPIKE_DEFAULTS = { minCents: 50000, multiple: 3, window: 6 };
+  const SPIKE_DEFAULTS = { minCents: 50000, multiple: 3, window: 6, includeAnnual: false };
+  /** A spike that recurs this many months before or after (at ANNUAL_SHARE of its size) is an annual bill. */
+  const ANNUAL_OFFSETS = [12, 11, 13, -12, -11, -13];
+  const ANNUAL_SHARE = 0.5;
 
   const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
   /** Options over defaults, ignoring undefined/null values (a blank setting keeps the default). */
@@ -179,7 +182,13 @@
    * Category-months well above their recent level: total >= minCents AND total >= multiple × the
    * average of up to `window` prior full months (at least 2 needed; a covered month without
    * activity counts as $0).
-   * @returns {{month, category, totalCents, usualCents, ids, priorMonths, planningExcludedCents}[]} newest first
+   *
+   * An annual bill is not an unusual spike: when the same category has a total of at least half
+   * of this month's total 12 months earlier (or 11/13, for payment dates that drift) in a fully
+   * covered month, the category-month is annual. Later months count too (11–13 months after), so
+   * the first payment of a yearly bill in the data is not listed either. Annual items are left out
+   * unless `includeAnnual` is set, in which case they are returned with `annual: true`.
+   * @returns {{month, category, totalCents, usualCents, ids, priorMonths, planningExcludedCents, annual: boolean, annualMatch: null|{month, cents}}[]} newest first
    */
   function spikes(txns, dataset, opts = {}) {
     const o = withDefaults(SPIKE_DEFAULTS, opts);
@@ -202,15 +211,27 @@
         if (!c.ids.includes(t.id)) c.ids.push(t.id);
       }
     }
+    const totalOf = (m, category) => (data.get(m) && data.get(m).get(category) ? data.get(m).get(category).cents : 0);
+    /** The fully covered month 11–13 months away holding at least ANNUAL_SHARE of `cents`, or null. */
+    const annualMatch = (month, category, cents) => {
+      for (const k of ANNUAL_OFFSETS) {
+        const m = E.months.add(month, -k);
+        const other = totalOf(m, category);
+        if (other > 0 && other >= cents * ANNUAL_SHARE && cov(m).status === 'full') return { month: m, cents: other };
+      }
+      return null;
+    };
     const out = [];
     for (const [month, cats] of data) {
       const prior = E.months.range(E.months.add(month, -o.window), E.months.add(month, -1)).filter(m => cov(m).status === 'full');
       if (prior.length < 2) continue;
       for (const [category, v] of cats) {
         if (v.cents < o.minCents) continue;
-        const sum = prior.reduce((s, m) => s + ((data.get(m) && data.get(m).get(category)) ? data.get(m).get(category).cents : 0), 0);
+        const sum = prior.reduce((s, m) => s + totalOf(m, category), 0);
         // Compare totals exactly (total × months >= multiple × sum) to avoid rounding the average.
         if (v.cents * prior.length < o.multiple * sum) continue;
+        const match = annualMatch(month, category, v.cents);
+        if (match && o.includeAnnual !== true) continue;
         out.push({
           month,
           category,
@@ -218,7 +239,9 @@
           usualCents: E.money.divide(sum, prior.length) || 0,
           ids: v.ids.slice(),
           priorMonths: prior,
-          planningExcludedCents: v.planningExcludedCents
+          planningExcludedCents: v.planningExcludedCents,
+          annual: match !== null,
+          annualMatch: match
         });
       }
     }
@@ -231,6 +254,8 @@
    * Everything the Review view lists, plus counts of items that still need a decision.
    * counts.transfers counts unpaired transfers whose other side should be in the data;
    * counts.reimbursements and counts.business count pending decisions.
+   * `spikes` leaves out annual bills; they are listed separately in `annualSpikes` (marked
+   * annual: true) and are not counted.
    */
   function queues(dataset, txns, ledgerEdits, opts = {}) {
     const edits = isObj(ledgerEdits) ? ledgerEdits : null;
@@ -282,7 +307,10 @@
     // Each item carries `status` (default 'pending') as well as the effective businessStatus.
     const business = live.filter(t => t.kind === 'spend' && (t.businessStatus != null || flagsOf(t).includes('business_candidate')))
       .map(t => Object.assign({}, t, { status: t.businessStatus || 'pending' }));
-    const spikeList = spikes(txns, dataset, opts.spikes);
+    // Annual bills are kept apart from spikes (not counted as items needing a decision).
+    const spikeAll = spikes(txns, dataset, Object.assign({}, isObj(opts.spikes) ? opts.spikes : {}, { includeAnnual: true }));
+    const spikeList = spikeAll.filter(s => !s.annual);
+    const annualSpikes = spikeAll.filter(s => s.annual);
 
     const coverageGaps = [];
     for (const m of E.ledger.months(dataset)) {
@@ -333,7 +361,7 @@
     return {
       uncertain, mixedRetail, duplicates,
       transfers: { paired, unpaired },
-      reimbursements, business, spikes: spikeList, coverageGaps, edited, orphanEdits, counts
+      reimbursements, business, spikes: spikeList, annualSpikes, coverageGaps, edited, orphanEdits, counts
     };
   }
 

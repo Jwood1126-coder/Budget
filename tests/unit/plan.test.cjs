@@ -48,6 +48,21 @@ function knownPayPlan() {
   return plan;
 }
 
+function deepFreeze(o) {
+  if (o && typeof o === 'object' && !Object.isFrozen(o)) {
+    Object.freeze(o);
+    for (const v of Object.values(o)) deepFreeze(v);
+  }
+  return o;
+}
+
+/** knownPayPlan() with Sam's transfer to joint unknown (e.g. during parental leave). */
+function unknownTransferPlan() {
+  const plan = knownPayPlan();
+  plan.incomes[2] = Object.assign({}, plan.incomes[2], { jointPerPaycheckCents: null });
+  return plan;
+}
+
 const line = (summary, id) => summary.income.lines.find(l => l.id === id);
 const billLine = (summary, id) => summary.bills.lines.find(l => l.id === id);
 const person = (summary, id) => summary.personal.find(p => p.personId === id);
@@ -228,6 +243,97 @@ test('household: personal-spending estimate is used when the allocation is unkno
   assert.equal(sam.source, 'estimate');
   assert.ok(!s.missing.some(m => m.id === 'personal:p2'));
   assert.equal(s.personalSpendingCents, 18550 + 40000);
+});
+
+test('household: an unknown transfer to joint makes that person\'s personal spending and the remaining amount unknown', () => {
+  const plan = deepFreeze(unknownTransferPlan());
+  const s = P.monthly(plan, { scope: 'household' });
+  // Take-home pay is still fully known.
+  assert.equal(s.income.totalCents, 748000);
+  const sam = person(s, 'p2');
+  assert.equal(sam.allocationCents, 300000);
+  assert.equal(sam.contributionsCents, null);
+  assert.equal(sam.spendingCents, null);
+  assert.equal(sam.leftoverCents, null);
+  assert.equal(sam.source, 'missing');
+  assert.equal(sam.unknownBecause, 'contribution');
+  const m = s.missing.find(x => x.id === 'personal:p2');
+  assert.ok(m, s.missing.map(x => x.label).join('\n'));
+  assert.equal(m.label, "Sam's personal spending can't be worked out while their transfer to joint is unknown");
+  assert.equal(m.area, 'targets');
+  assert.deepEqual(m.streamIds, ['sam-contrib']);
+  // Unknown never improves the result: nothing is left over to report.
+  assert.equal(s.remainingCents, null);
+  assert.equal(s.remainingUnknownReason, 'personal_spending');
+  assert.equal(s.complete, false);
+  // Alex's known personal share is unaffected.
+  assert.equal(person(s, 'p1').spendingCents, 18550);
+  assert.equal(s.personalSpendingCents, 18550);
+});
+
+test('household: with the transfer unknown, a personal-spending estimate is not swapped in for the allocation', () => {
+  const plan = unknownTransferPlan();
+  plan.personalSpending = [{ personId: 'p2', monthlyCents: 10000, note: 'guess' }];
+  deepFreeze(plan);
+  const s = P.monthly(plan, { scope: 'household' });
+  assert.equal(person(s, 'p2').spendingCents, null);
+  assert.equal(s.remainingCents, null);
+  assert.ok(s.missing.some(x => x.id === 'personal:p2'));
+  // The same plan with the transfer known counts the allocation, not the estimate.
+  const known = knownPayPlan();
+  known.personalSpending = [{ personId: 'p2', monthlyCents: 10000, note: 'guess' }];
+  assert.equal(person(P.monthly(known, { scope: 'household' }), 'p2').spendingCents, 35000);
+});
+
+test('household: a known remaining amount is reported with no unknown reason', () => {
+  const s = P.monthly(knownPayPlan(), { scope: 'household' });
+  assert.equal(s.remainingUnknownReason, null);
+  assert.equal(person(s, 'p2').unknownBecause, null);
+  assert.equal(P.monthly(basePlan(), { scope: 'household' }).remainingUnknownReason, 'income');
+});
+
+test('joint: an unknown transfer to joint still makes joint income unknown (behaviour unchanged)', () => {
+  const plan = deepFreeze(unknownTransferPlan());
+  const s = P.monthly(plan, { scope: 'joint' });
+  assert.equal(s.income.totalCents, null);
+  assert.equal(s.income.knownCents, 376000);
+  assert.equal(line(s, 'sam-contrib').cents, null);
+  assert.ok(s.missing.some(m => m.id === 'sam-contrib' && m.area === 'income' && /amount reaching the joint account is not entered/.test(m.label)));
+  assert.equal(s.remainingCents, null);
+  assert.equal(s.remainingUnknownReason, 'income');
+  // Personal spending is not part of the joint budget, so it is not listed as missing there.
+  assert.ok(!s.missing.some(m => m.id === 'personal:p2'));
+  assert.equal(s.personalSpendingCents, 0);
+});
+
+test('whatChanged: an unknown transfer to joint gives null deltas and says why', () => {
+  const r = P.whatChanged(knownPayPlan(), unknownTransferPlan(), { scope: 'household' });
+  assert.equal(r.remainingDeltaCents, null);
+  assert.equal(r.annualDeltaCents, null);
+  assert.ok(r.lines.some(l => /cannot be calculated because Sam's personal spending can't be worked out while their transfer to joint is unknown/.test(l)), r.lines.join('\n'));
+});
+
+test('contribution streams describe their schedule assumption in transfers, not paychecks', () => {
+  const plan = knownPayPlan();
+  plan.incomes[2] = Object.assign({}, plan.incomes[2], { frequency: 'unknown', frequencyStatus: 'observed', assumedPerMonthIfUnknown: 2 });
+  deepFreeze(plan);
+  for (const scope of ['joint', 'household']) {
+    const s = P.monthly(plan, { scope });
+    const l = line(s, 'sam-contrib');
+    if (scope === 'joint') {
+      assert.equal(l.assumption, 'Transfer schedule not confirmed: assuming 2 transfers a month for Sam contribution.');
+      assert.ok(s.assumptions.includes(l.assumption), s.assumptions.join('\n'));
+    }
+    assert.ok(!s.assumptions.some(a => /paychecks? a month for Sam contribution/.test(a)), s.assumptions.join('\n'));
+  }
+  // A known frequency marked unknown, and actual timing with no transfer dates.
+  const q = knownPayPlan();
+  q.incomes[2] = Object.assign({}, q.incomes[2], { frequency: 'weekly', frequencyStatus: 'unknown', anchorDate: null });
+  const a = line(P.monthly(q, { scope: 'joint', month: '2026-10', timing: 'actual' }), 'sam-contrib').assumption;
+  assert.equal(a, 'Transfer schedule not confirmed: assuming weekly transfers for Sam contribution. No transfer date entered for Sam contribution: counting a typical month of 4 transfers (weekly) instead of actual transfer dates.');
+  // Paychecks keep their wording.
+  const pay = basePlan();
+  assert.equal(line(P.monthly(pay, { scope: 'household' }), 'sam-pay').assumption, 'Pay frequency not confirmed: assuming 2 paychecks a month for Sam paycheck.');
 });
 
 // ------------------------------------------------------------------ missing amounts, labels
