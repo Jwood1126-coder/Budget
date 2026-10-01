@@ -1,54 +1,117 @@
-# Household budget source demonstration
+# Household budget workspace
 
-A dependency-free static household-budget app, exported as a fresh source snapshot with entirely invented data. Person A and Person B, merchants, income inputs, debt references, dates, and all fixture records are fictional. No private records, browser scenarios, credentials, deployment metadata, production build, or Git history are included.
+A local-first budgeting workspace for a two-person household. It shows where money went, what you can afford, and how today's decisions play out over the coming months and years.
+It is a single self-contained HTML file. It runs in your browser with no server, no bank connection, no tracking and no network requests (a Content Security Policy blocks them).
 
-This is a code handoff, not a financial recommendation or a finished UX redesign. See [SOURCE_HANDOFF.md](SOURCE_HANDOFF.md) for the code map, behavior, and limitations.
+> **This repository is public.** Only the fictional sample household ("Alex & Sam") belongs here. Your exports, household profile, rules and private builds live in the git-ignored `private/` folder. A privacy check blocks commits that contain them (see [Keeping private data private](#keeping-private-data-private)).
 
-## Run the sample
+## Quick start with the fictional sample
 
-Requires Python 3 and a modern browser. Node.js is only required for tests. No package install or remote asset is needed.
-
-```sh
-python3 assemble.py --sample
-# Open dist/index.html directly, or use a loopback-only local server:
-python3 -m http.server 8000 --bind 127.0.0.1 --directory dist
-```
-
-The browser app has five sections: Overview, Spending, Build your plan, Future & savings, and Review & next steps. Start in **Build your plan** to edit the fictitious take-home amounts and choose pay frequencies. Blank values remain unknown rather than silently becoming a complete plan.
-
-## Test
+Requires Node.js 18 or newer and a current browser. There is nothing to install.
 
 ```sh
-python3 build_sample.py
-python3 assemble.py --sample
-python3 validate.py
-node --check math.js
-node --check app.js
-node test-math.cjs
-node test-runtime.cjs
+node tools/build.cjs --sample
+# then open dist/index.html in your browser (double-click it, or drag it into a window)
 ```
 
-The sample generator is deterministic and never reads private input files. Validation reconciles every monthly and baseline total. The math suite has 48 checks. The simulated DOM suite has 12 workflow checks; it is not a real-browser, visual-layout, accessibility, or cross-device test.
+## Using your own data
 
-The delivered export intentionally contains no `dist/`. Build it locally when needed. Generated HTML must stay out of the repository even when it currently contains only the sample.
+### 1. Import your bank and card exports (command line, recommended)
 
-## Private-input workflow
+1. Download CSV exports for each account: joint checking, savings, credit cards, and personal accounts if you want them. Cover whole months, and note the date range you requested; that range is the file's *coverage*.
+2. Put the files in `private/raw/`.
+3. Run `node tools/import.cjs`. The first run writes `private/import.example.json`. Copy it to `private/import.json` and fill in one entry per account and one per file, including `coverageStart`/`coverageEnd`.
+4. Optional: add household rules in `private/rules.json`, such as your utilities, employer, store-card payments or a partner's transfer wording. The format is in `fixtures/sample-rules.json` and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ("Rules format").
+5. Run `node tools/import.cjs` again. It writes `private/budget-data.json` and a readable `private/import-report.md`. The report covers rows read and skipped (with reasons), duplicates removed from overlapping exports, coverage by account and month, spending per month, and items to review.
+6. To check a total against one you already have, run `node tools/import.cjs --period 2026-07-01..2026-09-30`. It prints that period's breakdown: purchases, refunds, card payments and transfers that were excluded, debt payments, and pending reimbursement or business candidates. The app's **Review → Reconcile** does the same on screen.
 
-1. Keep this source repository separate from private statements, account exports, screenshots, and saved financial plans
-2. Create an ignored `data/budget-data.json` locally, using `data/sample-data.json` as the schema reference. Replace all fixture transactions, source labels, monthly totals, baseline summaries, evidence text, dates, and recurring records consistently. Do not simply mix private records into the sample
-3. Run `python3 assemble.py` to select that local private file; without it, assembly falls back to the public sample. `--sample` always forces the invented fixture
-4. Open the generated file locally. Replace fictitious planning defaults in the UI and confirm dates, pay frequency, debt payments, and available cash. The source's sample debt inventory is an illustration, not a private balance import
-5. Treat `dist/index.html`, browser local storage, printed output, and every “Download a copy” file as sensitive. They contain included records and/or scenario values. Do not upload them or commit them
-6. Before any source push, review the entire staged diff and file list. `.gitignore` is an accident-prevention aid; it does not erase already tracked files or make a build safe to publish
+The importer recognises common US export layouts: signed amount, debit/credit columns, and card exports with transaction and posted dates. It infers card sign conventions, skips pending rows, and de-duplicates overlapping files without dropping genuine same-day repeats. It never infers what was inside an Amazon, Costco or Target order from the merchant name. Bank categories are kept alongside the household categories.
 
-There is no raw bank-CSV importer, account connection, balance synchronization, authentication, access control, or encryption. The JSON file must already use the normalized schema. The provided validation and runtime tests intentionally test only the sample; they are not a private-data audit.
+### 2. Describe your household
 
-The browser stores edits locally under a key scoped to the build's embedded copy ID. Downloaded copies receive a fresh ID and carry the current scenario. Private local builds currently share the `local-private` copy ID, so reset local changes or use an isolated browser profile when switching households or private datasets. Reset affects only that browser's scenario and does not erase downloaded files, browser backups, or the embedded dataset.
+Copy `fixtures/sample-profile.json` to `private/household-profile.json` and edit it: names, income streams, bills, debts, savings goals and starting scenarios. Leave anything you don't know as `null`. Unknown values stay visibly unknown in the app and are never treated as $0.
 
-## Sharing and repository hygiene
+### 3. Build your private copy
 
-Only source, documentation, tests, and the invented fixture belong in version control. This repository was initialized from a clean source export; no production Git history was copied. Do not copy an existing private repository's `.git`, `.openai`, `.env`, `dist`, statement files, or local scenario into it.
+```sh
+node tools/build.cjs          # uses private/ when present; prints a PRIVATE BUILD warning
+```
 
-The app performs no fetches and loads no remote libraries, fonts, trackers, or images. Its favicon is inline SVG. A supporting browser may expose the optional `document.modelContext` tools to inspect or update the current local scenario; that integration is not an account connection or an automatic sync service.
+Open `dist/index.html`. It contains your transactions and profile, so keep it on your own devices and never commit or upload it.
 
-No license is assigned by this handoff. The repository owner should choose any license before wider distribution.
+**Alternative without the command line:** open any build, go to **Data & privacy** and load CSV exports, a prepared `budget-data.json`, or a profile JSON. Nothing is uploaded; the files are read and stored in that browser only.
+
+### Upgrading from the first version
+
+- A `data/budget-data.json` in the earlier format still works. The build uses it when `private/budget-data.json` does not exist, and it is converted on load.
+- A budget saved in the browser by the earlier version is migrated automatically the first time you open the new private build in the same browser. Every saved value is either carried over or listed in **Data & privacy → Upgrade notes**. The earlier entry is left untouched, and you can download a pre-upgrade backup.
+- HTML copies downloaded from the earlier version can be imported in **Data & privacy → Import a workbook**.
+
+## Finding your way around
+
+The sidebar on computers and the bottom tab bar on phones hold five views. **Data & privacy** sits in the top bar on phones. Every view and every drilldown level has its own address, so the browser's Back and Forward buttons, bookmarks and reloads all work.
+
+| View | What it answers |
+| --- | --- |
+| **Overview** | What came in, what went out and what remains, for a typical planned month next to the latest complete month of actual data. A switch flips between **joint accounts** (the shared accounts in your data) and the **whole household** (adds full take-home pay and personally paid bills from your budget, and says what is unknown). Also lists the decisions that need attention and the next 12 months at a glance. |
+| **Spending** | Drill down month → category → merchant → transaction, with breadcrumbs, search (including by amount) and filters. Each category shows this month, its usual monthly average over the previous 3, 6 or 12 *full* months (never including the month itself), and the dollar and percentage difference with a plain-language explanation. Every total links to the transactions that make it up. |
+| **Budget** | Income (including the effect of an unconfirmed pay frequency), bills and debt payments, spending targets next to your usual history, savings goals and debts. A summary shows planned against actual and what each change does to what remains. |
+| **Forecast** | Named scenarios built from dated changes, compared side by side over 1–5 years: home repairs, a trip, baby costs, childcare, parental leave, savings goals, a debt paid off. A month-by-month table counts actual paydays (biweekly pay has two three-paycheck months a year), and shows the negative months, unfunded goals and missing costs. Scenarios never change your history or your budget. |
+| **Review** | Uncertain categories, mixed-retailer purchases (with optional splits), possible duplicates, unmatched transfers, reimbursement and business candidates, unusual spikes, account coverage, a corrections log, and reconciliation against a reference total. Every correction needs a reason, keeps the bank's original category, and can be undone or reverted. |
+| **Data & privacy** | Load files, export or import a workbook, export corrected transactions, upgrade notes, reset, and an explanation of where your data is stored. |
+
+## How the numbers work
+
+- **Counted once.** Spending is purchases and bills net of refunds. Paying a credit card in full, moving money between your own accounts and saving are never spending. A partner's transfer into joint is joint income, but in the whole-household view it is not extra income on top of their pay. Debt payments for purchases that are not in your data, such as a store-card financing payment, are shown separately.
+- **Unknown is not zero.** Blank amounts are listed as missing and left out of totals, never treated as $0. When income is unknown, "what remains" says so instead of showing a number.
+- **Usual spending is history, not a target.** Averages use only months with full coverage from every spending account. Partial months are excluded rather than counted as $0. A month with no activity in a category counts as $0, and a zero or refund-heavy baseline gives no percentage. A category is marked higher or lower only when it differs by at least $100 *and* 25%. Heating and cooling are compared with the same month last year. Once-a-year bills are labelled irregular instead of being flagged every month.
+- **Unusual one-offs stay in actual spending.** Review lets you leave a spike, such as a dental episode, out of the *planning baseline* used to suggest targets. Actual totals never change.
+- **Reimbursement and business candidates are counted until you decide.** Confirming a reimbursement removes the charge and the matching deposit together. A partial repayment removes only the repaid part.
+- **Pay timing.** The Budget shows a typical month (two biweekly checks) or the annual average. The forecast counts actual paydays when a pay date is known. An unconfirmed frequency is shown as a labelled assumption, with what each possible frequency would mean.
+- **Debts.** Balances, rates and terms are shown as entered, with their status (approximate, as displayed, confirmed). No payoff date is calculated. "At least N payments" is a 0%-interest floor. Rate-based illustrations appear only when you enter a rate, and are labelled illustrative. A promotional-financing check needs the promotional balance and end month before it says anything about the payment.
+- **Forecasts start from your budget.** The cash balance is only used if you enter one, and it applies from the month after its date. Investment return is 0% unless you set a hypothetical rate.
+
+The full rules, data formats and engine APIs are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Saving and sharing
+
+- Changes save automatically **in this browser on this device** (its local storage). They are not shared between partners or devices, private windows may not keep them, and clearing browser data erases them.
+- To share or back up, use **Data & privacy → Export workbook**. The JSON file holds the plan, scenarios, corrections and references, but not transactions. Import it on the other device. Keep it private.
+- Truly shared household storage would need a small hosted service with logins and backups, or an end-to-end encrypted file in a cloud folder you already use. Both involve a hosting or cost decision, so neither is set up. The Data & privacy view lists the trade-offs.
+
+## Keeping private data private
+
+- `private/`, `dist/`, `data/budget-data.json`, bank exports (`*.csv`, `*.ofx`, `*.qfx`, `*.pdf`, …) and workbook exports are git-ignored.
+- `node tools/check-privacy.cjs` scans tracked and unignored files for forbidden paths, email addresses, account-number patterns and the terms in your own `private/denylist.txt` (names, employers, exact amounts). Enable it as a pre-commit hook once per clone: `git config core.hooksPath .githooks`.
+- Private builds and downloads contain financial data: don't email, upload or publish them.
+
+## Tests
+
+```sh
+npm test                                    # unit tests for the engine, importer and tools (node:test)
+node tools/build.cjs --sample && node tests/browser/run.cjs   # real-browser checks (needs Playwright)
+node tools/check-privacy.cjs                # privacy scan
+```
+
+The browser checks run in Chromium through Playwright at 1366px and 390px widths, against the sample build. If Playwright is missing: `npm install --no-save playwright && npx playwright install chromium`.
+
+## Project layout
+
+```
+src/engine/     pure calculation modules (ledger, comparisons, review queues, importer, pay schedules, plan, debts, forecast, saved state)
+src/ui/         hash router, components, shared helpers, one file per view, app bootstrap
+src/styles/     design tokens (light and dark) and per-view styles
+tools/          build, import, sample generator, privacy check
+fixtures/       the fictional sample: raw CSV exports, rules, profile and the imported dataset
+tests/          unit tests (tests/unit) and Playwright browser checks (tests/browser)
+docs/           architecture, data formats and module contracts
+private/        your data (git-ignored)
+```
+
+## Limitations
+
+- No live bank connection and no balance syncing. Balances come only from what you type in.
+- No tax, retirement or investment modelling, and no interest accrual beyond labelled illustrations.
+- Holidays are not modelled when counting paydays.
+- A closed account keeps later months marked partial until its coverage is edited.
+- Saved changes live in one browser; sharing is manual through workbook files.
