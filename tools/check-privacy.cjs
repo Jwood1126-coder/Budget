@@ -7,7 +7,8 @@
  *   node tools/check-privacy.cjs --staged  check only files staged for the next commit (pre-commit hook)
  *
  * Checks:
- *   1. Forbidden paths: private/, dist/, data/budget-data.json, bank exports outside fixtures/sample-raw/.
+ *   1. Forbidden paths: private/, dist/, data/budget-data.json, bank exports outside fixtures/sample-raw/,
+ *      and images (screenshots can show private figures that a text scan cannot check).
  *   2. Terms listed in private/denylist.txt (one per line, case-insensitive, '#' comments).
  *      Put names, employers, exact amounts, street/town names and account fragments there.
  *      The denylist itself is private and never committed.
@@ -47,6 +48,7 @@ const FORBIDDEN_PATH = [
   { re: /^data\/budget-data\.json$/, why: 'legacy private dataset' },
   { re: /\.(csv|ofx|qfx|qbo|xlsx?|pdf)$/i, why: 'bank/statement export', allow: /^fixtures\/sample-raw\// },
   { re: /(^|\/)\.env/, why: 'environment/credential file' },
+  { re: /\.(png|jpe?g|webp|heic|gif|bmp)$/i, why: 'image (screenshots can show private figures that no text scan can check)' },
 ];
 const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 const SAFE_EMAIL = /@(example\.(com|org|net)|[a-z0-9-]+\.test|anthropic\.com)$/i;

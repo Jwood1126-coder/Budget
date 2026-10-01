@@ -39,6 +39,14 @@ Household-budget*.html
 *.gz
 !/fixtures/sample-raw/*.csv
 
+# Screenshots can show private figures: never commit them
+/shots/
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.heic
+
 # Tooling noise
 node_modules/
 test-results/
