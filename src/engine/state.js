@@ -677,9 +677,14 @@
     return plan;
   }
 
-  function defaultAssumptions(plan) {
-    const timing = plan && plan.settings ? plan.settings.incomeTiming : 'conservative';
-    return { incomeTiming: timing, annualReturnPct: 0, costGrowthPct: 0, incomeGrowthPct: 0 };
+  /**
+   * Forecast scenarios count actual paydays by default (so biweekly pay shows its two
+   * three-paycheck months), independent of plan.settings.incomeTiming, which only controls the
+   * Budget's "typical month" figures. Every scenario starts with the same timing, so compared
+   * scenarios stay like-for-like. Return and growth rates start at 0.
+   */
+  function defaultAssumptions() {
+    return { incomeTiming: 'actual', annualReturnPct: 0, costGrowthPct: 0, incomeGrowthPct: 0 };
   }
 
   /**
@@ -1651,6 +1656,8 @@
       }
 
       const assumptions = defaultAssumptions(plan);
+      // The earlier forecast counted pay with the budget's income basis; keep that for this scenario.
+      if (plan && plan.settings && ['conservative', 'average'].includes(plan.settings.incomeTiming)) assumptions.incomeTiming = plan.settings.incomeTiming;
       for (const [key, target] of [['incomeGrowth', 'incomeGrowthPct'], ['expenseGrowth', 'costGrowthPct'], ['cashYield', 'annualReturnPct']]) {
         seen.add(key);
         const v = fc[key];

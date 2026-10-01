@@ -386,6 +386,12 @@
     const lastMonth = monthsList[monthsList.length - 1];
 
     const startBalance = plan.balances && isCents(plan.balances.jointCashCents) ? plan.balances.jointCashCents : null;
+    // The balance already includes everything up to its date, so it applies from the month that
+    // follows that date (e.g. Sep 30 -> October). Earlier forecast months get no balance rather
+    // than counting those months twice. Without a date it is today's balance (the first month).
+    const balanceAsOf = plan.balances && E.dates.isDate(plan.balances.asOf) ? plan.balances.asOf : null;
+    const balanceOpenMonth = balanceAsOf ? E.months.of(E.dates.addDays(balanceAsOf, 1)) : null;
+    let runningBalance = startBalance;
     const streamAssumptions = new Set();
     const scopeNotes = new Set();
     const rows = [];
@@ -532,7 +538,12 @@
         returnCents = prevBalance === null ? null : (prevBalance > 0 ? E.money.divide(prevBalance * cfg.returnPct, 1200) : 0);
       }
       const cumulativeCents = prevCumulative === null || netCents === null ? null : prevCumulative + netCents + (returnCents || 0);
-      const balanceCents = startBalance === null || cumulativeCents === null ? null : startBalance + cumulativeCents;
+      let balanceCents = null;
+      const balanceApplies = startBalance !== null && (balanceOpenMonth === null || month >= balanceOpenMonth);
+      if (balanceApplies && runningBalance !== null) {
+        runningBalance = netCents === null ? null : runningBalance + netCents + (returnCents || 0);
+        balanceCents = runningBalance;
+      }
       prevCumulative = cumulativeCents;
       prevBalance = balanceCents;
 
@@ -644,6 +655,11 @@
     } else {
       const asOf = plan.balances && E.dates.isDate(plan.balances.asOf) ? ' as of ' + E.dates.label(plan.balances.asOf) : '';
       out.push('Starting joint cash balance: ' + money(startBalance) + asOf + '.');
+      if (asOf) {
+        const open = E.months.of(E.dates.addDays(plan.balances.asOf, 1));
+        if (open > cfg.startMonth) out.push('The balance already includes everything up to ' + E.dates.label(plan.balances.asOf) + ', so balances start in ' + E.months.label(open) + '; earlier months show the change in cash only.');
+        else if (open < cfg.startMonth) out.push('The balance is dated ' + E.dates.label(plan.balances.asOf) + ', before the forecast starts; money in or out between then and ' + E.months.label(cfg.startMonth) + ' is not reflected.');
+      }
       if (cfg.scope === 'household') out.push('The balance starts from joint cash only; money already in personal accounts is not included.');
     }
 

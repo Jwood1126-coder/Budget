@@ -14,7 +14,9 @@
  *     usable baseline months and activity in exactly one of them, a payment (an annual bill such
  *     as home insurance, an occasional purchase), a monthly average is not meaningful. Such a
  *     category is signalled 'irregular' (never 'higher'/'lower'; diffCents and pct are null) and
- *     the explanation cites the one month and amount. A baseline with no activity stays 'new'.
+ *     the explanation cites the one month and amount. This applies only when the selected month
+ *     is $0 or close to that single payment (within the threshold rule); a much larger month is
+ *     judged against the average as usual. A baseline with no activity stays 'new'.
  *     A partial selected month is still 'partial_month'; seasonal categories keep their own rule.
  *   - Every result carries a plain-language explanation that cites the numbers used.
  *
@@ -92,17 +94,27 @@
     return r === null ? null : r || 0; // avoid -0
   }
 
+  /**
+   * Which accounts leave the month incomplete, e.g. "Joint card has 0 of 30 days covered".
+   * Naming the account avoids implying there is no data at all when only one export is missing.
+   */
+  function missingAccounts(c) {
+    const gaps = (c.accounts || []).filter(a => a.expected !== false && a.coveredDays < a.totalDays);
+    if (!gaps.length) return c.coveredDays + ' of ' + c.totalDays + ' days covered';
+    return gaps.map(a => (a.label || a.accountId) + ' has ' + a.coveredDays + ' of ' + a.totalDays + ' days covered').join('; ');
+  }
+
   /** Why a baseline month cannot be used, as a short sentence fragment. */
   function coverageReason(c) {
     if (c.overridden) return 'Marked ' + c.status + (c.note ? ' (' + stripDot(c.note) + ')' : '');
     if (c.status === 'none') return 'No account export covers it';
-    return 'Only ' + c.coveredDays + ' of ' + c.totalDays + ' days covered';
+    return 'Partial: ' + missingAccounts(c);
   }
 
   function partialText(c, month) {
     if (c.overridden) return label(month) + ' coverage is marked ' + c.status + (c.note ? ' (' + stripDot(c.note) + ')' : '') + '; not compared.';
     if (c.status === 'none') return 'No account export covers ' + label(month) + '; not compared.';
-    return 'Only ' + c.coveredDays + ' of ' + c.totalDays + ' days covered; not compared.';
+    return 'Only part of ' + label(month) + ' is covered (' + missingAccounts(c) + '); not compared.';
   }
 
   /**
@@ -277,7 +289,10 @@
       pct = averageCents > 0 ? percent(diffCents, averageCents) : null;
       explanation = label(month) + ' ' + money(actualCents) + ' vs ' + money(averageCents) + ' (' + basisText + '). Only '
         + plural(usableCount, 'full month') + ' of history; at least ' + rule.minMonths + ' are needed before anything is flagged.';
-    } else if (usableCount >= IRREGULAR_MIN_MONTHS && monthsWithActivity === 1 && active[0].cents > 0) {
+    } else if (usableCount >= IRREGULAR_MIN_MONTHS && monthsWithActivity === 1 && active[0].cents > 0
+      && (actualCents <= 0 || Math.abs(actualCents - active[0].cents) < Math.max(rule.minDiffCents, active[0].cents * rule.minPct / 100))) {
+      // Only when this month looks like a repeat of that single payment (or nothing was paid):
+      // a $2,000 month after one $45 month is still judged against the average and flagged.
       // One payment in the whole baseline (an annual bill, an occasional purchase): the average
       // would mark every other month 'lower' and the month it is paid 'higher', so neither is said.
       signal = 'irregular';

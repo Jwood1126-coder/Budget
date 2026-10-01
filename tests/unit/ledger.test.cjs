@@ -768,7 +768,8 @@ test('filter: category matches the row category or any split part', () => {
   const rows = L.applyEdits(ds, { cost: { splits: [{ category: 'Groceries', cents: 15000 }, { category: 'Pets', cents: 6000 }], history: [] } });
   assert.deepEqual(L.filter(rows, { category: 'Pets' }).map(t => t.id), ['cost']);
   assert.deepEqual(L.filter(rows, { category: 'Groceries' }).map(t => t.id), ['cost', 'g']);
-  assert.deepEqual(L.filter(rows, { category: 'Mixed retail' }).map(t => t.id), ['cost']);
+  // Once split, the row lives only in its parts' categories (matches group('category')).
+  assert.deepEqual(L.filter(rows, { category: 'Mixed retail' }).map(t => t.id), []);
 });
 
 test('filter: excluded rows are hidden unless includeExcluded', () => {
@@ -1063,4 +1064,18 @@ test('hardening: counting identities hold under random edits and what-if toggles
       assert.equal(eff.filter(t => t.kind === 'income').reduce((a, t) => a + t.amountCents, 0), s.incomeCents + s.excludedIncomeCents);
     }
   }
+});
+
+test('filter: a split purchase matches only its parts, agreeing with group(category)', () => {
+  const ds = L.normalizeDataset({
+    schemaVersion: 2, datasetId: 'split-filter', isSynthetic: true, currency: 'USD',
+    accounts: [{ id: 'card', label: 'Card', type: 'credit_card', scope: 'joint', ownerId: null, paidInFull: true, coverage: [{ start: '2026-05-01', end: '2026-05-31' }] }],
+    transactions: [{ id: 'wh', accountId: 'card', date: '2026-05-10', description: 'SAMPLE WAREHOUSE', merchant: 'Sample Warehouse', amountCents: -10000, kind: 'spend', category: 'Mixed retail', sourceCategory: 'Shopping' }],
+  });
+  const edits = { wh: E.review.editRecord(null, 'splits', [{ category: 'Groceries', cents: 7000 }, { category: 'Clothing', cents: 3000 }], 'Checked the receipt', '2026-06-01T00:00:00Z') };
+  const rows = L.applyEdits(ds, edits);
+  assert.deepEqual(L.filter(rows, { category: 'Mixed retail' }).map(t => t.id), [], 'original category no longer matches');
+  assert.deepEqual(L.filter(rows, { category: 'Groceries' }).map(t => t.id), ['wh']);
+  const grouped = Object.fromEntries(L.group(rows, 'category').map(g => [g.key, g.spendCents]));
+  assert.deepEqual(grouped, { Groceries: 7000, Clothing: 3000 });
 });

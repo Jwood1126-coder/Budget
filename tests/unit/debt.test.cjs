@@ -332,3 +332,10 @@ test('summary: an APR marked confirmed but with no rate entered is still listed 
   assert.ok(s.warnings.some(w => /Interest rate not entered/.test(w)), s.warnings.join('\n'));
   assert.equal(lineOf(s, 'illustration'), undefined);
 });
+
+test('summary: a planned payment bill is labelled planned, not confirmed', () => {
+  const r = E.debt.summary({ id: 'x', label: 'Planned loan', ownerId: 'joint', balanceCents: null, balanceStatus: 'unknown', aprPct: null, aprRange: null, aprStatus: 'unknown', paymentBillId: 'b', promo: null, loanCount: null, repaymentPlan: null, termStatus: 'unknown', escrowIncluded: null, note: '' },
+    { id: 'b', label: 'Planned loan', monthlyCents: 4000, status: 'planned', fundedFrom: 'joint' }, { month: '2026-10' });
+  const line = r.lines.find(l => l.key === 'payment');
+  assert.equal(line.status, 'planned');
+});

@@ -256,7 +256,7 @@
       warnings.push('Monthly payment amount not entered.');
     } else {
       const who = bill.fundedFrom === 'joint' ? 'joint' : bill.fundedFrom === 'p1' || bill.fundedFrom === 'p2' ? 'a personal account (' + bill.fundedFrom + ')' : null;
-      add('payment', 'Monthly payment', money(payment) + ' a month' + (who ? ', paid from ' + who : ', paying account not confirmed'), bill.status === 'estimate' ? 'estimate' : 'confirmed');
+      add('payment', 'Monthly payment', money(payment) + ' a month' + (who ? ', paid from ' + who : ', paying account not confirmed'), bill.status === 'estimate' ? 'estimate' : bill.status === 'planned' ? 'planned' : 'confirmed');
       if (!who) warnings.push('Which account pays this is not confirmed.');
     }
     if (bill && E.months.isMonth(bill.endMonth)) add('finalPayment', 'Final payment', E.months.label(bill.endMonth), 'confirmed');

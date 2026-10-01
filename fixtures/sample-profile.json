@@ -411,7 +411,7 @@
         }
       ],
       "assumptions": {
-        "incomeTiming": "conservative",
+        "incomeTiming": "actual",
         "annualReturnPct": 0,
         "costGrowthPct": 0,
         "incomeGrowthPct": 0
@@ -457,7 +457,7 @@
         }
       ],
       "assumptions": {
-        "incomeTiming": "conservative",
+        "incomeTiming": "actual",
         "annualReturnPct": 0,
         "costGrowthPct": 0,
         "incomeGrowthPct": 0

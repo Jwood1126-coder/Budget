@@ -794,3 +794,32 @@ test('assumptions are complete and readable', () => {
   assert.ok(p.assumptions.every(a => typeof a === 'string' && a.length > 10));
   assert.equal(new Set(p.assumptions).size, p.assumptions.length);
 });
+
+test('balance dated inside the forecast applies from the following month (no double counting)', () => {
+  const E2 = E;
+  const plan = E2.util.clone(basePlanForBalance());
+  plan.balances = { jointCashCents: 150000, asOf: '2026-09-30', note: '' };
+  const scenario = { id: 'baseline', name: 'Base', events: [], assumptions: { incomeTiming: 'conservative', annualReturnPct: 0, costGrowthPct: 0, incomeGrowthPct: 0 } };
+  const p = E2.forecast.project(plan, scenario, { startMonth: '2026-08', months: 4, scope: 'joint' });
+  const byMonth = Object.fromEntries(p.rows.map(r => [r.month, r]));
+  assert.equal(byMonth['2026-08'].balanceCents, null);
+  assert.equal(byMonth['2026-09'].balanceCents, null);
+  assert.equal(byMonth['2026-10'].balanceCents, 150000 + byMonth['2026-10'].netCents);
+  assert.equal(byMonth['2026-11'].balanceCents, 150000 + byMonth['2026-10'].netCents + byMonth['2026-11'].netCents);
+  assert.ok(p.assumptions.some(a => /balances start in Oct 2026/.test(a)));
+  // Without a date, the balance is today's and applies from the first month.
+  plan.balances.asOf = null;
+  const q = E2.forecast.project(plan, scenario, { startMonth: '2026-08', months: 2, scope: 'joint' });
+  assert.equal(q.rows[0].balanceCents, 150000 + q.rows[0].netCents);
+});
+
+function basePlanForBalance() {
+  return {
+    people: [{ id: 'p1', name: 'Partner A' }, { id: 'p2', name: 'Partner B' }],
+    incomes: [{ id: 'pa', label: 'Pay', personId: 'p1', kind: 'paycheck', netPerPaycheckCents: 200000, jointPerPaycheckCents: 200000, frequency: 'semimonthly', frequencyStatus: 'confirmed', anchorDate: null, semimonthlyDays: [15, 31], monthlyDay: 1, assumedPerMonthIfUnknown: 2, status: 'confirmed', startMonth: null, endMonth: null, note: '' }],
+    bills: [{ id: 'rent', label: 'Housing', category: 'Mortgage', monthlyCents: 150000, fundedFrom: 'joint', type: 'housing', debtId: null, status: 'existing', startMonth: null, endMonth: null, note: '' }],
+    debts: [], targets: { Groceries: 60000 }, savings: [], personalSpending: [],
+    balances: { jointCashCents: null, asOf: null, note: '' },
+    settings: { incomeTiming: 'conservative', planningBaseline: 'actual', comparisonWindow: 3 },
+  };
+}

@@ -1229,7 +1229,7 @@ test('addScenario: appends a scenario with a stable id and default assumptions',
   assert.match(added.id, /^scenario-[a-z0-9]+$/);
   assert.equal(added.id, b.scenarios[b.scenarios.length - 1].id);
   assert.deepEqual(added.events, []);
-  assert.deepEqual(added.assumptions, { incomeTiming: 'conservative', annualReturnPct: 0, costGrowthPct: 0, incomeGrowthPct: 0 });
+  assert.deepEqual(added.assumptions, { incomeTiming: 'actual', annualReturnPct: 0, costGrowthPct: 0, incomeGrowthPct: 0 });
   assert.equal(added.createdAt, NOW);
   assert.equal(a.meta.updatedAt, NOW);
   assert.equal(S.addScenario(st, 'X', { id: 'my-scenario' }).scenarios[3].id, 'my-scenario');

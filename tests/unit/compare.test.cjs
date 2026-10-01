@@ -118,8 +118,8 @@ test('usual: partial baseline months are left out, not zero-filled', () => {
 test('usual: computed partial months give a days-covered reason', () => {
   const r = usualFor([spend('2026-07', 1000, 'Groceries', { day: 20 }), spend('2026-09', 1000)], { month: '2026-09', window: 3 }, { cardStart: '2026-07-15' });
   assert.deepEqual(r.excludedMonths, [
-    { month: '2026-06', reason: 'Only 0 of 30 days covered' },
-    { month: '2026-07', reason: 'Only 17 of 31 days covered' }
+    { month: '2026-06', reason: 'Partial: Joint card has 0 of 30 days covered' },
+    { month: '2026-07', reason: 'Partial: Joint card has 17 of 31 days covered' }
   ]);
 });
 
@@ -183,7 +183,7 @@ test('usual: irregular explanations list months left out of the baseline', () =>
   const c = cat(r, 'Clothing');
   assert.equal(r.usableCount, 5);
   assert.equal(c.signal, 'irregular');
-  assert.equal(c.explanation, "Paid in only 1 of the last 5 full months (Apr 2026: $300), so a monthly average isn't meaningful. Sep 2026 ($0) is not marked higher or lower. Left out: Mar 2026 (only 12 of 31 days covered).");
+  assert.equal(c.explanation, "Paid in only 1 of the last 5 full months (Apr 2026: $300), so a monthly average isn't meaningful. Sep 2026 ($0) is not marked higher or lower. Left out: Mar 2026 (partial: Joint card has 12 of 31 days covered).");
 });
 
 test('usual: a partial selected month stays partial_month even for an irregular category', () => {
@@ -267,7 +267,7 @@ test('usual: a partial selected month is labelled and never flagged', () => {
   const g = cat(r, 'Groceries');
   assert.equal(r.selectedCoverage.status, 'partial');
   assert.equal(g.signal, 'partial_month');
-  assert.equal(g.explanation, 'Only 12 of 30 days covered; not compared.');
+  assert.equal(g.explanation, 'Only part of Sep 2026 is covered (Joint card has 12 of 30 days covered); not compared.');
   assert.equal(g.diffCents, null);
   assert.equal(g.pct, null);
   assert.equal(g.averageCents, 1000);
@@ -651,4 +651,26 @@ test('hardening: a partly reimbursed charge counts only its unreimbursed part in
   assert.equal(C.trend(rows, ds, { months: ['2026-09'], category: 'Travel' })[0].spendCents, 20000);
   const row = C.planVsActual({ targets: { Travel: 15000 } }, rows, ds, { month: '2026-09' }).find(r => r.category === 'Travel');
   assert.deepEqual([row.actualCents, row.diffToPlanCents, row.status], [20000, 5000, 'over']);
+});
+
+test('usual: a large one-off after a single small month is flagged, not hidden as irregular', () => {
+  const months = ['2026-02', '2026-03', '2026-04', '2026-05', '2026-06', '2026-07', '2026-08'];
+  const ds = E.ledger.normalizeDataset({
+    schemaVersion: 2, datasetId: 'irregular-big', isSynthetic: true, currency: 'USD',
+    accounts: [{ id: 'card', label: 'Card', type: 'credit_card', scope: 'joint', ownerId: null, paidInFull: true, coverage: [{ start: '2026-02-01', end: '2026-08-31' }] }],
+    transactions: [
+      { id: 'clean', accountId: 'card', date: '2026-02-12', description: 'SAMPLE DENTAL', merchant: 'Sample Dental', amountCents: -4500, kind: 'spend', category: 'Dental' },
+      { id: 'crown', accountId: 'card', date: '2026-08-04', description: 'SAMPLE DENTAL', merchant: 'Sample Dental', amountCents: -186000, kind: 'spend', category: 'Dental' },
+    ],
+  });
+  const txns = E.ledger.applyEdits(ds, {});
+  const big = E.compare.usual(txns, ds, { month: '2026-08', window: 6 }).categories.find(c => c.category === 'Dental');
+  assert.equal(big.signal, 'higher');
+  assert.ok(big.diffCents > 0);
+  assert.equal(big.irregular, null);
+  // A repeat of the same small payment is still 'irregular'.
+  const ds2 = E.ledger.normalizeDataset({ ...ds, datasetId: 'irregular-repeat', transactions: [ds.transactions[0], { ...ds.transactions[1], amountCents: -4800 }] });
+  const rep = E.compare.usual(E.ledger.applyEdits(ds2, {}), ds2, { month: '2026-08', window: 6 }).categories.find(c => c.category === 'Dental');
+  assert.equal(rep.signal, 'irregular');
+  void months;
 });

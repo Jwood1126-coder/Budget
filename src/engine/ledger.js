@@ -769,7 +769,13 @@
       if (o.scope === 'joint' && t.accountScope !== 'joint') return false;
       if (o.scope === 'personal' && t.accountScope !== 'personal') return false;
       if (kinds && !kinds.has(t.kind)) return false;
-      if (o.category && t.category !== o.category && !partsOf(t).some(p => p.category === o.category)) return false;
+      if (o.category) {
+        // A split purchase belongs only to its parts' categories, so filter and group('category') agree.
+        const inCategory = t.splitApplied
+          ? partsOf(t).some(p => p.category === o.category)
+          : t.category === o.category || partsOf(t).some(p => p.category === o.category);
+        if (!inCategory) return false;
+      }
       if (o.merchant && t.merchant !== o.merchant) return false;
       if (flags && !flags.every(f => (t.flags || []).includes(f))) return false;
       if (needle) {
