@@ -390,6 +390,15 @@
 
   function installEvents() {
     document.addEventListener('click', ev => {
+      // In-page anchors (the skip link) must not touch the hash, which holds the route.
+      const skip = ev.target.closest('a[href="#main"]');
+      if (skip) {
+        ev.preventDefault();
+        const main = document.getElementById('main');
+        main.focus();
+        main.scrollIntoView({ block: 'start' });
+        return;
+      }
       // Re-selecting the current destination returns to the top of that view (no hashchange fires).
       const nav = ev.target.closest('a[href^="#/"]');
       if (nav && !ev.defaultPrevented && !nav.dataset.action && nav.getAttribute('href') === location.hash) {
@@ -425,6 +434,7 @@
       if (form.dataset.action) { ev.preventDefault(); runAction(form, ev); }
     });
     root.addEventListener('hashchange', () => {
+      if (location.hash && !location.hash.startsWith('#/')) return; // not a route
       const keep = keepFocusOnNextRender;
       render({ focusHeading: !keep });
     });

@@ -64,12 +64,20 @@ module.exports = [
     name: 'skip link and keyboard reach the main content',
     async run(t) {
       await t.open('#/overview');
-      await t.page.reload();
-      await t.page.waitForSelector('#page-title');
-      await t.page.keyboard.press('Tab');
-      t.assert.equal(await t.page.evaluate(() => document.activeElement.className), 'skip-link');
+      // The skip link must be the first tabbable element in document order.
+      const first = await t.page.evaluate(() => {
+        const sel = 'a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
+        const el = [...document.querySelectorAll(sel)].find(e => e.offsetParent !== null || e.classList.contains('skip-link'));
+        return el && el.className;
+      });
+      t.assert.equal(first, 'skip-link');
+      await t.page.focus('.skip-link');
+      t.assert.ok(await t.page.isVisible('.skip-link'), 'skip link becomes visible on focus');
       await t.page.keyboard.press('Enter');
-      t.assert.equal(await t.page.evaluate(() => document.activeElement.id), 'main');
+      await t.page.waitForFunction(() => document.activeElement && document.activeElement.id === 'main');
+      // Tab from main reaches interactive content inside the page, not the navigation.
+      await t.page.keyboard.press('Tab');
+      t.assert.ok(await t.page.evaluate(() => document.querySelector('#main').contains(document.activeElement)));
     },
   },
   {

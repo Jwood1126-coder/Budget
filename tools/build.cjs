@@ -7,6 +7,8 @@
  *   node tools/build.cjs --sample   -> always the synthetic sample (safe to share)
  *   node tools/build.cjs --empty    -> no embedded transactions (load files in the browser)
  *   node tools/build.cjs --out path -> write somewhere other than dist/index.html
+ *   node tools/build.cjs --sample --view spending --out dist/dev-spending/index.html
+ *                                   -> developer build: only that view's real source, other views stubbed
  *
  * Data sources, in order of preference for a private build:
  *   dataset: private/budget-data.json, then the earlier app's data/budget-data.json (legacy v1)
@@ -20,12 +22,13 @@ const ROOT = path.join(__dirname, '..');
 const SRC = path.join(ROOT, 'src');
 
 function parseArgs(argv) {
-  const args = { sample: false, empty: false, out: null };
+  const args = { sample: false, empty: false, out: null, view: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--sample') args.sample = true;
     else if (a === '--empty') args.empty = true;
     else if (a === '--out') args.out = argv[++i];
+    else if (a === '--view') args.view = argv[++i];
     else if (a === '--help' || a === '-h') args.help = true;
     else throw new Error('Unknown option: ' + a);
   }
@@ -70,6 +73,11 @@ function build(args) {
   const js = [...manifest.engine, ...manifest.ui].map(rel => {
     const file = path.join(SRC, rel);
     if (!fs.existsSync(file)) throw new Error('Missing source file listed in src/manifest.json: ' + rel);
+    const m = rel.match(/^ui\/views\/(\w+)\.js$/);
+    if (args.view && m && m[1] !== args.view && m[1] !== 'overview') {
+      // Developer isolation: another view still being edited cannot break this build.
+      return `/* ---- ${rel} (stubbed) ---- */\n(function(){var UI=globalThis.BudgetUI;UI.views=UI.views||{};UI.views.${m[1]}={title:'${m[1]}',render:function(){return UI.c.pageHeader({title:'${m[1]}'})+UI.c.empty('Stubbed in this developer build.');}};})();`;
+    }
     return '/* ---- ' + rel + ' ---- */\n' + fs.readFileSync(file, 'utf8');
   }).join('\n');
   const css = manifest.css.map(rel => {

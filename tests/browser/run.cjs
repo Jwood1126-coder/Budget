@@ -8,6 +8,7 @@
  * Every test fails on any uncaught page error or console error.
  *
  *   node tests/browser/run.cjs [filter]       run (optionally only tests whose name includes filter)
+ *   BUDGET_DIST=dist/dev-x/index.html BUDGET_RESULTS=test-results/x node tests/browser/run.cjs x
  * Screenshots go to test-results/ (ignored by git).
  */
 const fs = require('node:fs');
@@ -27,8 +28,9 @@ function loadPlaywright() {
 }
 
 const ROOT = path.join(__dirname, '..', '..');
-const DIST = path.join(ROOT, 'dist', 'index.html');
-const OUT = path.join(ROOT, 'test-results');
+const DIST = process.env.BUDGET_DIST ? path.resolve(process.env.BUDGET_DIST) : path.join(ROOT, 'dist', 'index.html');
+const OUT_DIR = process.env.BUDGET_RESULTS ? path.resolve(process.env.BUDGET_RESULTS) : null;
+const OUT = OUT_DIR || path.join(ROOT, 'test-results');
 const VIEWPORTS = { desktop: { width: 1366, height: 900 }, phone: { width: 390, height: 844, isMobile: true, hasTouch: true } };
 
 async function main() {
