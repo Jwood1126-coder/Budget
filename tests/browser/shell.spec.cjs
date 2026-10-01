@@ -87,7 +87,7 @@ module.exports = [
       await t.open('#/overview');
       const rows = await t.page.$$eval('.flow-row [role="rowheader"] strong', els => els.map(e => e.textContent));
       t.assert.deepEqual(rows, ['Coming in', 'Spending', 'Debt payments', 'Saved', 'What remains']);
-      const href = await t.page.$eval('.flow-row:nth-child(3) .num a', a => a.getAttribute('href'));
+      const href = await t.page.$eval('.flow-row:nth-child(3) [role="cell"]:last-child a', a => a.getAttribute('href'));
       t.assert.match(href, /^#\/spending\?period=\d{4}-\d{2}/);
       await t.page.click('label[for^="scope-household"]');
       await t.page.waitForFunction(() => window.HouseholdBudget.getState().ui.scope === 'household');

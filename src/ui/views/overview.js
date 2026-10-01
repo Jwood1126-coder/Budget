@@ -48,6 +48,20 @@
     };
   }
 
+  /**
+   * Usual spending in categories the plan has no number for. Without this, a budget with blank
+   * targets would show a "remaining" figure that is far too high.
+   */
+  function unbudgeted(ctx, month) {
+    if (!month) return { total: 0, list: [] };
+    const win = ctx.state.plan.settings.comparisonWindow || 3;
+    const cmp = ctx.memo('overview-cmp:' + month + win, () => E.compare.usual(ctx.txns, ctx.dataset, { month, window: win }));
+    const targets = ctx.state.plan.targets || {};
+    const billCats = new Set((ctx.state.plan.bills || []).filter(b => b.category && b.monthlyCents !== null && (ctx.scope === 'household' || b.fundedFrom === 'joint')).map(b => b.category));
+    const list = cmp.categories.filter(x => (x.averageCents || 0) > 0 && !billCats.has(x.category) && !(typeof targets[x.category] === 'number'));
+    return { total: list.reduce((a, x) => a + x.averageCents, 0), list };
+  }
+
   function flowTable(ctx, plan, actual, month) {
     const p = planBuckets(plan, ctx.state.plan.bills);
     const href = params => ctx.href('spending', { period: month, ...params });
@@ -58,12 +72,14 @@
     const planIncome = p.income !== null ? esc(fmt.money(p.income, { whole: true }))
       : p.incomeLowerBound !== null ? `At least ${esc(fmt.money(p.incomeLowerBound, { whole: true }))}<small>Some take-home pay is unknown</small>`
         : '<span class="tone-bad">Unknown</span><small>Enter pay details in Budget</small>';
+    const gap = unbudgeted(ctx, month);
+    const gapNote = gap.total > 0 ? `<small class="tone-warn">Before about ${esc(fmt.money(gap.total, { whole: true }))} of usual spending with no target</small>` : '';
     const remainsPlan = p.remains === null ? '<span class="tone-bad">Unknown</span><small>Needs complete income</small>'
-      : `<strong class="${p.remains < 0 ? 'tone-bad' : ''}">${esc(fmt.money(p.remains, { whole: true }))}</strong>`;
+      : `<strong class="${p.remains < 0 ? 'tone-bad' : ''}">${esc(fmt.money(p.remains, { whole: true }))}</strong>${gapNote}`;
     const remainsActual = actual ? `<strong class="${actual.remains < 0 ? 'tone-bad' : ''}">${esc(fmt.money(actual.remains, { whole: true }))}</strong>` : '—';
     const rows = [
       { label: 'Coming in', sub: ctx.scope === 'joint' ? 'Pay deposited to joint + contributions' : 'Full take-home pay', plan: planIncome, actual: actualCell(actual?.income, { kind: 'income' }, actual ? `${fmt.money(actual.s.payrollCents, { whole: true })} pay · ${fmt.money(actual.s.contributionsCents, { whole: true })} contributions` : '') },
-      { label: 'Spending', sub: 'Bills, groceries, everything consumed', plan: esc(fmt.money(p.spending, { whole: true })), actual: actualCell(actual?.s.spendingCents, {}, actual && actual.s.refundsCents ? `after ${fmt.money(actual.s.refundsCents, { whole: true })} refunds` : '') },
+      { label: 'Spending', sub: 'Bills, groceries, everything consumed', plan: esc(fmt.money(p.spending, { whole: true })) + (gap.total > 0 ? `<small><a href="${esc(ctx.href('budget', { section: 'targets' }))}">${gap.list.length} usual categor${gap.list.length === 1 ? 'y has' : 'ies have'} no target</a></small>` : ''), actual: actualCell(actual?.s.spendingCents, {}, actual && actual.s.refundsCents ? `after ${fmt.money(actual.s.refundsCents, { whole: true })} refunds` : '') },
       { label: 'Debt payments', sub: 'Loans and financing (not card bills paid in full)', plan: esc(fmt.money(p.debt, { whole: true })), actual: actualCell(actual?.s.debtPaymentsCents, { kind: 'debt' }) },
       { label: 'Saved', sub: 'Moved to savings — not spending', plan: esc(fmt.money(p.saved, { whole: true })), actual: actualCell(actual?.s.savedNetCents, { kind: 'transfer' }) },
       { label: 'What remains', sub: 'In − spending − debt − saved', plan: remainsPlan, actual: remainsActual, total: true },
