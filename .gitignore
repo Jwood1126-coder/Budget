@@ -1,7 +1,15 @@
-# Private inputs and credentials must never enter source control.
-/data/*
-!/data/sample-data.json
+# ------------------------------------------------------------------
+# Private inputs, builds and credentials must never enter source control.
+# This repository is public. Real exports, profiles, rules and builds live in /private/.
+# ------------------------------------------------------------------
+/private/
 /dist/
+
+# Legacy private-data location from the first version of the app
+/data/*
+!/data/README.md
+
+# Credentials and deployment configuration
 /.openai/
 .env
 .env*
@@ -15,12 +23,24 @@
 *saved-state*
 *budget-copy*.html
 *budget-private*.html
+*workbook*.json
+Household-budget*.html
+
+# Bank and statement exports anywhere in the tree (the synthetic sample is the only exception)
 *.csv
+*.ofx
+*.qfx
+*.qbo
 *.xlsx
 *.xls
 *.pdf
 *.zip
 *.tar
 *.gz
+!/fixtures/sample-raw/*.csv
+
+# Tooling noise
+node_modules/
+test-results/
 __pycache__/
 .DS_Store

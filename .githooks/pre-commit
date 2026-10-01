@@ -1,0 +1,4 @@
+#!/bin/sh
+# Blocks commits that would publish private household data. Enable once per clone:
+#   git config core.hooksPath .githooks
+exec node tools/check-privacy.cjs --staged

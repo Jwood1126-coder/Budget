@@ -1,0 +1,38 @@
+{
+  "engine": [
+    "engine/core.js",
+    "engine/categories.js",
+    "engine/schedule.js",
+    "engine/ledger.js",
+    "engine/compare.js",
+    "engine/review.js",
+    "engine/importer.js",
+    "engine/plan.js",
+    "engine/debt.js",
+    "engine/forecast.js",
+    "engine/state.js",
+    "engine/attention.js"
+  ],
+  "ui": [
+    "ui/core.js",
+    "ui/components.js",
+    "ui/router.js",
+    "ui/shared.js",
+    "ui/views/overview.js",
+    "ui/views/spending.js",
+    "ui/views/budget.js",
+    "ui/views/forecast.js",
+    "ui/views/review.js",
+    "ui/views/data.js",
+    "ui/app.js"
+  ],
+  "css": [
+    "styles/base.css",
+    "styles/overview.css",
+    "styles/spending.css",
+    "styles/budget.css",
+    "styles/forecast.css",
+    "styles/review.css",
+    "styles/data.css"
+  ]
+}

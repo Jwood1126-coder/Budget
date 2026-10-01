@@ -1,0 +1,30 @@
+/* Overview */
+.overview-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: var(--space-5); align-items: start; }
+@media (max-width: 1099px) { .overview-grid { grid-template-columns: minmax(0, 1fr); } }
+
+.flow-table { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; margin-bottom: var(--space-3); }
+.flow-row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-3); padding: 10px 14px; border-top: 1px solid var(--border); align-items: start; }
+.flow-row:first-child { border-top: 0; }
+.flow-row > span { min-width: 0; }
+.flow-row small { display: block; font-size: .76rem; color: var(--text-3); font-weight: 400; }
+.flow-row .num { text-align: right; font-size: 1.05rem; font-weight: 650; }
+.flow-row .num a { font-weight: 700; }
+.flow-head { background: var(--surface-2); font-size: .74rem; text-transform: uppercase; letter-spacing: .04em; font-weight: 700; color: var(--text-2); }
+.flow-head > span:not(:first-child) { text-align: right; }
+.flow-head small { text-transform: none; letter-spacing: 0; }
+.flow-total { background: var(--surface-2); }
+.flow-total .num { font-size: 1.25rem; }
+@media (max-width: 599px) {
+  .flow-row { grid-template-columns: minmax(0, 1fr) auto auto; gap: var(--space-2); padding: 10px; }
+  .flow-row .num { font-size: .95rem; }
+  .flow-row small { font-size: .72rem; }
+}
+
+.attention-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.attention-item { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-3); padding: var(--space-3) 0; border-top: 1px solid var(--border); }
+.attention-item:first-child { border-top: 0; padding-top: 0; }
+.attention-item p { margin: 4px 0 0; font-size: .86rem; color: var(--text-2); }
+.attention-item .btn { flex: 0 0 auto; }
+.attention-more { margin-top: var(--space-3); }
+.fine-list { margin: var(--space-3) 0 0; padding-left: 1.1rem; font-size: .84rem; color: var(--text-2); }
+.data-status { margin: 0; }
