@@ -1,0 +1,314 @@
+'use strict';
+// Saving, several tabs, damaged or unavailable storage, Undo and keyboard/touch access, in a real browser.
+const KEY = 'household-budget:v5:sample';
+const GROCERIES = 'input[data-bind="plan.targets.Groceries"]';
+const FUEL = 'input[data-bind="plan.targets.Fuel"]';
+
+const stored = (page, fn) => page.evaluate(([k, src]) => {
+  const st = JSON.parse(localStorage.getItem(k));
+  return new Function('st', 'return ' + src)(st);
+}, [KEY, String(fn)]);
+const storedTarget = (page, cat) => page.evaluate(([k, c]) => JSON.parse(localStorage.getItem(k)).plan.targets[c], [KEY, cat]);
+const stateTarget = (page, cat) => page.evaluate(c => window.HouseholdBudget.getState().plan.targets[c], cat);
+const text = (page, sel) => page.$eval(sel, el => el.textContent.replace(/\s+/g, ' ').trim());
+
+async function commit(page, selector, value) {
+  await page.fill(selector, value);
+  await page.press(selector, 'Enter');
+}
+
+/** A second page in the same browser profile: same storage, its own errors collected into t.errors. */
+async function secondTab(t, hash) {
+  const page = await t.context.newPage();
+  page.on('pageerror', e => t.errors.push('tab 2 pageerror: ' + e.message));
+  page.on('console', m => { if (m.type() === 'error') t.errors.push('tab 2 console: ' + m.text()); });
+  await page.goto(t.url + hash);
+  await page.waitForSelector('#page-title');
+  return page;
+}
+
+module.exports = [
+  {
+    name: 'a second tab shows changes saved in another tab and never writes over them',
+    async run(t) {
+      const { page: a, assert } = t;
+      await t.open('#/budget?section=targets');
+      const b = await secondTab(t, '#/spending');
+      await commit(a, GROCERIES, '812');
+      await a.waitForFunction(() => window.HouseholdBudget.getState().plan.targets.Groceries === 81200);
+      assert.equal(await storedTarget(a, 'Groceries'), 81200);
+      // The other tab follows straight away (storage event) and says why its numbers changed.
+      await b.waitForFunction(() => window.HouseholdBudget.getState().plan.targets.Groceries === 81200);
+      assert.match(await text(b, '#toast'), /changed in another tab/);
+      // Moving around in the other tab does not bring its old copy back.
+      await b.click('.mainnav a[data-nav="overview"]');
+      await b.waitForFunction(() => location.hash.startsWith('#/overview'));
+      await b.click('.mainnav a[data-nav="forecast"]');
+      await b.waitForFunction(() => location.hash.startsWith('#/forecast'));
+      assert.equal(await storedTarget(a, 'Groceries'), 81200, 'navigating in tab 2 keeps tab 1’s change');
+      await a.reload();
+      await a.waitForSelector(GROCERIES);
+      assert.match(await a.inputValue(GROCERIES), /^812(\.00)?$/);
+
+      // A save the tab did not hear about (written behind its back) is not overwritten either:
+      // the change is made to that newer budget.
+      await b.goto(t.url + '#/budget?section=targets');
+      await b.waitForSelector(FUEL);
+      await b.evaluate(k => {
+        const st = JSON.parse(localStorage.getItem(k));
+        st.plan.targets.Groceries = 70000;
+        localStorage.setItem(k, JSON.stringify(st)); // same-tab writes fire no storage event here
+      }, KEY);
+      await commit(b, FUEL, '99');
+      await b.waitForFunction(() => /also changed in another tab/.test(document.getElementById('toast').textContent));
+      assert.equal(await storedTarget(b, 'Groceries'), 70000, 'the newer save is kept');
+      assert.equal(await storedTarget(b, 'Fuel'), 9900, 'and this tab’s change is added to it');
+      assert.equal(await stateTarget(b, 'Groceries'), 70000, 'the tab now shows the newer budget');
+      // Undo takes back only this tab's change.
+      await b.click('#undoBtn');
+      await b.waitForFunction(() => window.HouseholdBudget.getState().plan.targets.Fuel !== 9900);
+      assert.equal(await storedTarget(b, 'Groceries'), 70000, 'undo keeps the other tab’s change');
+      await b.close();
+    },
+  },
+  {
+    name: 'the last page is remembered without rewriting the saved budget',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      const before = await page.evaluate(k => localStorage.getItem(k), KEY);
+      await page.click('.mainnav a[data-nav="review"]');
+      await page.waitForFunction(() => location.hash.startsWith('#/review'));
+      assert.equal(await page.evaluate(k => localStorage.getItem(k), KEY), before, 'changing page does not rewrite the budget');
+      await page.goto(t.url);
+      await page.waitForSelector('#page-title');
+      assert.ok((await page.evaluate(() => location.hash)).startsWith('#/review'), 'opening the page again returns to the last page');
+    },
+  },
+  {
+    name: 'a toast shown inside a dialog does not break later dialogs, toasts or updates',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/data');
+      await page.click('#dp-reset');
+      await page.waitForSelector('#dialog[open] #dp-reset-backup');
+      const download = page.waitForEvent('download');
+      await page.click('#dp-reset-backup');
+      await download;
+      await page.waitForFunction(() => { const el = document.getElementById('toast'); return el && !el.hidden && el.closest('dialog'); });
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => !document.getElementById('dialog').open);
+      // A second dialog replaces the dialog's content: the toast must survive it.
+      await page.click('#dp-reset');
+      await page.waitForSelector('#dialog[open]');
+      await page.click('#dialog button[value="cancel"]');
+      await page.waitForFunction(() => !document.getElementById('dialog').open);
+      assert.ok(await page.evaluate(() => document.getElementById('toast') && document.getElementById('toast').parentNode === document.body), 'the toast is back in the page');
+      await page.goto(t.url + '#/budget?section=targets');
+      await page.waitForSelector(GROCERIES);
+      await commit(page, GROCERIES, '640');
+      await page.waitForFunction(() => /Groceries/.test(document.getElementById('toast').textContent) && !document.getElementById('toast').hidden);
+      assert.equal(await stateTarget(page, 'Groceries'), 64000);
+      assert.equal(await page.getAttribute(GROCERIES, 'aria-invalid'), null, 'the field does not claim it could not be saved');
+    },
+  },
+  {
+    name: 'Undo stays available after the toast: top-bar button and Ctrl+Z; the toast waits while focused',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/budget?section=targets');
+      const original = await stateTarget(page, 'Groceries');
+      assert.ok(await page.isHidden('#undoBtn'), 'nothing to undo yet');
+      await commit(page, GROCERIES, '777');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.targets.Groceries === 77700);
+      await page.waitForSelector('#undoBtn:not([hidden])');
+      assert.match(await page.getAttribute('#undoBtn', 'aria-label'), /^Undo: Groceries/);
+      await page.click('#undoBtn');
+      await page.waitForFunction(o => window.HouseholdBudget.getState().plan.targets.Groceries === o, original);
+      assert.equal(await storedTarget(page, 'Groceries'), original, 'the undo is saved');
+      // Ctrl+Z outside text fields.
+      await commit(page, GROCERIES, '778');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.targets.Groceries === 77800);
+      await page.focus('#page-title');
+      await page.keyboard.press('Control+z');
+      await page.waitForFunction(o => window.HouseholdBudget.getState().plan.targets.Groceries === o, original);
+      // Inside a text field Ctrl+Z stays the browser's own text undo.
+      await commit(page, GROCERIES, '779');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.targets.Groceries === 77900);
+      await page.focus(GROCERIES);
+      await page.keyboard.press('Control+z');
+      assert.equal(await stateTarget(page, 'Groceries'), 77900, 'not undone from inside a field');
+      // A focused toast does not time out under the keyboard user.
+      await page.focus('#toast button[data-action="undo"]');
+      await page.waitForTimeout(6600);
+      assert.ok(await page.isVisible('#toast'), 'still shown while focused');
+      await page.focus('#page-title');
+      await page.waitForFunction(() => document.getElementById('toast').hidden, null, { timeout: 8000 });
+    },
+  },
+  {
+    name: 'blocked storage is announced on every view and change messages never say saved',
+    viewport: 'both',
+    async run(t) {
+      const { page, assert } = t;
+      await t.context.addInitScript(() => {
+        Storage.prototype.setItem = function () { throw new DOMException('Blocked for this test', 'SecurityError'); };
+      });
+      await t.open('#/overview');
+      for (const view of ['overview', 'spending', 'forecast']) {
+        await page.goto(t.url + '#/' + view);
+        await page.waitForSelector('#page-title');
+        assert.ok(await page.isVisible('#appAlerts'), 'warning visible on ' + view);
+        assert.match(await text(page, '#appAlerts'), /not being saved/);
+      }
+      await page.goto(t.url + '#/budget?section=targets');
+      await page.waitForSelector(GROCERIES);
+      await commit(page, GROCERIES, '650');
+      await page.waitForFunction(() => !document.getElementById('toast').hidden && /Groceries/.test(document.getElementById('toast').textContent));
+      const msg = await text(page, '#toast');
+      assert.match(msg, /changed on this page only/);
+      assert.ok(!/(^|[^t] )saved/i.test(msg.replace(/Not saved/g, '')), 'never says saved: ' + msg);
+    },
+  },
+  {
+    name: 'a save that fails part-way through (storage full) shows the reason on every view',
+    viewport: 'phone',
+    async run(t) {
+      const { page, assert } = t;
+      await t.context.addInitScript(() => {
+        const set = Storage.prototype.setItem;
+        Storage.prototype.setItem = function (k, v) {
+          if (window.__full && String(k).startsWith('household-budget:v5:')) throw new DOMException('Quota', 'QuotaExceededError');
+          return set.call(this, k, v);
+        };
+      });
+      await t.open('#/budget?section=targets');
+      assert.ok(await page.isHidden('#appAlerts'));
+      await page.evaluate(() => { window.__full = true; });
+      await commit(page, GROCERIES, '655');
+      await page.waitForSelector('#appAlerts:not([hidden])');
+      assert.match(await text(page, '#appAlerts'), /no room left/);
+      assert.match(await text(page, '#toast'), /Not saved in this browser/);
+      await page.click('.mainnav a[data-nav="overview"]');
+      await page.waitForFunction(() => location.hash.startsWith('#/overview'));
+      assert.ok(await page.isVisible('#appAlerts'), 'still shown on the next view, on a phone');
+    },
+  },
+  {
+    name: 'a damaged saved budget is announced, kept, and can be downloaded or deleted',
+    viewport: 'both',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      await page.evaluate(k => localStorage.setItem(k, '{"version":5,"plan":{"targets":{"Groceries":12345'), KEY);
+      await page.reload();
+      await page.waitForSelector('#appAlerts:not([hidden])');
+      assert.match(await text(page, '#appAlerts'), /could not be read/);
+      assert.match(await text(page, '#toast'), /could not be read/);
+      await page.reload(); // still there after another reload: the copy is still kept
+      await page.waitForSelector('#appAlerts:not([hidden])');
+      await page.goto(t.url + '#/data');
+      await page.waitForSelector('#dp-unreadable-download');
+      const download = page.waitForEvent('download');
+      await page.click('#dp-unreadable-download');
+      const file = await download;
+      assert.match(file.suggestedFilename(), /^household-budget-unreadable-copy-\d{4}-\d\d-\d\d\.txt$/);
+      await page.click('#dp-unreadable-forget');
+      await page.waitForSelector('#dialog[open]');
+      await page.click('#dialog button[value="ok"]');
+      await page.waitForFunction(() => !document.getElementById('dp-unreadable-download'));
+      assert.ok(await page.isHidden('#appAlerts'), 'the warning goes with the copy');
+      assert.equal(await page.evaluate(k => localStorage.getItem(k + ':unreadable'), KEY), null);
+    },
+  },
+  {
+    name: 'damaged files loaded in the browser get the could-not-read notice and a Forget option',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/data');
+      await page.evaluate(() => localStorage.setItem('household-budget:loaded-dataset', '{"dataset": {"transactions": ['));
+      await page.reload();
+      await page.waitForSelector('#dp-forget-error');
+      assert.match(await text(page, '#dp-using'), /could not be read/);
+    },
+  },
+  {
+    name: 'on a phone Data & privacy is marked as the current page',
+    viewport: 'phone',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/data');
+      assert.equal(await page.getAttribute('.topbar-data', 'aria-current'), 'page');
+      await page.click('.mainnav a[data-nav="overview"]');
+      await page.waitForSelector('.mainnav a[data-nav="overview"][aria-current="page"]');
+      assert.equal(await page.getAttribute('.topbar-data', 'aria-current'), null);
+    },
+  },
+  {
+    name: 'keyboard focus is never hidden under the top bar or the phone tab bar',
+    viewport: 'both',
+    async run(t) {
+      const { page, assert } = t;
+      for (const route of ['#/budget', '#/forecast', '#/spending']) {
+        await t.open(route);
+        await page.focus('#page-title');
+        const hidden = [];
+        for (let i = 0; i < 40; i++) {
+          await page.keyboard.press('Tab');
+          const r = await page.evaluate(() => {
+            const el = document.activeElement;
+            if (!el || el === document.body || el.closest('.topbar, .mainnav, #toast')) return null;
+            const box = el.getBoundingClientRect();
+            const top = document.querySelector('.topbar').getBoundingClientRect().bottom;
+            const nav = document.querySelector('.mainnav');
+            const navTop = getComputedStyle(nav).position === 'fixed' ? nav.getBoundingClientRect().top : innerHeight;
+            // A region taller than the space between the bars (a long table) only needs its top edge in view.
+            const fits = box.height <= navTop - top;
+            const covered = fits ? box.top < top - 1 || box.bottom > navTop + 1 : box.top < top - 1 || box.top >= navTop;
+            return { id: el.id || el.textContent.trim().slice(0, 30), covered };
+          });
+          if (r && r.covered) hidden.push(r.id);
+        }
+        assert.deepEqual(hidden, [], route + ': focused controls under a bar');
+      }
+    },
+  },
+  {
+    name: 'arrowing through a Spending filter adds one Back step, not one per option',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      await page.click('.mainnav a[data-nav="spending"]');
+      await page.waitForSelector('select[data-param="period"]');
+      const start = await page.evaluate(() => location.hash);
+      await page.focus('select[data-param="period"]');
+      for (let i = 0; i < 3; i++) {
+        const before = await page.evaluate(() => location.hash);
+        await page.keyboard.press('ArrowDown');
+        await page.waitForFunction(b => location.hash !== b, before);
+        await page.waitForSelector('select[data-param="period"]');
+      }
+      await page.goBack();
+      await page.waitForFunction(s => location.hash === s, start);
+      await page.goBack();
+      await page.waitForFunction(() => location.hash.startsWith('#/overview'));
+      assert.ok(true);
+    },
+  },
+  {
+    name: 'primary and destructive phone controls are at least 40px tall',
+    viewport: 'phone',
+    async run(t) {
+      const { page, assert } = t;
+      const small = [];
+      for (const route of ['#/forecast', '#/budget?section=bills', '#/review?queue=uncertain', '#/overview']) {
+        await t.open(route);
+        small.push(...await page.$$eval('#view .btn, #view .segmented label, #view .bt-remove', els => els
+          .filter(el => el.getBoundingClientRect().width > 0)
+          .map(el => ({ text: el.textContent.trim().slice(0, 30), h: Math.round(el.getBoundingClientRect().height) }))
+          .filter(x => x.h < 40)).then(xs => xs.map(x => route + ' ' + x.text + ' ' + x.h + 'px')));
+      }
+      assert.deepEqual(small, []);
+    },
+  },
+];

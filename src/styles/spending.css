@@ -17,7 +17,7 @@
 .sp-f > label { font-size: .78rem; font-weight: 650; color: var(--text-2); }
 .sp-f select, .sp-f input[type="search"] {
   width: 100%; min-height: 38px; padding: 6px 8px; border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font: inherit; font-size: .9rem;
+  border: 1px solid var(--control-border); background: var(--surface); color: var(--text); font: inherit; font-size: .9rem;
 }
 .sp-f-period { flex-basis: 170px; }
 .sp-f-acct { flex-basis: 160px; }

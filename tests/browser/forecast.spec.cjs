@@ -500,8 +500,11 @@ module.exports = [
       await page.keyboard.type('2028');
       assert.equal(await birthMonth(), '2027-05', 'still nothing saved half way through the year');
       assert.match(await page.inputValue(birth), /^2028-\d\d$/, 'the field keeps every digit typed');
+      const seq = await page.evaluate(() => Number(document.documentElement.dataset.renderSeq));
       await page.keyboard.press('Enter');
       await page.waitForFunction(() => /^2028-\d\d$/.test(window.HouseholdBudget.getState().scenarios.find(s => s.id === 'baby-arrives').events.find(e => e.id === 'birth-costs').month));
+      // Wait for the re-render, so the next keys go to the new field rather than the one it replaces.
+      await page.waitForFunction(n => Number(document.documentElement.dataset.renderSeq) > n, seq);
       await page.waitForFunction(b => document.activeElement === document.querySelector(b), birth);
       // Leaving the field also applies what was typed.
       await toYearPart(page, birth);

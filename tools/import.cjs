@@ -117,6 +117,8 @@ function renderMarkdown(report, dataset) {
   const label = new Map(dataset.accounts.map(a => [a.id, a.label]));
   const cell = v => String(v ?? '').replace(/\|/g, '\\|').replace(/\s+/g, ' ');
   const out = [];
+  // tools/check-privacy.cjs looks for this marker in any file git could publish.
+  if (!dataset.isSynthetic) out.push('<!-- household-budget: PRIVATE import report. Do not commit, upload or share. -->', '');
   out.push('# Import report — ' + dataset.datasetId, '');
   out.push('Generated ' + report.generatedAt + '. ' + (dataset.isSynthetic ? 'Synthetic sample data.' :
     '**Private:** this report contains your household\'s financial data. Keep it in `private/`; never commit or share it.'), '');
@@ -298,6 +300,15 @@ const isInside = (dir, file) => {
   const rel = path.relative(dir, file);
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 };
+// The path with symlinks resolved, for files that may not exist yet (the nearest existing folder is resolved).
+function realPath(p) {
+  const tail = [];
+  let dir = path.resolve(p);
+  while (!fs.existsSync(dir) && path.dirname(dir) !== dir) { tail.unshift(path.basename(dir)); dir = path.dirname(dir); }
+  try { return path.join(fs.realpathSync(dir), ...tail); } catch { return path.resolve(p); }
+}
+// Case-insensitive on purpose: on macOS and Windows "Fixtures/" is the same folder as "fixtures/".
+const isInsideAnyCase = (dir, file) => isInside(realPath(dir).toLowerCase(), realPath(file).toLowerCase());
 
 function main(argv, { log = console.log, error = console.error } = {}) {
   let args;
@@ -319,8 +330,15 @@ function main(argv, { log = console.log, error = console.error } = {}) {
   const fixturesDir = resolve('fixtures');
   if (!args.sample) {
     for (const p of [outPath, reportPath, mdPath]) {
-      if (p && isInside(fixturesDir, p)) {
+      if (p && isInsideAnyCase(fixturesDir, p)) {
         error('Refusing to write ' + path.relative(root, p) + ': fixtures/ is committed to a public repository. Use --sample only for the synthetic sample.');
+        return 2;
+      }
+      // Inside the repository, only the git-ignored private/ folder is safe (compared exactly: a
+      // differently-cased "Private/" is not ignored on case-sensitive systems).
+      if (p && isInsideAnyCase(root, p) && !isInside(realPath(resolve('private')), realPath(p))) {
+        error('Refusing to write ' + path.relative(root, p) + ': it is inside this repository but outside private/, so git could publish it. ' +
+          'Write private outputs to private/ (the default) or to a folder outside the repository.');
         return 2;
       }
     }
@@ -354,7 +372,7 @@ function main(argv, { log = console.log, error = console.error } = {}) {
     const inputs = [path.relative(root, configPath)];
     for (const f of Array.isArray(config.files) ? config.files : []) if (f && typeof f.path === 'string') inputs.push(f.path);
     if (typeof config.rules === 'string' && config.rules) inputs.push(config.rules);
-    const outside = inputs.filter(p => !isInside(fixturesDir, resolve(p)));
+    const outside = inputs.filter(p => !isInside(realPath(fixturesDir), realPath(resolve(p)))); // symlinks resolved
     if (outside.length) {
       error('Refusing --sample: these inputs are not inside fixtures/: ' + outside.join(', ') + '. The synthetic sample is built only from files in fixtures/.');
       return 2;
@@ -392,7 +410,7 @@ function main(argv, { log = console.log, error = console.error } = {}) {
   if (!args.sample) {
     log('');
     log('PRIVATE: these outputs contain your household\'s financial data. Keep them in private/ (ignored by git); never commit, upload or share them.');
-    if (![outPath, reportPath].every(p => isInside(resolve('private'), p))) log('WARNING: some outputs are outside private/ and are NOT protected by .gitignore.');
+    if (![outPath, reportPath].every(p => isInside(realPath(resolve('private')), realPath(p)))) log('Note: some outputs are outside this repository. Keep that folder private: it is not covered by .gitignore.');
   }
   if (args.period) {
     try { printPeriod(dataset, args.period, log); } catch (err) {

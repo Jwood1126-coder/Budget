@@ -367,8 +367,9 @@
       } else if (f && f.hasPaycheck && f.allocationKnown && contributionsCents === null) {
         // The personal share of pay is known but not how much of it goes to joint, so what is left
         // for personal spending is unknown. Leaving it out, or swapping in a personal-spending
-        // estimate, would change the result only because a number is unknown (the estimate is
-        // not used when the transfer is known), so it stays unknown and blocks the remaining amount.
+        // estimate, would change the result only because a number is unknown (the estimate caps
+        // a known share; it does not stand in for an unknown one), so it stays unknown and blocks
+        // the remaining amount.
         entry.allocationCents = f.allocationCents;
         entry.unknownBecause = 'contribution';
         entry.note = 'Personal share of pay is known, but the transfer to joint is not, so personal spending cannot be worked out.';

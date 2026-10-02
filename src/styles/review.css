@@ -104,7 +104,7 @@
 .rv-form select, .rv-form input:not([type="checkbox"]):not([type="radio"]),
 .rv-decide input:not([type="checkbox"]), .rv-biz input[type="text"] {
   width: 100%; min-height: 40px; padding: 6px 10px; border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font: inherit;
+  border: 1px solid var(--control-border); background: var(--surface); color: var(--text); font: inherit;
 }
 .rv .rv-form .input-money input[type="text"] { padding-left: 24px; }
 .rv-form [aria-invalid="true"], .rv-decide [aria-invalid="true"], .rv-biz [aria-invalid="true"] { border-color: var(--bad); box-shadow: 0 0 0 1px var(--bad); }
@@ -122,7 +122,7 @@
 .rv-choice-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-2); }
 .rv-choice { position: relative; min-width: 0; }
 .rv-choice input { position: absolute; left: 12px; top: 13px; width: 18px; height: 18px; margin: 0; }
-.rv-choice label { display: block; height: 100%; padding: 10px 12px 10px 40px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); cursor: pointer; font-size: .9rem; }
+.rv-choice label { display: block; height: 100%; padding: 10px 12px 10px 40px; border: 1px solid var(--control-border); border-radius: var(--radius-sm); background: var(--surface); cursor: pointer; font-size: .9rem; }
 .rv-choice label small { display: block; margin-top: 2px; font-size: .8rem; color: var(--text-2); }
 .rv-choice input:checked + label { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand); background: var(--brand-soft); }
 .rv-choice input:focus-visible + label { outline: 3px solid var(--focus); outline-offset: 2px; }

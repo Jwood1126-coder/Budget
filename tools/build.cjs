@@ -5,8 +5,10 @@
  *
  *   node tools/build.cjs            -> private build if private/budget-data.json exists, else sample
  *   node tools/build.cjs --sample   -> always the synthetic sample (safe to share)
- *   node tools/build.cjs --empty    -> no embedded transactions (load files in the browser)
- *   node tools/build.cjs --out path -> write somewhere other than dist/index.html
+ *   node tools/build.cjs --empty    -> no embedded transactions (load files in the browser); embeds
+ *                                      private/household-profile.json when it exists, so it is private too
+ *   node tools/build.cjs --out path -> write somewhere other than dist/index.html. A build holding private
+ *                                      data may only go to dist/, private/ or outside this repository.
  *   node tools/build.cjs --sample --view spending --out dist/dev-spending/index.html
  *                                   -> developer build: only that view's real source, other views stubbed
  *
@@ -45,6 +47,27 @@ function safeJSON(value) {
     .replace(/</g, '\\u003c')
     .replace(/\u2028/g, '\\u2028')
     .replace(/\u2029/g, '\\u2029');
+}
+
+const isInside = (dir, file) => {
+  const rel = path.relative(dir, file);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+};
+// Symlinks resolved, for a file that may not exist yet (its nearest existing folder is resolved).
+function realPath(p) {
+  const tail = [];
+  let dir = path.resolve(p);
+  while (!fs.existsSync(dir) && path.dirname(dir) !== dir) { tail.unshift(path.basename(dir)); dir = path.dirname(dir); }
+  try { return path.join(fs.realpathSync(dir), ...tail); } catch { return path.resolve(p); }
+}
+/** Private builds stay out of the parts of the repository git can publish (dist/ and private/ are ignored). */
+function checkPrivateOut(out) {
+  const real = realPath(out);
+  // Case-insensitive for "is it in the repo" (macOS/Windows folders), exact for the ignored folders.
+  if (!isInside(realPath(ROOT).toLowerCase(), real.toLowerCase())) return;
+  if (['dist', 'private'].some(dir => isInside(realPath(path.join(ROOT, dir)), real))) return;
+  throw new Error('Refusing to write a private build to ' + path.relative(ROOT, out) + ': inside this repository only dist/ and private/ are ignored by git. ' +
+    'Use the default dist/index.html, a path in private/, or a folder outside the repository.');
 }
 
 function pickSources(args) {
@@ -92,7 +115,10 @@ function build(args) {
     datasetFile: sources.dataset ? path.relative(ROOT, sources.dataset) : null,
     profileFile: path.relative(ROOT, sources.profile),
     isSynthetic: sources.kind === 'sample',
+    // An --empty build can still embed the household's own profile (names, bills, debts).
+    profilePrivate: profile.isSynthetic !== true,
   };
+  const isPrivate = sources.kind === 'private' || buildInfo.profilePrivate;
 
   let html = fs.readFileSync(path.join(SRC, 'layout.html'), 'utf8');
   const replacements = {
@@ -109,11 +135,12 @@ function build(args) {
   html = html.replace(/__(STYLE|SCRIPT|DATA|PROFILE|BUILD)__/g, token => replacements[token]);
 
   const out = args.out ? path.resolve(args.out) : path.join(ROOT, 'dist/index.html');
+  if (isPrivate) checkPrivateOut(out);
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, html);
   const size = Buffer.byteLength(html);
   console.log(`Built ${path.relative(process.cwd(), out)} (${size.toLocaleString('en-US')} bytes) — ${sources.kind} data`);
-  if (sources.kind !== 'sample') {
+  if (isPrivate) {
     console.log('PRIVATE BUILD: this file embeds your household profile' + (dataset ? ' and every imported transaction' : '') + '.');
     console.log('Keep it on your own devices. Do not commit, upload or publish it.');
   }

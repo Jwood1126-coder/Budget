@@ -24,8 +24,10 @@
   const app = {
     build: null, profile: null, dataset: null, state: null,
     loadNotes: [], datasetError: null, dataSource: 'embedded',
-    storage: null, storageOk: true, undoStack: [], undoFocus: [], derived: null, renderTimer: null, loadedMeta: null, profileMeta: null,
+    storage: null, storageOk: true, saveError: null, savedText: undefined, otherTabFiles: false,
+    undoStack: [], undoFocus: [], undoLabels: [], derived: null, renderTimer: null, loadedMeta: null, profileMeta: null,
   };
+  const OTHER_TAB = 'This budget was changed in another tab or window, so that version is shown now.';
 
   // ------------------------------------------------------------------ storage
   function safeStorage() {
@@ -54,15 +56,23 @@
     app.build = readEmbedded('budget-build') || { kind: 'unknown' };
     let rawData = readEmbedded('budget-data');
     let profile = readEmbedded('budget-profile');
+    let unreadableData = null;
     if (app.storage) {
       try {
         const loaded = app.storage.getItem(LOADED_DATASET_KEY);
         if (loaded) {
-          const parsed = JSON.parse(loaded);
-          rawData = parsed.dataset;
           app.dataSource = 'browser';
-          app.loadedMeta = Object.fromEntries(Object.entries(parsed).filter(([k]) => k !== 'dataset'));
+          let parsed = null;
+          try { parsed = JSON.parse(loaded); } catch (err) { unreadableData = err.message; }
+          if (parsed && typeof parsed === 'object') {
+            rawData = parsed.dataset;
+            app.loadedMeta = Object.fromEntries(Object.entries(parsed).filter(([k]) => k !== 'dataset'));
+          } else if (!unreadableData) unreadableData = 'it is not a data file';
         }
+      } catch (err) {
+        app.loadNotes.push('Could not read files loaded earlier in this browser: ' + err.message);
+      }
+      try {
         const loadedProfile = app.storage.getItem(LOADED_PROFILE_KEY);
         if (loadedProfile) {
           const parsed = JSON.parse(loadedProfile);
@@ -75,6 +85,12 @@
       }
     }
     app.profile = profile;
+    if (unreadableData) {
+      // Same notice and Forget option as a stored file that fails validation (Data & privacy).
+      app.datasetError = 'The files loaded earlier in this browser are damaged and could not be read (' + unreadableData + ').';
+      app.dataset = emptyDataset();
+      return;
+    }
     try {
       app.dataset = rawData ? E.ledger.normalizeDataset(rawData) : emptyDataset();
     } catch (err) {
@@ -90,6 +106,43 @@
     app.state = result.state;
     app.loadNotes.push(...(result.notes || []));
     app.stateSource = result.source;
+    app.savedText = readSaved();
+  }
+
+  function savedKey() { return E.state.storageKey(app.state.datasetId); }
+  function lastRouteKey() { return 'household-budget:last-route:' + app.state.datasetId; }
+  function unreadableKey() { return savedKey() + ':unreadable'; }
+  /** The budget text currently stored for this data set (null if none or unreadable storage). */
+  function readSaved() {
+    if (!app.storage) return null;
+    try { return app.storage.getItem(savedKey()); } catch { return null; }
+  }
+  function readUnreadableCopy() {
+    if (!app.storage) return null;
+    try { return app.storage.getItem(unreadableKey()); } catch { return null; }
+  }
+  function forgetUnreadableCopy() {
+    try { if (app.storage) app.storage.removeItem(unreadableKey()); } catch { /* nothing to remove */ }
+    updateAlerts();
+  }
+
+  function storedState() {
+    return E.state.loadFromStorage(app.storage, app.dataset.datasetId, app.profile, app.dataset).state;
+  }
+  function clearUndo() { app.undoStack = []; app.undoFocus = []; app.undoLabels = []; }
+  /**
+   * Take the budget another tab saved. Every tab keeps the text it last read or wrote; when the
+   * stored text is different, another tab saved since, and writing this tab's copy would silently
+   * throw those changes away.
+   */
+  function adoptStored(message) {
+    app.state = storedState();
+    app.savedText = readSaved();
+    clearUndo(); // undoing would bring back values from before the other tab's save
+    derive();
+    toast(message || OTHER_TAB);
+    scheduleRender();
+    updateUndoButton();
   }
 
   function memoryStorage() {
@@ -97,15 +150,57 @@
     return { getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k), key: i => [...m.keys()][i] ?? null, get length() { return m.size; } };
   }
 
-  function save() {
-    const target = app.storage || memoryStorage();
-    const res = E.state.saveToStorage(target, app.state);
+  /**
+   * Save the budget. Returns { ok, error, conflict }. When another tab saved since this one last
+   * read or wrote, nothing is written: with `onConflict: 'return'` the caller decides, otherwise
+   * the other tab's budget is shown instead.
+   */
+  function save({ conflictMessage, onConflict = 'adopt', force = false } = {}) {
+    if (app.storage && app.savedText !== undefined && !force) {
+      const current = readSaved();
+      if (current !== null && current !== app.savedText) {
+        if (onConflict !== 'return') adoptStored(conflictMessage);
+        return { ok: false, conflict: true, error: null };
+      }
+    }
+    const res = E.state.saveToStorage(app.storage || memoryStorage(), app.state);
     app.storageOk = !!(app.storage && res.ok);
+    app.saveError = app.storageOk ? null : app.storage ? res.error : 'This browser is not letting the page store data (a private window, or storage turned off).';
+    if (app.storageOk) app.savedText = readSaved();
     const el = $('#saveStatus');
     if (el) {
       el.textContent = app.storageOk ? 'Saved in this browser' : 'Not saved — export a workbook to keep changes';
       el.classList.toggle('is-error', !app.storageOk);
     }
+    updateAlerts();
+    return { ok: app.storageOk, conflict: false, error: app.saveError };
+  }
+
+  /** Warnings shown above every view (and at every width) while they apply. */
+  function updateAlerts() {
+    const host = $('#appAlerts');
+    if (!host || !app.state) return;
+    const onData = UI.router.current().view === 'data';
+    const dataLink = onData ? '' : `<a class="btn btn-secondary btn-small" href="#/data">Go to Data &amp; privacy</a>`;
+    const parts = [];
+    if (!app.storageOk) {
+      parts.push(UI.c.notice({ tone: 'bad', title: 'Changes are not being saved in this browser',
+        body: esc(app.saveError || 'Browser storage is not available.') + ' Changes stay on this page until it is closed. To keep them, export a workbook from Data &amp; privacy.',
+        actions: dataLink }));
+    }
+    if (readUnreadableCopy() !== null) {
+      parts.push(UI.c.notice({ tone: 'warn', title: 'A budget saved in this browser could not be read',
+        body: 'It was damaged, so the starting values from the household profile are in use. The damaged copy is kept: you can download it or delete it in Data &amp; privacy.',
+        actions: dataLink }));
+    }
+    if (app.otherTabFiles) {
+      parts.push(UI.c.notice({ tone: 'info', title: 'Data files were changed in another tab',
+        body: 'Files were loaded or forgotten in another tab or window. Reload this page to use the same data.',
+        actions: '<button type="button" class="btn btn-secondary btn-small" data-action="reload-page">Reload this page</button>' }));
+    }
+    const html = parts.join('');
+    if (host.dataset.html !== html) { host.innerHTML = html; host.dataset.html = html; }
+    host.hidden = !html;
   }
 
   // ------------------------------------------------------------------ derived context
@@ -246,9 +341,11 @@
     if (fromHash) keepFocusOnNextRender = false;
     renderSeq += 1;
     document.documentElement.dataset.renderSeq = String(renderSeq); // lets tests wait for a real render
-    if (app.state.ui.lastRoute !== location.hash && location.hash) {
+    if (app.state.ui.lastRoute !== location.hash && location.hash.startsWith('#/') && location.hash.length <= E.state.LIMITS.route) {
+      // Remembered under its own key: rewriting the whole budget on every page change would make
+      // each open tab write over the others. The next real save carries it in the budget too.
       app.state = { ...app.state, ui: { ...app.state.ui, lastRoute: location.hash } };
-      save();
+      try { if (app.storage) app.storage.setItem(lastRouteKey(), location.hash); } catch { /* not essential */ }
     }
   }
 
@@ -266,7 +363,7 @@
     $('#householdName').textContent = householdName();
     const badge = app.dataset.isSynthetic ? 'Sample data — fictional household'
       : app.dataset.transactions.length ? (app.dataSource === 'browser' ? 'Private data loaded in this browser' : 'Private build — keep on your devices')
-        : 'No transactions loaded yet';
+        : app.build.profilePrivate ? 'Household profile built in — keep this file on your devices' : 'No transactions loaded yet';
     $('#dataBadge').textContent = badge;
     const months = ctx.months;
     $('#footerData').textContent = months.length
@@ -283,6 +380,23 @@
     rc.hidden = !count;
     rc.textContent = count > 99 ? '99+' : String(count);
     rc.setAttribute('aria-label', count + ' items to review');
+    updateUndoButton();
+    updateAlerts();
+  }
+
+  function updateUndoButton() {
+    const btn = $('#undoBtn');
+    if (!btn) return;
+    const label = app.undoLabels[app.undoLabels.length - 1];
+    btn.hidden = !app.undoStack.length;
+    const what = label ? label.split(/(?<=\.)\s/)[0] : 'the last change';
+    btn.setAttribute('aria-label', 'Undo: ' + what);
+    btn.title = 'Undo: ' + what + ' (Ctrl+Z)';
+  }
+
+  /** The toast wording when nothing could be stored: a change message must never claim it was saved. */
+  function unsavedMessage(message) {
+    return message.replace(/\bsaved\b/g, 'changed on this page only') + ' Not saved in this browser: see the warning at the top of the page.';
   }
 
   // ------------------------------------------------------------------ store
@@ -295,59 +409,122 @@
     const next = fn(prev);
     if (!next || next === prev) return false;
     next.meta = { ...next.meta, updatedAt: new Date().toISOString() };
-    if (undoable) {
-      const active = document.activeElement;
-      app.undoStack.push(prev);
-      app.undoFocus.push(active && active.id ? active.id : null);
-      if (app.undoStack.length > 30) { app.undoStack.shift(); app.undoFocus.shift(); }
-    }
+    const active = document.activeElement;
+    if (undoable) pushUndo(prev, message, active);
     app.state = next;
     if (rederive !== false && (prev.ledgerEdits !== next.ledgerEdits || prev.ui.whatIf !== next.ui.whatIf || rederive)) derive();
     else app.derived.memo = new Map();
-    save();
-    if (message) toast(message, { undo: undoable });
+    let res = save({ onConflict: 'return' });
+    let note = '';
+    if (res.conflict) {
+      // Another tab saved since this tab last read the budget. Make this change to that newer
+      // budget instead of writing this tab's older copy over it.
+      const theirs = storedState();
+      let rebased = null;
+      try { rebased = fn(theirs); } catch { rebased = null; }
+      clearUndo();
+      if (!rebased || rebased === theirs) {
+        app.state = theirs;
+        app.savedText = readSaved();
+        derive();
+        scheduleRender();
+        toast(OTHER_TAB + (rebased === theirs ? ' It already includes this change.' : ' Your last change could not be applied to it: make it again if you still want it.'));
+        updateUndoButton();
+        return true;
+      }
+      rebased.meta = { ...rebased.meta, updatedAt: new Date().toISOString() };
+      if (undoable) pushUndo(theirs, message, active);
+      app.state = rebased;
+      derive();
+      res = save({ force: true });
+      note = 'This budget was also changed in another tab or window; your change was made to that newer version. ';
+    }
     if (rerender) scheduleRender();
+    if (message || note) toast(note + (message ? (res.ok ? message : unsavedMessage(message)) : ''), { undo: undoable });
+    updateUndoButton();
     return true;
+  }
+
+  function pushUndo(prev, message, active) {
+    app.undoStack.push(prev);
+    app.undoFocus.push(active && active.id ? active.id : null);
+    app.undoLabels.push(message || '');
+    if (app.undoStack.length > 30) { app.undoStack.shift(); app.undoFocus.shift(); app.undoLabels.shift(); }
   }
 
   function undo() {
     const prev = app.undoStack.pop();
     const focusId = app.undoFocus.pop();
+    app.undoLabels.pop();
     if (!prev) return;
     app.state = prev;
     derive();
-    save();
-    toast('Change undone.');
-    // The toast's Undo button disappears, so return focus to where the change was made.
+    const res = save({ conflictMessage: OTHER_TAB + ' Nothing was undone.' });
+    if (res.conflict) return;
+    // The Undo button used may disappear, so return focus to where the change was made.
     pendingFocusId = focusId || 'page-title';
     scheduleRender();
+    toast(res.ok ? 'Change undone.' : unsavedMessage('Change undone.'));
+    updateUndoButton();
   }
 
   function replaceState(newState, message) {
-    app.undoStack.push(app.state);
-    app.undoFocus.push(null);
+    let prev = app.state;
     app.state = newState;
     derive();
-    save();
-    if (message) toast(message, { undo: true });
+    // Reset and import replace the whole budget on purpose, so a newer save from another tab is
+    // replaced too; Undo then brings back that newer version, not this tab's older copy.
+    let res = save({ onConflict: 'return' });
+    if (res.conflict) { prev = storedState(); clearUndo(); res = save({ force: true }); }
+    pushUndo(prev, message, null);
     scheduleRender({ focusHeading: true });
+    if (message) toast(res.ok ? message : unsavedMessage(message), { undo: true });
+    updateUndoButton();
   }
 
   // ------------------------------------------------------------------ feedback
+  function toastEl() {
+    let el = document.getElementById('toast');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'toast'; el.className = 'toast'; el.hidden = true;
+      el.setAttribute('role', 'status'); el.setAttribute('aria-live', 'polite');
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+  /** The toast lives in <body>, or in the open dialog while one is open (the modal's top layer would hide it otherwise). */
+  function parkToast() {
+    const el = document.getElementById('toast');
+    if (el && el.parentNode !== document.body) document.body.appendChild(el);
+  }
+
   function toast(message, { undo: canUndo = false, timeout = 6000 } = {}) {
-    const el = $('#toast');
+    const el = toastEl();
     const dlg = $('#dialog');
-    const host = dlg && dlg.open ? dlg : document.body; // the modal's top layer would hide it otherwise
+    const host = dlg && dlg.open ? dlg : document.body;
     if (el.parentNode !== host) host.appendChild(el);
     el.innerHTML = `<span>${esc(message)}</span>${canUndo ? '<button type="button" data-action="undo">Undo</button>' : ''}`;
     el.hidden = false;
+    toast.timeout = timeout;
+    armToastTimer();
+  }
+  function armToastTimer() {
     clearTimeout(toast.timer);
-    toast.timer = setTimeout(() => { el.hidden = true; }, timeout);
+    toast.timer = setTimeout(hideToast, toast.timeout || 6000);
+  }
+  function hideToast() {
+    const el = document.getElementById('toast');
+    if (!el) return;
+    // Never disappear while someone is pointing at it or has moved focus into it.
+    if (el.matches(':hover') || el.contains(document.activeElement)) { armToastTimer(); return; }
+    el.hidden = true;
   }
 
   /** Modal confirmation. Resolves true/false. */
   function confirmDialog({ title, body, confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger = false }) {
     const dlg = $('#dialog');
+    parkToast(); // replacing the dialog's content must not delete the toast
     dlg.innerHTML = `<form method="dialog" class="dialog-inner"><h2 id="dialogTitle">${esc(title)}</h2><div>${body}</div><div class="dialog-actions"><button class="btn btn-secondary" value="cancel">${esc(cancelLabel)}</button><button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" value="ok">${esc(confirmLabel)}</button></div></form>`;
     return new Promise(resolve => {
       dlg.addEventListener('close', () => resolve(dlg.returnValue === 'ok'), { once: true });
@@ -441,6 +618,7 @@
 
   const globalActions = {
     undo: () => undo(),
+    'reload-page': () => root.location.reload(),
     'set-scope': (ctx, el) => update(st => E.state.setPath(st, 'ui.scope', el.dataset.value || el.value), { undoable: false }),
     navigate: (ctx, el) => navigate(el.dataset.view, JSON.parse(el.dataset.params || '{}'), { keepFocus: el.dataset.keepFocus === '1' }),
     'dismiss-notice': (ctx, el) => update(st => ({ ...st, ui: { ...st.ui, dismissed: { ...st.ui.dismissed, [el.dataset.notice]: true } } }), { undoable: false }),
@@ -500,6 +678,15 @@
       }
     });
     document.addEventListener('keydown', ev => {
+      // Ctrl+Z / Cmd+Z undoes the last change, except in text fields, where the browser's own text undo applies.
+      const tg = ev.target;
+      const textField = tg.closest && (tg.closest('textarea, select, [contenteditable]') || (tg.matches('input') && !/^(radio|checkbox|button|submit|reset|range|color|file)$/.test(tg.type)));
+      if ((ev.ctrlKey || ev.metaKey) && !ev.altKey && !ev.shiftKey && (ev.key === 'z' || ev.key === 'Z')
+        && !textField && !($('#dialog') || {}).open && app.undoStack.length) {
+        ev.preventDefault();
+        undo();
+        return;
+      }
       if (ev.target.matches && ev.target.matches(DATE_INPUTS) && !NON_TYPING_KEYS.includes(ev.key)) ev.target.dataset.typed = '1';
       if (ev.key === 'Enter' && ev.target.matches('input[data-bind]')) {
         ev.preventDefault();
@@ -519,6 +706,18 @@
       const form = ev.target;
       if (form.dataset.action) { ev.preventDefault(); runAction(form, ev); }
     });
+    // Another tab saved this budget: show that version instead of later writing over it.
+    root.addEventListener('storage', ev => {
+      if (!app.storage || ev.storageArea !== app.storage) return;
+      if (ev.key === savedKey()) {
+        if (ev.newValue !== null && ev.newValue !== app.savedText) adoptStored();
+      } else if (ev.key === LOADED_DATASET_KEY || ev.key === LOADED_PROFILE_KEY || ev.key === null) {
+        app.otherTabFiles = true;
+        updateAlerts();
+      } else if (ev.key === unreadableKey()) updateAlerts();
+    });
+    const dlg = $('#dialog');
+    if (dlg) dlg.addEventListener('close', parkToast);
     root.addEventListener('hashchange', () => {
       if (location.hash && !location.hash.startsWith('#/')) return; // not a route
       render({ focusHeading: !keepFocusOnNextRender, fromHash: true });
@@ -681,17 +880,20 @@
     derive();
     installEvents();
     if (!location.hash) {
-      const last = app.state.ui.lastRoute;
-      history.replaceState(null, '', last && last.startsWith('#/') ? last : '#/overview');
+      let last = app.state.ui.lastRoute;
+      try { last = (app.storage && app.storage.getItem(lastRouteKey())) || last; } catch { /* use the saved budget's */ }
+      history.replaceState(null, '', last && last.startsWith('#/') && last.length <= E.state.LIMITS.route ? last : '#/overview');
     }
     save();
     render({ focusHeading: false });
     if (app.loadNotes.length && app.stateSource === 'legacy') {
       toast('Your earlier saved budget was upgraded. Details are in Data & privacy.', { timeout: 9000 });
+    } else if (readUnreadableCopy() !== null && app.loadNotes.some(n => /damaged/.test(n))) {
+      toast('The budget saved in this browser could not be read. See the warning at the top of the page.', { timeout: 9000 });
     }
   }
 
-  Object.assign(app, { update, undo, replaceState, render: scheduleRender, renderNow: render, navigate, toast, confirm: confirmDialog, readFile, download, useLoadedDataset, useLoadedProfile, forgetLoadedFiles, derive, save, keys: { LOADED_DATASET_KEY, LOADED_PROFILE_KEY } });
+  Object.assign(app, { update, undo, replaceState, readUnreadableCopy, forgetUnreadableCopy, unreadableKey, render: scheduleRender, renderNow: render, navigate, toast, confirm: confirmDialog, readFile, download, useLoadedDataset, useLoadedProfile, forgetLoadedFiles, derive, save, keys: { LOADED_DATASET_KEY, LOADED_PROFILE_KEY } });
   UI.app = app;
 
   // Test and debugging handle. Read-only snapshots; changes go through the UI or setState.

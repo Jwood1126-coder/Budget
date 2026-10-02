@@ -1085,6 +1085,7 @@ describe('tools/import.cjs', () => {
     const md = fs.readFileSync(path.join(root, 'private', 'import-report.md'), 'utf8');
     assert.match(md, /## Coverage and spending by month/);
     assert.match(md, /\| 2026-02 \| full \| full \|/);
+    assert.match(md.split('\n')[0], /^<!-- household-budget: PRIVATE import\sreport/, 'marker that the privacy check looks for');
   });
   test('--period accepts whole months and rejects malformed periods', () => {
     const root = tmpRoot();
@@ -1102,6 +1103,29 @@ describe('tools/import.cjs', () => {
     const res = run(root, ['--out', 'fixtures/leak.json']);
     assert.equal(res.status, 2);
     assert.match(res.stderr, /Refusing/);
+    assert.ok(!fs.existsSync(path.join(root, 'fixtures', 'leak.json')));
+  });
+  test('refuses private outputs inside the repository but outside private/', () => {
+    const root = tmpRoot();
+    writeConfig(root);
+    for (const out of ['leak.json', 'docs/leak.json', 'Fixtures/leak.json', 'Private/leak.json']) {
+      const res = run(root, ['--out', out]);
+      assert.equal(res.status, 2, out);
+      assert.match(res.stderr, /Refusing/, out);
+      assert.ok(!fs.existsSync(path.join(root, out)), out + ' not written');
+    }
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-out-'));
+    const ok = run(root, ['--out', path.join(outside, 'data.json')]);
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.match(ok.stdout, /outside this repository/);
+  });
+  test('a symlink into fixtures/ is treated as fixtures/', () => {
+    const root = tmpRoot();
+    writeConfig(root);
+    fs.mkdirSync(path.join(root, 'fixtures'), { recursive: true });
+    fs.symlinkSync(path.join(root, 'fixtures'), path.join(root, 'private', 'shortcut'));
+    const res = run(root, ['--out', 'private/shortcut/leak.json']);
+    assert.equal(res.status, 2);
     assert.ok(!fs.existsSync(path.join(root, 'fixtures', 'leak.json')));
   });
   test('--sample refuses a config that is not marked synthetic', () => {

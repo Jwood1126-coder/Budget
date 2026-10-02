@@ -433,7 +433,7 @@
     }
     if (kind === 'sample') return { title: 'Built-in sample', detail: 'A fictional household. Every name, merchant and amount is invented.', badge };
     if (kind === 'private') return { title: 'Private build', detail: 'Your data is inside this HTML file. Anyone who has the file can read it.', badge };
-    if (kind === 'empty') return { title: 'None yet', detail: 'This copy has no built-in transactions. Load your files below.', badge: '' };
+    if (kind === 'empty') return { title: 'None yet', detail: 'This copy has no built-in transactions. Load your files below.' + (ctx.build.profilePrivate ? ' Your household profile is built in, so treat this file as private.' : ''), badge: '' };
     return { title: 'Built into this page', detail: '', badge };
   }
 
@@ -521,7 +521,7 @@
     const notCounted = ctx.txns.filter(t => t.excluded).length;
     const facts = [
       ['Transactions', `<strong>${esc(src.title)}</strong> ${src.badge}${src.detail ? `<span class="dp-fact-sub">${esc(src.detail)}</span>` : ''}`],
-      ['Data set name', `<code class="dp-code">${esc(ds.datasetId)}</code><span class="dp-fact-sub">Your budget is saved in this browser under this name.</span>`],
+      ['Data set name', `<code class="dp-code">${esc(ds.datasetId)}</code><span class="dp-fact-sub">${ctx.app.storageOk ? 'Your budget is saved in this browser under this name.' : 'Your budget would be saved in this browser under this name, but nothing can be saved right now.'}</span>`],
       ['Dates', months.length ? `${esc(fmt.month(months[0]))} – ${esc(fmt.month(months[months.length - 1]))}${ds.generatedAt ? `<span class="dp-fact-sub">Prepared ${esc(fmt.date(ds.generatedAt))}</span>` : ''}` : 'No transactions yet'],
       ['Records', n ? `<a href="${esc(ctx.href('spending', { period: 'all', list: '1', kind: 'all', show: 'excluded' }))}">${esc(count(n, 'transaction'))}</a> in ${esc(count(ds.accounts.length, 'account'))}${notCounted ? `<span class="dp-fact-sub">${esc(fmt.number(notCounted))} of them ${notCounted === 1 ? 'is' : 'are'} not counted in totals (marked as a duplicate, reimbursed or business, or left out by a what-if setting). The list shows them struck through.</span>` : ''}` : `0 transactions${ds.accounts.length ? ' in ' + esc(count(ds.accounts.length, 'account')) : ''}`],
       ['Complete months', months.length ? `${months.length - partial.length} of ${months.length}${partial.length ? `<span class="dp-fact-sub">Incomplete: ${esc(monthList(partial))}. They are left out of usual-spending averages. <a href="${esc(ctx.href('review', { queue: 'coverage' }))}">See which accounts are missing days</a>.</span>` : '<span class="dp-fact-sub">Every month has every spending account covered.</span>'}` : '—'],
@@ -604,9 +604,13 @@
     const last = m.updatedAt && m.updatedAt !== EPOCH ? dayOf(m.updatedAt) : null;
     const status = ctx.app.storageOk
       ? `<p class="dp-status">${c.badge('Saved in this browser', 'good')}${last ? ` <span class="fine">Last change ${esc(fmt.date(last))}</span>` : ''}</p>`
-      : c.notice({ tone: 'bad', title: 'Changes are not being saved', body: 'This browser is not letting the page store anything (for example a private window, or blocked site data). Export a workbook before you close the page.' });
+      : c.notice({ tone: 'bad', title: 'Changes are not being saved', body: esc(ctx.app.saveError || 'This browser is not letting the page store anything (for example a private window, or blocked site data).') + ' Export a workbook before you close the page.' });
+    const damaged = ctx.app.readUnreadableCopy() !== null ? c.notice({ tone: 'warn', title: 'A budget saved in this browser could not be read',
+      body: 'It was damaged, so the budget now starts from the household profile. The damaged copy is kept separately: download it to keep it or to ask for help recovering values from it, or delete it once you no longer need it.',
+      actions: c.button('Download the damaged copy', { action: 'dp:unreadable-download', cls: 'btn-small', id: 'dp-unreadable-download' }) + ' '
+        + c.button('Delete the damaged copy…', { action: 'dp:unreadable-forget', variant: 'danger', cls: 'btn-small', id: 'dp-unreadable-forget' }) }) : '';
     const hasTxns = ctx.txns.length > 0;
-    const body = `${ctx.app.storageOk ? '' : status}<ul class="dp-points">
+    const body = `${damaged}${ctx.app.storageOk ? '' : status}<ul class="dp-points">
         <li><strong>${ctx.app.storageOk ? 'Saved automatically, in this browser only.' : 'Normally saved automatically, in this browser only.'}</strong> ${ctx.app.storageOk ? 'Every change is kept in this browser’s storage on this device.' : 'Right now nothing is kept: see above.'}</li>
         <li><strong>Not shared.</strong> Your partner’s browser and your other devices do not see these changes.</li>
         <li><strong>Easy to lose.</strong> Clearing browser data (history, cookies and site data) deletes them. Private or incognito windows may not keep them after closing.</li>
@@ -656,10 +660,12 @@
       <ul class="dp-points">
         <li><strong>No network requests.</strong> The page’s security policy blocks connections to any server, so nothing you load or type can be sent anywhere. No analytics, no tracking, no bank connection.</li>
         <li><strong>Files are read on this device.</strong> Files you choose to use are kept in this browser’s storage until you choose Forget.</li>
+        <li><strong>Browser storage is shared with other local pages.</strong> When this page is opened as a file, Chrome and Edge give every HTML file opened from this computer the same storage, so any other downloaded page opened in that browser could read what this page keeps there. Your saved budget is always kept there; files loaded on this page are too. For your transactions, prefer a private build (the data stays inside the file, not in browser storage), and only open HTML files you trust in the browser you use for this.${location.protocol === 'file:' ? ' <strong>This page is open as a file now.</strong>' : ''}</li>
         <li><strong>Anyone using this browser can see it.</strong> Nothing here is password-protected. Someone with this device and browser profile can open the page.</li>
         <li><strong>Private builds and downloads contain your financial data.</strong> That includes workbooks, CSV exports and backups. Keep them on your own devices. Do not commit them, upload them or post them anywhere.</li>
         <li><strong>The code repository is public.</strong> Only the fictional sample household belongs there. Your exports, profile, rules and private builds stay in the git-ignored <code>private/</code> folder.</li>
-        ${ctx.build && ctx.build.kind === 'private' ? '<li><strong>This page is a private build.</strong> Your transactions are inside this file: treat the file itself as private.</li>' : ''}
+        ${ctx.build && ctx.build.kind === 'private' ? '<li><strong>This page is a private build.</strong> Your transactions are inside this file: treat the file itself as private.</li>'
+          : ctx.build && ctx.build.profilePrivate ? '<li><strong>This page is a private build.</strong> Your household profile (names, bills, debts) is inside this file: treat the file itself as private.</li>' : ''}
       </ul>
       <h3 class="dp-sub">Sharing between the two of you</h3>
       <p>Nothing is set up for automatic sharing. These are options to decide on together; none of them is built.</p>
@@ -887,7 +893,7 @@
   function useDecision(ctx, { id, count: n, what, useId, useAction, cancelWhat, backHref, backLabel, error }) {
     const items = [
       `The page reloads and uses ${esc(count(n, 'transaction'))} ${esc(what)} instead of ${esc(builtInName(ctx))}${ctx.app.dataSource === 'browser' ? ' (and instead of the files loaded earlier)' : ''}.`,
-      'They are kept in this browser’s storage on this device only, until you choose Forget on the Data & privacy page.',
+      'They are kept in this browser’s storage on this device only, until you choose Forget on the Data & privacy page. When the page is opened as a file, Chrome and Edge let other HTML files opened from this computer read that storage: a private build keeps the data in the file instead.',
       esc(budgetNameStatus(ctx, id)),
     ];
     return c.card(`<ul class="dp-points">${items.map(x => `<li>${x}</li>`).join('')}</ul>
@@ -1575,6 +1581,24 @@
       try { JSON.parse(snap); } catch { json = false; }
       ctx.app.download(`household-budget-pre-upgrade-backup-${localDay()}.${json ? 'json' : 'txt'}`, snap, json ? 'application/json' : 'text/plain');
       ctx.app.toast('Pre-upgrade backup downloaded. Keep it private.');
+    },
+
+    'dp:unreadable-download': ctx => {
+      const text = ctx.app.readUnreadableCopy();
+      if (text === null) throw new E.ValidationError('There is no damaged copy in this browser any more.');
+      ctx.app.download(`household-budget-unreadable-copy-${localDay()}.txt`, text, 'text/plain');
+      ctx.app.toast('Damaged copy downloaded. Keep it private: it may contain household financial details.');
+    },
+    'dp:unreadable-forget': async ctx => {
+      const ok = await ctx.app.confirm({
+        title: 'Delete the damaged copy?',
+        body: '<p>The damaged budget kept in this browser is deleted. It cannot be read by this page, and this cannot be undone. Download it first if you might want it later.</p>',
+        confirmLabel: 'Delete the damaged copy', danger: true,
+      });
+      if (!ok) return;
+      ctx.app.forgetUnreadableCopy();
+      ctx.app.toast('Damaged copy deleted.');
+      ctx.app.render({ focusHeading: true });
     },
 
     'dp:print': ctx => {

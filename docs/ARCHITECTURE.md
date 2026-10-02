@@ -8,7 +8,12 @@ must follow it; when an implementation needs to deviate, update this document in
 committed. Real names, amounts, balances, employers, merchants that identify a person, due dates,
 locations and account numbers belong in the ignored `private/` folder. Tests and fixtures use
 fictional households ("Alex" and "Sam", "Partner A"/"Partner B") and invented amounts. Run
-`node tools/check-privacy.cjs` before committing.
+`node tools/check-privacy.cjs` before committing (the `.githooks/pre-commit` hook runs it with
+`--staged`, which scans the staged content the commit would publish). Besides the denylist it
+flags the markers private outputs carry: datasets and profiles whose `isSynthetic` is false,
+exported workbooks, private builds (build info `kind` private, or `profilePrivate` true) and the
+import report's private comment (the patterns are in `tools/check-privacy.cjs`). `tools/import.cjs` and `tools/build.cjs` refuse private outputs inside the
+repository outside `private/` (and `dist/` for builds).
 
 **Conventions used everywhere:** money is integer cents and `null` means *unknown*, never $0;
 months are `'YYYY-MM'`, dates `'YYYY-MM-DD'`; engine functions are pure (no DOM, storage or clock;
@@ -405,15 +410,32 @@ workbook 25,000,000 chars. Fields: `assumedPerMonthIfUnknown` 0–5, `aprPct` 0�
 on one device**; it is not shared between people or devices. Sharing uses workbook export/import
 (a JSON file the household passes between devices). `loadFromStorage` order:
 
-1. The v5 key. A damaged entry is copied to `'<key>:unreadable'` (the only write during a load)
-   and the profile defaults are used; it does not fall back to earlier keys.
+1. The v5 key. A damaged entry is copied to `'<key>:unreadable'` (the only kind of write during a
+   load) and the profile defaults are used; it does not fall back to earlier keys.
 2. Earlier-version keys `'sample-household-budget-v1-' + copyId`, **read only** (never written or
    deleted). `opts.legacyCopyIds` names them; by default a synthetic dataset (`isSynthetic` or id
    `'sample'`) reads `local-sample`, `hosted`, and a household dataset reads `local-private`,
    `hosted`, then downloaded copies `copy-*` found by scanning storage keys (newest first). The
    first readable copy is migrated; other copies are named in a note, not merged. A household never
-   inherits the sample page's invented budget (a note says one was found and left alone).
+   inherits the sample page's invented budget (a note says one was found and left alone). A
+   damaged earlier copy is skipped, and copied to `'<v5 key>:unreadable'` unless a copy is already
+   kept there.
 3. `defaults(profile, dataset)`.
+
+**In the page** (`src/ui/app.js`):
+
+- While a `'<key>:unreadable'` copy exists, every view shows a warning and Data & privacy offers
+  to download or delete it.
+- **Several tabs:** each tab remembers the budget text it last read or wrote. Before saving it
+  compares that with what is stored; if another tab saved since, it shows that tab's budget
+  instead of writing over it (and says the change was not saved). `storage` events from other
+  tabs update an open tab straight away, and clear its Undo history.
+- The last page shown is kept under `'household-budget:last-route:' + datasetId`, not by
+  rewriting the budget on every page change (which would make open tabs overwrite each other).
+- When saving fails or storage is unavailable, every view shows a warning with the browser's
+  reason, and change messages say "changed on this page only" instead of "saved".
+- Undo: the last 30 undoable changes, through the toast's Undo, a persistent Undo button in the
+  top bar, or Ctrl+Z / Cmd+Z outside text fields, until the page is closed.
 
 ## 8. Module APIs
 
@@ -500,7 +522,8 @@ Rules, in the order they are applied per category:
 | seasonal, last-year month not covered | `seasonal_unknown` | diff vs trailing average reported, not judged |
 | no usable baseline month | `no_history` | |
 | `usableCount < minMonths` | `limited_history` | diff reported, not flagged |
-| activity in exactly **1** of ≥ `IRREGULAR_MIN_MONTHS` (3) usable baseline months (an annual bill such as home insurance, an occasional purchase) | `irregular` | `diffCents`/`pct` null, `averageCents` still reported, `irregular: { month, cents }` names that month; never marked higher or lower, in the month it is paid or in the months it is not. 0 active months → `new`; ≥ 2 → the rows below |
+| activity in exactly **1** of ≥ `IRREGULAR_MIN_MONTHS` (3) usable baseline months (an annual bill such as home insurance, an occasional purchase), and the selected month is $0 or close to that one occurrence | `irregular` | `diffCents`/`pct` null, `averageCents` still reported, `irregular: { month, cents }` names that month; never marked higher or lower, in the month it is paid or in the months it is not. A selected month far from the single occurrence falls through to the rows below. 0 active months → `new`, unless the yearly-bill check matches; ≥ 2 → the rows below |
+| no activity in the window, but the same category 11–13 months earlier was a full month holding 50–200% of this month's amount (`yearlyMatch`) | `irregular` | a yearly bill paid again, not something new; `irregular` names last year's month |
 | average is $0 | `new` (or `typical` when actual is also $0) | a refund-only month with a $0 baseline is also `new` |
 | average < 0 | `refund_baseline` | no percentage |
 | otherwise | `higher` / `lower` / `typical` | flagged only when \|diff\| ≥ minDiffCents **and** ≥ minPct% of the basis |
@@ -518,7 +541,10 @@ rounded up to the limit.
   ones (the same months `usual()` uses for the following month); it does not search further back.
   `adjustedAvgCents` leaves out planning-excluded rows; `excludedCents` is a total, not an average.
   `endMonth` defaults to `ledger.latestCompleteMonth`; returns `{}` when there is none.
-- `planVsActual(plan, txns, dataset, { month, window?, scope? }) -> [{ category, kind: 'target'|'bill', label, plannedCents|null, actualCents, usualCents|null, adjustedUsualCents|null, diffToPlanCents|null, status: 'over'|'under'|'on_plan'|'no_plan'|'partial_month', sources: [{ kind, id, label, plannedCents }] }]`
+- `planVsActual(plan, txns, dataset, { month, window?, scope? }) -> [{ category, kind: 'target'|'bill', label, plannedCents|null, actualCents, usualCents|null, adjustedUsualCents|null, diffToPlanCents|null, status: 'over'|'under'|'on_plan'|'no_plan'|'partial_month'|'irregular', sources: [{ kind, id, label, plannedCents }] }]`
+  - `irregular`: nothing was spent this month and the category's comparison signal is `irregular`
+    (a yearly or occasional bill that is not due); the Budget view shows "Not due this month"
+    instead of "under plan".
   - Sources: `plan.targets` plus **joint-funded** bills that have a category, are not `planned`
     and are active that month (start/end months). Bills with a null category (debt payments) are skipped.
   - Targets and bills sharing a category are **merged into one row**: `kind` is `'target'` if any
@@ -671,7 +697,10 @@ follow the anchor exactly. Holidays are not modelled.
 ### BudgetEngine.plan
 - `monthly(plan, { scope: 'joint'|'household' = 'joint', month?: 'YYYY-MM', timing? }) -> PlanSummary`
   (timing defaults to `plan.settings.incomeTiming`, then conservative; `actual` without a month
-  falls back to conservative with an assumption)
+  falls back to conservative with an assumption). The UI always passes a month: the **plan
+  reference month** is the forecast start (the month after the latest complete month), so bills
+  and incomes with start/end months, and real paydays, are judged for one stated month on
+  Overview, Budget and in "what this change does".
 ```js
 PlanSummary = {
   scope, timing, requestedTiming, month,
@@ -683,7 +712,8 @@ PlanSummary = {
            excludedUnknownFunding: [{ id, label, cents }], excludedPersonal: [{ id, label, cents, fundedFrom }] },
   savings: { totalCents, lines: [{ id, label, cents|null, spendAtTarget }] },
   personal: [{ personId, name, allocationCents|null, billsCents, contributionsCents|null, spendingCents|null,
-               leftoverCents|null, shortfallCents, source: 'allocation'|'estimate'|'missing'|'none',
+               leftoverCents|null, keptCents?, shortfallCents,
+               source: 'allocation'|'allocation_estimate'|'estimate'|'missing'|'none',
                unknownBecause: null|'contribution', note }],
   personalSpendingCents,              // household scope only (0 in joint scope)
   outflowCents,                       // targets + bills (+ personal spending in household scope)
@@ -708,12 +738,17 @@ PlanSummary = {
   stream but no paycheck has unknown pay (missing id `'pay:<personId>'`).
 - **Personal spending** (per person, both scopes; added to outflow only in household scope):
   `allocation = Σ(net − joint)` over their paychecks; `leftover = allocation − personal bills −
-  their own contribution transfers`; `spendingCents = max(0, leftover)` (the transfers are
-  subtracted because they already pay joint outflows). A negative leftover becomes
-  `shortfallCents` with a warning to check whether other personal money covers it (warnings show
-  in both scopes). A known allocation is counted in full, so a personal bill with an unknown amount
-  sits inside personal spending, and a separate `personalSpending` estimate is not added on top
-  (assumption).
+  their own contribution transfers` (the transfers are subtracted because they already pay joint
+  outflows). With a `personalSpending` estimate for that person, `spendingCents` = the estimate
+  (`source: 'allocation_estimate'`) and `keptCents = max(0, leftover) − min(estimate, max(0, leftover))`
+  stays in their account, so it counts toward what remains in household scope (paying off a
+  personal loan then frees money visibly). An estimate above the leftover is used as entered,
+  with a warning that the difference comes from other personal money. Without an estimate,
+  `spendingCents = max(0, leftover)` (`source: 'allocation'`) and household scope adds the
+  assumption that all of it is spent. Either way the leftover is counted once, never also as
+  money left over. A negative leftover becomes `shortfallCents` with a warning to check whether
+  other personal money covers it (warnings show in both scopes). A personal bill with an unknown
+  amount sits inside the leftover (noted on the entry).
 - **Unknown contribution (household scope):** when a person's take-home and joint portion are
   known but their transfer to joint is unknown (e.g. an `income_change` that blanks it), their
   personal spending cannot be worked out. It is neither dropped nor replaced by the estimate
@@ -757,8 +792,10 @@ non-numeric rates throw `ValidationError`; null inputs give "not available" resu
   — months counted from `fromMonth` through `expiresMonth` inclusive; an end month before
   `fromMonth`, or a missing balance, end month, payment or start month gives `needs_info`;
   deferred interest absent/null is treated as unknown and its note is included.
-- `summary(debt, bill, { month }?) -> { lines: [{ key, label, value, status }], warnings: string[], promo|null, lowerBound }`
-  — `month` is the promotion check's starting month (without it the check needs info); a
+- `summary(debt, bill, { month, people }?) -> { lines: [{ key, label, value, status }], warnings: string[], promo|null, lowerBound }`
+  — `month` is the promotion check's starting month (without it the check needs info); `people`
+  (plan people) names who pays a personally funded bill ("Alex's personal account"); a payment
+  bill that is still `planned` has status `planned`; a
   month-count illustration is added only when the APR is confirmed and recorded, never a date;
   escrow is asked for housing debts.
 
@@ -769,15 +806,17 @@ Projection = {
   scenarioId, scenarioName, scope, timing, startMonth, months, endMonth, startBalanceCents|null,
   rows: [{ month, incomeCents|null, incomeKnownCents, incomeLowerBoundCents|null,
            incomeLines: [{ id, label, personId, count, cents|null, perPaycheckCents, basis, assumption }],
-           spendingCents, billsCents, oneTimeCents, outCents,
+           spendingCents|null, spendingKnownCents, billsCents, oneTimeCents, outCents|null, outKnownCents,
            eventLines: [{ id, label, type, direction, category, cents|null, signedCents|null, goalId, fromGoalCents }],
            netCents|null, netUnknownReason: null|'income'|'personal_spending',
            contributionsCents, goalDrawsCents, unassignedCents|null,
            cumulativeCents|null, balanceCents|null, returnCents|null,
            goals: { [goalId]: cents|null }, warnings: string[] }],
-  summary: { totalIncomeCents|null, totalIncomeKnownCents, totalOutCents, totalContributionsCents, totalReturnCents,
+  summary: { totalIncomeCents|null, totalIncomeKnownCents, totalOutCents|null, totalOutKnownCents, totalContributionsCents, totalReturnCents,
              endCumulativeCents|null, endBalanceCents|null,
-             lowest: { month, cumulativeCents|null, balanceCents|null }, negativeMonths: string[],
+             lowest: { month, cumulativeCents|null, balanceCents|null },
+             lowestBalance: { month, balanceCents }|null,   // lowest known projected balance
+             negativeMonths: string[],
              firstNegativeBalanceMonth|null, contributionShortfallMonths: string[], unknownNetMonths: string[] },
   goals: [{ id, label, targetCents|null, targetMonth|null, spendAtTarget, projectedCents|null, atLeastCents,
             status: 'funded'|'short'|'no_target'|'unknown_start'|'missing_amount', shortfallCents|null,
@@ -797,7 +836,10 @@ Projection = {
   unknown); `netCents = incomeCents − outCents`, or null with `netUnknownReason` `'income'`, or
   `'personal_spending'` when (household scope) the month's plan summary cannot work out someone's
   personal spending because their transfer to joint is unknown. Cumulative and balance are then
-  null too, so an unknown never makes a scenario look better than the baseline.
+  null too, so an unknown never makes a scenario look better than the baseline. In household scope
+  an unknown personal spending also makes `spendingCents` and `outCents` null (`*KnownCents` keep
+  the known parts, and `summary.totalOutCents` is null when any month's outflow is unknown), so a
+  scenario that blanks someone's pay cannot show lower spending than the baseline.
 - **`unassignedCents = net − contributions + goalDraws`**: contributions earmark cash; money drawn
   from goals was set aside in earlier months, so it is added back (otherwise every goal-spend
   month would wrongly appear in `contributionShortfallMonths`). `negativeMonths` still uses
@@ -830,8 +872,11 @@ Projection = {
   balance = start + cumulative). Positive rate with an unknown balance → `returnCents` null, nothing
   applied. Labelled hypothetical.
 - **Balance:** `balanceCents` is null unless `plan.balances.jointCashCents` is known (the
-  projection then reports cumulative change only). In household scope the balance starts from
-  joint cash only (assumption: money in personal accounts is not included).
+  projection then reports cumulative change only). A balance dated `asOf` applies from the month
+  after that date (it already includes that month's activity); earlier projected months have a
+  null balance, with an assumption saying so. In household scope the balance starts from
+  joint cash only (assumption: money in personal accounts is not included). `compare` adds the
+  rows `lowestBalance` and `lowestBalanceMonth`.
 - **Validation:** only `startMonth`, `months`, `scope`, `now`, plan/scenario shape, `incomeTiming`
   and rates outside (−100, 100] throw. Negative or non-integer event, plan and goal amounts are
   treated as missing. Events with no date are missing; events of an unknown type, with an invalid
@@ -903,7 +948,8 @@ Projection = {
   (its budget lived in that browser's storage).
 - Scenario operations (pure, return a new State; optional `{ now }` updates `updatedAt`):
   `addScenario(state, name, { copyFrom, id, description, now })` (copied events get new ids),
-  `renameScenario`, `deleteScenario` (alias `removeScenario`; the baseline cannot be deleted),
+  `renameScenario` (names must be unique, ignoring case and surrounding spaces, so side-by-side
+  columns can be told apart; a clash throws `ValidationError` on field `name`), `deleteScenario` (alias `removeScenario`; the baseline cannot be deleted),
   `addEvent(state, scenarioId, event)` (not on the baseline), `updateEvent(state, scenarioId, eventId, patch)`
   (`undefined` in the patch removes an optional field), `removeEvent`, `validateEvent(event)`.
 - Plan list items: `addItem(state, 'incomes'|'bills'|'savings'|'debts', item, { now }?)`,
@@ -942,6 +988,20 @@ Projection = {
 | `#/data` | load files, export/import workbook, storage & privacy explanation, reset |
 
 `period` is `YYYY-MM` or a range `YYYY-MM..YYYY-MM`. Browser Back/Forward move through drilldown levels.
+
+UI rules that cut across views:
+
+- **What-if switches are a Spending-view lens.** `ui.whatIf` is saved, but the UI builds two
+  effective ledgers: the real one (no what-if) for Overview, Budget, Forecast, Review and Data, and
+  the what-if one only for Spending, which shows a notice while a switch is on. Actual totals
+  elsewhere never change because of an unconfirmed reimbursement or business flag.
+- **Plan reference month:** every plan summary shown in the UI uses `month = forecastStart`, and
+  the subtitle names the pay-timing basis (actual paydays, typical month or average).
+- **Parental-leave template (Forecast):** chosen per person; it adds an `income_change` event for
+  every paycheck and contribution stream of that person over the leave months, using the amounts
+  entered; a blank amount stays unknown (listed as missing), so leave never looks free.
+- Saved scenarios, edits and plan values go through `state` validation; typed month and date
+  inputs commit on Enter or leaving the field, not on every keystroke.
 
 ## 10. Known limitations
 

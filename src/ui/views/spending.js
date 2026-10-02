@@ -1376,19 +1376,25 @@
     if (el && rootEl.contains(el)) el.focus({ preventScroll: true });
   }
 
-  function go(ctx, over) {
+  function go(ctx, over, { replace = false } = {}) {
     const P = readParams(ctx);
-    ctx.app.navigate('spending', makeLinks(ctx, P).params(over), { keepFocus: true });
+    ctx.app.navigate('spending', makeLinks(ctx, P).params(over), { keepFocus: true, replace });
   }
+
+  // The history entry the last filter change made. Arrowing through a closed select changes it
+  // once per option: those steps replace that entry, so one Back returns to before the filter.
+  let lastFilterStep = null;
 
   const actions = {
     /** Period, account and kind selects. */
     'spending:filter': (ctx, el) => {
       const param = el.dataset.param;
       const value = el.value;
-      if (param === 'period') go(ctx, { period: value, txn: '' });
-      else if (param === 'acct') go(ctx, value.startsWith('scope:') ? { acct: '', scope: value.slice(6), txn: '' } : { acct: value, scope: '', txn: '' });
-      else if (param === 'kind') go(ctx, { kind: value, cat: '', merchant: '', list: '', txn: '' });
+      const replace = !!lastFilterStep && lastFilterStep.param === param && lastFilterStep.hash === location.hash;
+      if (param === 'period') go(ctx, { period: value, txn: '' }, { replace });
+      else if (param === 'acct') go(ctx, value.startsWith('scope:') ? { acct: '', scope: value.slice(6), txn: '' } : { acct: value, scope: '', txn: '' }, { replace });
+      else if (param === 'kind') go(ctx, { kind: value, cat: '', merchant: '', list: '', txn: '' }, { replace });
+      lastFilterStep = { param, hash: location.hash };
     },
     /** Search form (submit only: clicks inside the form also reach form-level actions). */
     'spending:search': (ctx, form, ev) => {

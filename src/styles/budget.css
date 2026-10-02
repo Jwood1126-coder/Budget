@@ -118,7 +118,7 @@
 .bud-tt .bt-group th { padding: 6px 10px; background: var(--surface-3); font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text-2); }
 .bud-tt .bt-target .field { gap: 2px; }
 .bud-tt .bt-target input { min-height: 36px; padding-top: 6px; padding-bottom: 6px; font-weight: 650; border-color: var(--brand); }
-.bud-tt .is-unset .bt-target input { border-style: dashed; border-color: var(--border-strong); font-weight: 400; }
+.bud-tt .is-unset .bt-target input { border-style: dashed; border-color: var(--control-border); font-weight: 400; }
 .bt-note { margin: 2px 0 0; font-size: .74rem; }
 .bt-note:empty { display: none; }
 .bud-status { display: block; margin-top: 4px; }

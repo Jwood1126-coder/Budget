@@ -24,6 +24,10 @@
 *budget-copy*.html
 *budget-private*.html
 *workbook*.json
+household-budget-workbook-*
+household-budget-transactions-*
+household-budget-pre-upgrade-backup-*
+household-budget-unreadable-copy-*
 Household-budget*.html
 
 # Bank and statement exports anywhere in the tree (the synthetic sample is the only exception)

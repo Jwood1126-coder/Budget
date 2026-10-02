@@ -2480,7 +2480,14 @@
       const f = found[i];
       let parsed;
       try { parsed = JSON.parse(f.text); } catch (err) {
-        notes.push('The earlier version’s saved budget (copy "' + f.copyId + '") is damaged and was skipped. It was left unchanged.');
+        // Copied where the page offers damaged budgets for download (the earlier key stays untouched).
+        let kept = false;
+        try {
+          const backup = key + ':unreadable';
+          if (storage.getItem(backup) === null) { storage.setItem(backup, f.text); kept = true; }
+        } catch (e) { /* the note still says it was skipped */ }
+        notes.push('The earlier version’s saved budget (copy "' + f.copyId + '") is damaged and was skipped. It was left unchanged' +
+          (kept ? ', and a copy was kept under "' + key + ':unreadable".' : '.'));
         continue;
       }
       if (!isLegacyWrapper(parsed) && legacyVersionOf(parsed) === null) {

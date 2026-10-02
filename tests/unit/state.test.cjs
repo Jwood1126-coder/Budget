@@ -1691,6 +1691,19 @@ test('storage: a damaged earlier copy is skipped and the next one used', () => {
   assert.ok(hasNote(r.notes, /copy "hosted"/));
   assert.ok(hasNote(r.notes, /Other earlier-version copies were also found \("copy-1"\)/));
   assert.equal(storage.getItem('sample-household-budget-v1-local-sample'), '{not json');
+  assert.equal(storage.getItem('household-budget:v5:sample:unreadable'), '{not json', 'a copy is kept where the page offers it for download');
+  assert.ok(hasNote(r.notes, /a copy was kept under "household-budget:v5:sample:unreadable"/));
+});
+
+test('storage: a damaged earlier copy never replaces an unreadable copy already kept', () => {
+  const storage = memoryStorage({
+    'sample-household-budget-v1-local-sample': '{not json',
+    'household-budget:v5:sample:unreadable': '{older damage'
+  });
+  const r = S.loadFromStorage(storage, 'sample', profile(), DS, { legacyCopyIds: ['local-sample'] });
+  assert.equal(r.source, 'none');
+  assert.equal(storage.getItem('household-budget:v5:sample:unreadable'), '{older damage');
+  assert.ok(hasNote(r.notes, /is damaged and was skipped\. It was left unchanged\.$/));
 });
 
 test('storage: a damaged v5 entry gives defaults, a note and a backup copy', () => {

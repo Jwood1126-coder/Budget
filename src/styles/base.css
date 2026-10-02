@@ -10,9 +10,10 @@
   --surface-3: #eef1f6;
   --border: #dde2ea;
   --border-strong: #c4ccd8;
+  --control-border: #7d8697;  /* edges of inputs and choices: 3:1 or more on every surface */
   --text: #121826;
   --text-2: #4a5466;
-  --text-3: #6b7486;
+  --text-3: #626a7c;          /* small print: 4.5:1 or more on every surface, soft tints included */
   --brand: #2346c8;
   --brand-strong: #1a37a3;
   --brand-soft: #e8edfc;
@@ -27,7 +28,7 @@
   --info-soft: #e6f0fb;
   --series-1: #2a78d6;
   --series-2: #eb6834;
-  --series-3: #1baf7a;
+  --series-3: #148a5f;        /* a line on white needs 3:1 */
   --grid: #e6e9ef;
   --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .08);
   --radius: 12px;
@@ -47,6 +48,7 @@
     --surface-3: #2a2d34;
     --border: #33363e;
     --border-strong: #464a54;
+    --control-border: #737a87;
     --text: #f2f4f8;
     --text-2: #c3c8d2;
     --text-3: #9aa1ae;
@@ -72,7 +74,11 @@
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; scroll-padding-top: calc(var(--topbar-h) + 8px); }
+@media (max-width: 899px) {
+  /* Keyboard focus and scrolled-to targets stay clear of the fixed bottom tab bar. */
+  html { scroll-padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) + 8px); }
+}
 body {
   margin: 0;
   font-family: var(--font);
@@ -113,7 +119,12 @@ small { color: var(--text-3); }
 .topbar-actions { display: flex; align-items: center; gap: var(--space-4); }
 .save-status { font-size: .8rem; color: var(--text-3); }
 .save-status.is-error { color: var(--bad); font-weight: 600; }
-.topbar-data { display: none; font-size: .9rem; font-weight: 600; text-decoration: none; }
+.topbar-data { display: none; font-size: .9rem; font-weight: 600; text-decoration: none; padding: 10px 4px; }
+.topbar-data[aria-current="page"] { color: var(--text); text-decoration: underline; text-decoration-thickness: 3px; text-decoration-color: var(--brand); text-underline-offset: 6px; }
+.topbar-undo { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 4px 12px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-size: .85rem; font-weight: 650; cursor: pointer; }
+.topbar-undo svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.topbar-undo:hover { background: var(--surface-3); }
+.app-alerts { display: grid; gap: var(--space-3); margin-bottom: var(--space-4); }
 
 .shell { display: grid; grid-template-columns: var(--nav-width) minmax(0, 1fr); min-height: calc(100vh - var(--topbar-h)); background: linear-gradient(to right, var(--surface) calc(var(--nav-width) - 1px), var(--border) calc(var(--nav-width) - 1px), var(--border) var(--nav-width), transparent var(--nav-width)); }
 .mainnav {
@@ -135,7 +146,7 @@ small { color: var(--text-3); }
 .mainnav .nav-hint { font-size: .78rem; color: var(--text-3); }
 .mainnav a:hover { background: var(--surface-3); color: var(--text); }
 .mainnav a[aria-current="page"] { background: var(--brand-soft); color: var(--brand); }
-.mainnav a[aria-current="page"] .nav-hint { color: var(--brand); opacity: .85; }
+.mainnav a[aria-current="page"] .nav-hint { color: var(--brand); }
 .nav-secondary { margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--border); }
 .nav-count { min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); font-size: .72rem; font-weight: 700; text-align: center; line-height: 18px; }
 .nav-note { margin: var(--space-5) var(--space-3) 0; font-size: .78rem; color: var(--text-3); }
@@ -268,7 +279,7 @@ main { padding: var(--space-6) var(--space-6) var(--space-7); max-width: 1240px;
 .field label { font-size: .86rem; font-weight: 650; color: var(--text); display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .field input, .field select, .field textarea, .input-plain {
   width: 100%; min-height: 42px; padding: 8px 10px; border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font: inherit;
+  border: 1px solid var(--control-border); background: var(--surface); color: var(--text); font: inherit;
 }
 .field input::placeholder { color: var(--text-3); }
 .input-money { position: relative; }
@@ -382,7 +393,7 @@ main { padding: var(--space-6) var(--space-6) var(--space-7); max-width: 1240px;
 /* ------------------------------------------------------------- shared view pieces */
 .inline-form { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(200px, 1.4fr); gap: var(--space-3); align-items: end; padding: var(--space-3); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .inline-form .field label { font-size: .8rem; }
-.inline-form select, .inline-form input:not([type="checkbox"]) { min-height: 38px; padding: 6px 8px; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font: inherit; width: 100%; }
+.inline-form select, .inline-form input:not([type="checkbox"]) { min-height: 38px; padding: 6px 8px; border-radius: var(--radius-sm); border: 1px solid var(--control-border); background: var(--surface); color: var(--text); font: inherit; width: 100%; }
 .inline-form-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; }
 @media (max-width: 599px) { .inline-form { grid-template-columns: minmax(0, 1fr); } }
 /* 16px form text on phones: smaller text makes iOS Safari zoom the page when a field is focused. */
@@ -393,3 +404,14 @@ main { padding: var(--space-6) var(--space-6) var(--space-7); max-width: 1240px;
 .section-nav a[aria-current="page"], .section-nav a[aria-current="true"] { background: var(--brand); border-color: var(--brand); color: #fff; }
 @media (prefers-color-scheme: dark) { :root:where(:not([data-theme="light"])) .section-nav a[aria-current] { color: #0b1020; } }
 @media (max-width: 599px) { .section-nav { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; } .section-nav a { white-space: nowrap; } }
+
+/* ------------------------------------------------------------- touch targets
+   On phones and touch screens every primary or destructive control is at least 40px tall. */
+@media (max-width: 599px), (pointer: coarse) {
+  .btn-small { min-height: 40px; padding: 8px 12px; }
+  .segmented label { min-height: 40px; display: inline-flex; align-items: center; }
+  .chart-table summary, .bud-sum-details > summary { padding-block: 10px; } /* stays display: list-item, keeping its marker */
+  .rv-open, .rv-side > a { display: inline-flex; align-items: center; min-height: 40px; }
+  .bt-remove { min-height: 40px; padding: 8px 0; }
+  .topbar-undo { min-height: 40px; }
+}
