@@ -32,6 +32,18 @@ async function createScenario(page, name, copyFrom = '') {
   return id;
 }
 
+/**
+ * Move the caret to the year part of a focused month input (its position depends on the
+ * browser's locale): ArrowUp changes the part that has the caret; if the year did not change,
+ * the year is the next part.
+ */
+async function toYearPart(page, sel) {
+  const before = await page.inputValue(sel);
+  await page.keyboard.press('ArrowUp');
+  const after = await page.inputValue(sel);
+  if (after.slice(0, 4) === before.slice(0, 4)) await page.keyboard.press('ArrowRight');
+}
+
 async function eventsOf(page, id) {
   return page.evaluate(sid => window.HouseholdBudget.getState().scenarios.find(s => s.id === sid).events, id);
 }
@@ -130,15 +142,27 @@ module.exports = [
       assert.equal(ev.jointPerPaycheckCents, 50000);
       assert.equal(ev.netPerPaycheckCents, 60000);
       await page.waitForFunction(() => document.querySelector('#fc-m-2027-02')?.dataset.incomeCents !== document.querySelector('#fc-m-2027-01')?.dataset.incomeCents);
+      // Forecasts count actual paydays: each of Alex's paychecks in a leave month brings $500 to
+      // joint instead of $1,880. Compare every month with the same scenario without the change.
+      const expected = await page.evaluate(sid => {
+        const st = window.HouseholdBudget.getState();
+        const E = window.HouseholdBudget.engine;
+        const sc = st.scenarios.find(s => s.id === sid);
+        const ctx = window.HouseholdBudget.context();
+        const without = E.forecast.project(st.plan, { ...sc, events: [] }, { startMonth: ctx.forecastStart, months: 24, scope: 'joint' });
+        const alex = st.plan.incomes.find(i => i.id === 'p1-pay');
+        return without.rows.map(r => ({ month: r.month, income: r.incomeCents, checks: E.schedule.count(alex, r.month, 'actual').count }));
+      }, id);
+      let leaveMonths = 0;
+      for (const row of expected) {
+        const shown = await monthAttr(page, row.month, 'income-cents');
+        const onLeave = row.month >= '2027-02' && row.month <= '2027-04';
+        if (onLeave) leaveMonths++;
+        assert.equal(shown, onLeave ? row.income - row.checks * (188000 - 50000) : row.income, `income in ${row.month}`);
+      }
+      assert.equal(leaveMonths, 3, 'three months of leave inside the forecast');
+      assert.ok(expected.some(r => r.month >= '2027-02' && r.month <= '2027-04' && r.checks === 3), 'a three-paycheck month falls inside the leave');
       const jan = await monthAttr(page, '2027-01', 'income-cents');
-      const feb = await monthAttr(page, '2027-02', 'income-cents');
-      const apr = await monthAttr(page, '2027-04', 'income-cents');
-      const may = await monthAttr(page, '2027-05', 'income-cents');
-      // Typical-month timing: 2 of Alex's paychecks, each $1,880 to joint normally, $500 on leave.
-      assert.equal(jan - feb, 2 * (188000 - 50000), 'income is lower by the leave difference');
-      assert.equal(apr, feb, 'still on leave in April');
-      assert.equal(may, jan, 'back to normal after the last month of leave');
-      assert.equal(await monthAttr(page, '2026-12', 'income-cents'), jan, 'not before the leave');
       // Unknown leave pay: blank the joint amount and those months become unknown, not $0.
       const joint = page.locator(`input[data-bind="scenarios[id=${id}].events[id=${ev.id}].jointPerPaycheckCents"]`);
       await joint.fill('');
@@ -147,8 +171,22 @@ module.exports = [
       await page.waitForFunction(() => document.querySelector('#fc-m-2027-02')?.dataset.incomeCents === '');
       assert.equal(await monthAttr(page, '2027-01', 'income-cents'), jan);
       assert.ok((await page.textContent('#fc-m-2027-02 summary')).includes('Unknown'));
+      assert.equal((await page.textContent('#fc-m-2027-02 .fc-flag-unknown')).trim(), '!Income unknown', 'the badge says what is unknown');
+      await page.click('#fc-m-2027-02 > summary');
+      assert.ok((await page.textContent('#fc-m-2027-02 .fc-month-body')).includes('some income this month is not entered: Alex paycheck'), 'names the income');
+      // After the leave, each month's net is known again but the running total stays unknown.
+      assert.ok((await page.textContent('#fc-m-2027-06 .fc-c-cum')).includes('since Feb 2027'));
       assert.equal(await cmpCents(page, 'endCumulative', id), null, 'end change is unknown while leave pay is unknown');
-      assert.ok((await page.textContent('#fc-compare')).includes('Unknown from Feb 2027'));
+      const cmpText = await page.textContent('#fc-compare');
+      assert.ok(cmpText.includes('Unknown from Feb 2027'));
+      assert.ok(cmpText.includes('Missing: Alex parental leave'), 'names the missing input: ' + cmpText.slice(0, 400));
+      // The lowest point and the count of months with cash going down describe known months only.
+      const cellText = key => page.$eval(`#fc-compare [data-key="${key}"][data-scenario="${id}"]`, el => el.closest('td').textContent);
+      assert.ok((await cellText('lowest')).includes('Known months only'));
+      assert.ok((await cellText('negativeMonths')).includes('Known months only'));
+      const baseLowest = await page.$eval('#fc-compare [data-key="lowest"][data-scenario="baseline"]', el => el.closest('td').textContent);
+      assert.ok(!baseLowest.includes('Known months only'), 'the current budget is known in every month');
+      assert.ok((await page.textContent('#fc-editor .fc-result')).includes('known months only'), 'the result strip says so too');
       await t.shot('fc-leave');
     },
   },
@@ -158,23 +196,32 @@ module.exports = [
       const { page, assert } = t;
       await t.open('#/forecast');
       const id = await createScenario(page, 'Timing test');
-      assert.equal(await page.$$eval('.fc-month .fc-flag-extra', els => els.length), 0, 'typical month: no extra paychecks');
-      await page.click('#fc-settings > summary');
-      await page.selectOption('#fc-timing', 'actual');
-      await page.waitForFunction(sid => window.HouseholdBudget.getState().scenarios.find(s => s.id === sid).assumptions.incomeTiming === 'actual', id);
+      // Forecasts count actual paydays by default, so Alex's biweekly pay shows its third paycheck.
+      assert.equal((await state(page)).scenarios.find(s => s.id === id).assumptions.incomeTiming, 'actual');
       await page.waitForSelector('#fc-m-2026-10 .fc-flag-extra');
       assert.ok((await page.textContent('#fc-m-2026-10 .fc-flag-extra')).includes('3 paychecks'));
       assert.ok((await page.$$eval('.fc-month .fc-flag-extra', els => els.length)) >= 2, 'two or more three-paycheck months in 24 months');
+      assert.ok((await page.textContent('#fc-m-2026-10 .fc-c-pay')).includes('Alex 3'), 'paychecks counted per stream');
       await page.click('#fc-m-2026-10 > summary');
       const detail = await page.textContent('#fc-m-2026-10 .fc-month-body');
       assert.ok(detail.includes('3 paydays (Oct 2, 16 and 30)'), 'real paydays are listed: ' + detail.slice(0, 200));
+      const octIn = await monthAttr(page, '2026-10', 'income-cents');
+      const novIn = await monthAttr(page, '2026-11', 'income-cents');
+      assert.equal(octIn - novIn, 188000, 'the third paycheck adds one joint deposit');
+      await page.click('#fc-settings > summary');
       assert.ok((await page.textContent('#fc-settings')).includes('Twice-monthly pay'), 'explains biweekly vs twice-monthly');
-      // The comparison warns that the scenarios are now calculated differently.
-      assert.ok(await page.isVisible('#fc-align'));
+      // Typical month: never the third paycheck, so every month has the same pay.
       await page.selectOption('#fc-timing', 'conservative');
+      await page.waitForFunction(sid => window.HouseholdBudget.getState().scenarios.find(s => s.id === sid).assumptions.incomeTiming === 'conservative', id);
       await page.waitForFunction(() => !document.querySelector('.fc-month .fc-flag-extra'));
-      assert.ok(await page.isHidden('#fc-align'));
+      assert.equal(await monthAttr(page, '2026-10', 'income-cents'), novIn, 'typical month: October like any other month');
+      // The comparison warns that the scenarios are now calculated differently, and can align them.
+      assert.ok(await page.isVisible('#fc-align'));
       await t.shot('fc-timing');
+      await page.click('#fc-align');
+      await page.waitForFunction(sid => window.HouseholdBudget.getState().scenarios.find(s => s.id === sid).assumptions.incomeTiming === 'actual', id);
+      await page.waitForFunction(() => !document.querySelector('#fc-align'));
+      await page.waitForSelector('#fc-m-2026-10 .fc-flag-extra');
     },
   },
   {
@@ -245,6 +292,8 @@ module.exports = [
       await page.waitForFunction(sid => document.querySelector(`[data-scenario-id="${sid}"] .fc-sc-name`)?.textContent === 'Renamed scenario', id);
       assert.equal(await page.textContent('#fc-editor-h'), 'Renamed scenario');
       assert.equal(await page.$$eval('#fc-rename-name', els => els.length), 0, 'the inline form closes');
+      const renameBtn = await page.evaluate(sid => window.BudgetUI.dom.domId('fc-ren', sid), id);
+      await page.waitForFunction(b => document.activeElement?.id === b, renameBtn);
 
       // The current budget has no delete button.
       assert.equal(await page.$$eval('button[data-action="fc:delete"][data-id="baseline"]', els => els.length), 0);
@@ -254,11 +303,14 @@ module.exports = [
       await page.click('#dialog button[value="cancel"]');
       await page.waitForFunction(() => !document.querySelector('#dialog').open);
       assert.ok((await state(page)).scenarios.some(s => s.id === id), 'cancel keeps it');
+      const delBtn = await page.evaluate(sid => window.BudgetUI.dom.domId('fc-del', sid), id);
+      await page.waitForFunction(b => document.activeElement?.id === b, delBtn);
       await page.click(`button[data-action="fc:delete"][data-id="${id}"]`);
       await page.waitForSelector('#dialog[open]');
       await page.click('#dialog button[value="ok"]');
       await page.waitForFunction(sid => !window.HouseholdBudget.getState().scenarios.some(s => s.id === sid), id);
       await page.waitForFunction(sid => !document.querySelector(`[data-scenario-id="${sid}"]`), id);
+      await page.waitForFunction(() => document.activeElement?.id === 'fc-scenarios-h', 'focus lands on the scenario list');
       const st = await state(page);
       assert.ok(!st.compareIds.includes(id), 'removed from the comparison');
       assert.ok(!(await page.evaluate(() => location.hash)).includes(id), 'no longer selected');
@@ -320,6 +372,12 @@ module.exports = [
       const fix = await page.getAttribute('#fc-compare .fc-unknown-list a', 'href');
       assert.match(fix, /^#\/budget\?section=income/, 'links to where it is fixed');
       assert.ok((await page.textContent('#fc-missing')).includes('take-home pay per paycheck is not entered'));
+      // No month is known, so counts are unknown too, never "0 months".
+      const negCell = await page.$eval('#fc-compare [data-key="negativeMonths"][data-scenario="baseline"]', el => el.closest('td').textContent);
+      assert.ok(negCell.includes('Unknown') && negCell.includes('No month is known yet'), negCell);
+      const negMetric = await page.$$eval('#fc-editor .fc-result .metric', els => els.map(e => e.textContent.replace(/\s+/g, ' ')).find(x => x.includes('Months with more going out')));
+      assert.ok(negMetric.includes('Unknown'), negMetric);
+      assert.ok(await page.isVisible('#fc-m-2026-10 .fc-flag-unknown'), 'each unknown month carries a text badge');
     },
   },
   {
@@ -430,6 +488,138 @@ module.exports = [
     },
   },
   {
+    name: 'typed months apply on Enter or when leaving the field, never one keystroke at a time',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/forecast?scenario=baby-arrives');
+      const birth = 'input[data-bind="scenarios[id=baby-arrives].events[id=birth-costs].month"]';
+      const birthMonth = () => page.evaluate(() => window.HouseholdBudget.getState().scenarios.find(s => s.id === 'baby-arrives').events.find(e => e.id === 'birth-costs').month);
+      await page.focus(birth);
+      await toYearPart(page, birth);
+      assert.equal(await birthMonth(), '2027-05', 'nothing is saved while the month is being typed');
+      await page.keyboard.type('2028');
+      assert.equal(await birthMonth(), '2027-05', 'still nothing saved half way through the year');
+      assert.match(await page.inputValue(birth), /^2028-\d\d$/, 'the field keeps every digit typed');
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => /^2028-\d\d$/.test(window.HouseholdBudget.getState().scenarios.find(s => s.id === 'baby-arrives').events.find(e => e.id === 'birth-costs').month));
+      await page.waitForFunction(b => document.activeElement === document.querySelector(b), birth);
+      // Leaving the field also applies what was typed.
+      await toYearPart(page, birth);
+      await page.keyboard.type('2029');
+      await page.focus('#fc-desc');
+      await page.waitForFunction(() => /^2029-\d\d$/.test(window.HouseholdBudget.getState().scenarios.find(s => s.id === 'baby-arrives').events.find(e => e.id === 'birth-costs').month));
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'fc-desc', 'focus goes where the person moved it');
+
+      // The starting month: the forecast does not jump around while it is typed.
+      await page.focus('#fc-start');
+      await toYearPart(page, '#fc-start');
+      await page.keyboard.type('2027');
+      assert.ok(!(await page.evaluate(() => location.hash)).includes('start='), 'not applied mid-typing');
+      const typed = await page.inputValue('#fc-start');
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(v => location.hash.includes('start=' + v), typed);
+      await page.waitForFunction(() => document.activeElement?.id === 'fc-start');
+      await page.waitForSelector(`#fc-m-${typed}`);
+      // A year that cannot be right is explained instead of applied.
+      await toYearPart(page, '#fc-start');
+      await page.keyboard.type('3');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('#fc-start-error:not([hidden])');
+      assert.match(await page.textContent('#fc-start-error'), /Check the year/);
+      assert.ok((await page.evaluate(() => location.hash)).includes('start=' + typed), 'the forecast stays where it was');
+    },
+  },
+  {
+    name: 'names, labels and notes entered by the household render as text, never as markup',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/forecast?scenario=baby-arrives');
+      const X = '<img src=x onerror="window.__fcXss=1">';
+      await page.evaluate(X => {
+        const st = window.HouseholdBudget.getState();
+        const s = st.scenarios.find(x => x.id === 'baby-arrives');
+        s.name = X + ' scenario';
+        s.description = X;
+        for (const ev of s.events) { ev.label = X + ' ' + ev.id; ev.note = X; }
+        st.plan.savings[0].label = X + ' goal';
+        st.plan.incomes[0].label = X + ' pay';
+        st.plan.bills[0].label = X + ' bill';
+        st.plan.targets[X + ' category'] = null;
+        window.HouseholdBudget.setState(st);
+      }, X);
+      await page.waitForFunction(() => document.querySelector('#fc-editor-h')?.textContent.startsWith('<img'));
+      await page.evaluate(() => { for (const d of document.querySelectorAll('#view details')) d.open = true; });
+      await page.click('button[data-action="fc:rename-open"][data-id="baby-arrives"]');
+      await page.waitForSelector('#fc-rename-name');
+      assert.equal(await page.inputValue('#fc-rename-name'), X + ' scenario', 'the rename field holds the name as typed');
+      await page.click('#fc-tpl-leave');
+      await page.waitForSelector('#fc-tpl-stream');
+      assert.ok((await page.textContent('#fc-missing')).includes(X), 'missing items show the label as text');
+      assert.ok((await page.textContent('#fc-goals')).includes(X + ' goal'));
+      await page.click('button[data-action="fc:delete"][data-id="baby-arrives"]');
+      await page.waitForSelector('#dialog[open]');
+      assert.ok((await page.textContent('#dialogTitle')).includes(X));
+      assert.equal(await page.$$eval('#view img, #dialog img', els => els.length), 0, 'no element was created from the text');
+      await page.click('#dialog button[value="cancel"]');
+      await page.waitForFunction(() => !document.querySelector('#dialog').open);
+      assert.equal(await page.evaluate(() => window.__fcXss), undefined, 'no script ran');
+    },
+  },
+  {
+    name: 'with a dated joint cash balance, balances start the month after that date and the lowest balance is shown',
+    viewport: 'both',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/forecast?scenario=baseline');
+      await page.evaluate(() => {
+        const st = window.HouseholdBudget.getState();
+        st.plan.balances = { ...st.plan.balances, jointCashCents: 500000, asOf: '2026-10-31' };
+        window.HouseholdBudget.setState(st);
+      });
+      await page.waitForSelector('#fc-m-2026-11[data-balance-cents]');
+      assert.equal(await page.textContent('#fc-compare-h'), 'Compare scenarios');
+      assert.ok((await page.textContent('#fc-chart figcaption')).includes('projected joint cash'), 'the chart says it shows balances');
+      // October is already inside the entered balance: no balance yet, said in words.
+      assert.equal(await monthAttr(page, '2026-10', 'balance-cents'), null);
+      assert.ok((await page.textContent('#fc-m-2026-10 .fc-c-bal')).includes('From Nov 2026'));
+      assert.ok((await page.textContent('#fc-months')).includes('Balances start in Nov 2026'));
+      const nov = await monthAttr(page, '2026-11', 'balance-cents');
+      assert.equal(nov, 500000 + await monthAttr(page, '2026-11', 'net-cents'), 'November = entered balance + November net');
+      const end = await cmpCents(page, 'endBalance', 'baseline');
+      const cum = await cmpCents(page, 'endCumulative', 'baseline');
+      assert.equal(end, 500000 + cum - await monthAttr(page, '2026-10', 'net-cents'), 'end balance leaves out October, already in the balance');
+      const balances = await page.$$eval('.fc-month[data-balance-cents]', els => els.map(e => e.dataset.balanceCents).filter(v => v !== '').map(Number));
+      assert.equal(balances.length, 23, 'every month after October has a balance');
+      assert.equal(await cmpCents(page, 'lowest', 'baseline'), Math.min(...balances), 'lowest balance is the lowest month shown');
+      await t.shot('fc-balance');
+    },
+  },
+  {
+    name: 'selecting a scenario is a step that Back undoes, and focus stays on the chosen link',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/forecast');
+      assert.equal(await page.textContent('#fc-editor-h'), 'Baby arrives (May 2027)');
+      await page.click('a.fc-sc-name[href*="scenario=home-projects-scenario"]');
+      await page.waitForFunction(() => document.querySelector('#fc-editor-h')?.textContent === 'Home projects');
+      const linkId = await page.evaluate(() => window.BudgetUI.dom.domId('fc-sel', 'home-projects-scenario'));
+      await page.waitForFunction(id => document.activeElement?.id === id, linkId);
+      assert.equal(await page.getAttribute('#' + linkId, 'aria-current'), 'true');
+      await page.goBack();
+      await page.waitForFunction(() => document.querySelector('#fc-editor-h')?.textContent === 'Baby arrives (May 2027)');
+      await page.goForward();
+      await page.waitForFunction(() => document.querySelector('#fc-editor-h')?.textContent === 'Home projects');
+      // Removing a change moves focus to the list heading; Undo brings the change back.
+      const before = (await eventsOf(page, 'home-projects-scenario')).length;
+      await page.evaluate(() => { for (const d of document.querySelectorAll('.fc-ev-details')) d.open = true; });
+      await page.click('.fc-ev-list > li:first-child button[data-action="fc:remove-event"]');
+      await page.waitForFunction(n => window.HouseholdBudget.getState().scenarios.find(s => s.id === 'home-projects-scenario').events.length === n - 1, before);
+      await page.waitForFunction(() => document.activeElement?.id === 'fc-events-h');
+      await page.click('#toast button');
+      await page.waitForFunction(n => window.HouseholdBudget.getState().scenarios.find(s => s.id === 'home-projects-scenario').events.length === n, before);
+    },
+  },
+  {
     name: 'phone layout: no horizontal page scroll; months become cards; forms fit',
     viewport: 'phone',
     async run(t) {
@@ -447,7 +637,31 @@ module.exports = [
       const boxes = await page.$$eval('#fc-scenarios button, #fc-scenarios a, #fc-scenarios input', els => els.map(e => e.getBoundingClientRect().right));
       const vw = await page.evaluate(() => window.innerWidth);
       assert.ok(boxes.every(r => r <= vw + 1), 'scenario controls stay on screen');
+      // The chart draws for the phone width: its whole drawing fits inside the card, no sideways scroll.
+      const chart = await page.$eval('#fc-chart svg', el => { const r = el.getBoundingClientRect(); const p = el.closest('.card').getBoundingClientRect(); return { right: r.right, cardRight: p.right, scroll: el.parentElement.scrollWidth - el.parentElement.clientWidth }; });
+      assert.ok(chart.right <= chart.cardRight && chart.scroll <= 1, 'chart fits the card: ' + JSON.stringify(chart));
       await t.shot('fc-phone');
+      // The narrowest common phone width.
+      await page.setViewportSize({ width: 360, height: 780 });
+      await page.reload();
+      await page.waitForSelector('#fc-editor-h');
+      await page.click('#fc-m-2027-05 > summary');
+      await page.evaluate(() => { for (const d of document.querySelectorAll('.fc-ev-details')) d.open = true; });
+      assert.ok(await noHorizontalScroll(page), 'no horizontal scroll at 360px');
+      await t.shot('fc-phone-360');
+      // Names typed as one very long word wrap instead of widening the page.
+      const long = 'Kitchenbathroomroofwindowsandinsulationrenovationbeforethebabyarrivesnextyear';
+      await page.evaluate(long => {
+        const st = window.HouseholdBudget.getState();
+        const s = st.scenarios.find(x => x.id === 'baby-arrives');
+        s.name = long;
+        s.events[0].label = long;
+        st.plan.savings[0].label = long;
+        window.HouseholdBudget.setState(st);
+      }, long);
+      await page.waitForFunction(l => document.querySelector('#fc-editor-h')?.textContent === l, long);
+      await page.evaluate(() => { for (const d of document.querySelectorAll('#view details')) d.open = true; });
+      assert.ok(await noHorizontalScroll(page), 'no horizontal scroll with long names and everything open');
     },
   },
 ];

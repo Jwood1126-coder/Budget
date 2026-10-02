@@ -34,8 +34,20 @@ const queues = page => page.evaluate(() => {
     reimb: q.reimbursements.map(r => ({ chargeId: r.chargeId, depositId: r.depositId, cents: r.cents, status: r.status, chargeMonth: r.charge && r.charge.date.slice(0, 7), depositMonth: r.deposit && r.deposit.date.slice(0, 7) })),
     spikes: q.spikes.map(s => ({ month: s.month, category: s.category, ids: s.ids, total: s.totalCents })),
     business: q.business.map(t => ({ id: t.id, status: t.status, cents: -t.amountCents, month: t.date.slice(0, 7) })),
+    annual: q.annualSpikes.map(s => ({ month: s.month, category: s.category, ids: s.ids, total: s.totalCents })),
+    expected: q.transfers.unpaired.filter(u => u.expected).map(u => u.id),
+    paired: q.transfers.paired.map(p => p.ids),
   };
 });
+const focusedId = page => page.evaluate(() => document.activeElement && document.activeElement.id);
+/** Arrive at a review link from another view, as a link in Spending would. */
+async function arrive(t, hash) {
+  await t.page.goto(t.url + '#/spending');
+  await t.page.waitForFunction(() => location.hash === '#/spending');
+  await t.page.goto(t.url + hash);
+  await t.page.waitForSelector('.rv');
+}
+const HOSTILE = '<img src=x onerror="window.__xss=1">';
 async function openQueue(t, queue, extra = '') {
   await t.open(`#/review?queue=${queue}${extra}`);
   await t.page.waitForSelector('.rv');
@@ -126,8 +138,8 @@ module.exports = [
       assert.equal(edit.categoryReason, 'Birthday gift for a friend');
       assert.equal(edit.history.length, 1);
       assert.ok(!(await queues(page)).uncertain.some(x => x.id === zelle.id), 'left the uncertain queue');
-      // Focus moved to the next item rather than being lost.
-      assert.ok(await page.evaluate(() => document.querySelector('.rv').contains(document.activeElement)), 'focus stays in the view');
+      // Focus moved to the next item rather than being lost (it moves after the re-render).
+      await page.waitForFunction(() => document.querySelector('.rv') && document.querySelector('.rv').contains(document.activeElement));
 
       // Undo puts it back.
       await toastUndo(page);
@@ -153,7 +165,7 @@ module.exports = [
       await page.waitForFunction(id => !window.HouseholdBudget.getState().ledgerEdits[id].category, zelle.id);
       const after = (await state(page)).ledgerEdits[zelle.id];
       assert.equal(after.history.length, 2, 'revert added to the history');
-      assert.ok((await page.textContent('#rv-item-' + zelle.id)).includes('Reverted'));
+      await page.waitForFunction(id => (document.getElementById('rv-item-' + id)?.textContent || '').includes('Reverted'), zelle.id);
       assert.ok((await queues(page)).uncertain.some(x => x.id === zelle.id), 'back in the uncertain queue');
     },
   },
@@ -370,7 +382,20 @@ module.exports = [
       const q = (await queues(page)).business;
       assert.equal(q.filter(b => b.status === 'pending').length, list.length - 2);
       const bizCents = q.filter(b => b.status === 'business').reduce((a, b) => a + b.cents, 0);
-      assert.equal(cents(await page.textContent('.rv-metrics .metric:nth-child(2) .metric-value')), bizCents, 'Business total shown');
+      const pendingCents = q.filter(b => b.status === 'pending').reduce((a, b) => a + b.cents, 0);
+      // The view re-renders after the state change: wait for the new figure, then compare exactly.
+      await page.waitForFunction(() => !/^\$0\.00$/.test(document.querySelector('#rv-biz-m-business .metric-value')?.textContent || '$0.00'));
+      assert.equal(cents(await page.textContent('#rv-biz-m-business .metric-value')), bizCents, 'Business total shown');
+      // Each total matches the footer of the list behind it, and opens that list.
+      assert.equal(cents(await page.textContent('#rv-biz-m-pending .metric-value')), pendingCents);
+      assert.equal(cents(await page.textContent('.rv-biz-table tfoot .num')), pendingCents, 'pending list footer = pending total');
+      await page.click('#rv-biz-m-business');
+      await page.waitForFunction(() => location.hash === '#/review?queue=business&status=business');
+      await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'rv-list-h');
+      assert.deepEqual((await page.$$eval('input[name="rv-biz-sel"]', els => els.map(e => e.value))).sort(), [...ids].sort());
+      assert.equal(cents(await page.textContent('.rv-biz-table tfoot .num')), bizCents, 'business list footer = business total');
+      await page.goBack();
+      await page.waitForFunction(() => location.hash === '#/review?queue=business');
     },
   },
   {
@@ -458,10 +483,26 @@ module.exports = [
       await page.waitForSelector('.rv-item.is-target');
       assert.equal(await page.$eval('.rv-item.is-target', el => el.dataset.rvItem), u.id);
       await page.waitForFunction(id => document.activeElement && document.activeElement.id === 'rv-h-' + id, u.id);
-      // Wrong queue: a note says where it is waiting.
+      // Wrong queue: it opens where it is waiting, and says so.
       await page.goto(t.url + `#/review?queue=business&txn=${u.id}`);
-      await page.waitForSelector('#page-title');
-      assert.match(await page.textContent('.rv'), /is not waiting in Business costs/);
+      await page.waitForFunction(id => location.hash === `#/review?queue=uncertain&txn=${id}&from=business`, u.id);
+      await page.waitForFunction(id => document.activeElement && document.activeElement.id === 'rv-h-' + id, u.id);
+      assert.match(await page.textContent('.rv > .notice'), /so it opened here/);
+      // A possible duplicate that is also a mixed-retail purchase opens with its pair: deciding
+      // the duplicate changes totals, so it comes first.
+      const [pair] = (await queues(page)).duplicates;
+      await page.goto(t.url + `#/review?queue=uncertain&txn=${pair.ids[1]}`);
+      await page.waitForFunction(id => location.hash === `#/review?queue=duplicates&txn=${id}&from=uncertain`, pair.ids[1]);
+      await page.waitForFunction(id => document.activeElement && document.activeElement.id === 'rv-h-dup-' + id, pair.ids[0]);
+      // A transaction that needs nothing: a note, and a way back to it in Spending.
+      const plain = await page.evaluate(() => {
+        const ctx = window.HouseholdBudget.context();
+        return ctx.txns.find(x => x.kind === 'spend' && x.category === 'Groceries' && !x.flags.length && !x.edited).id;
+      });
+      await page.goto(t.url + `#/review?queue=uncertain&txn=${plain}`);
+      await page.waitForFunction(() => /needs a decision here/.test(document.querySelector('.rv > .notice')?.textContent || ''));
+      assert.equal(await page.evaluate(() => location.hash.includes('from=')), false, 'no redirect when it waits nowhere');
+      assert.match(await page.$eval('.rv > .notice a', a => a.getAttribute('href')), new RegExp('^#/spending\\?period=\\d{4}-\\d{2}&txn=' + plain));
     },
   },
   {
@@ -513,6 +554,289 @@ module.exports = [
       await page.click(`#rv-mx-${id} > summary`);
       assert.ok(await noHorizontalScroll(page), 'open split form fits');
       await t.shot('review-mixed-open');
+    },
+  },
+  {
+    name: 'yearly bills are listed apart from spikes with the budget line, and a link to one payment focuses it',
+    viewport: 'both',
+    async run(t) {
+      const { page, assert } = t;
+      await openQueue(t, 'spikes');
+      const q = await queues(page);
+      const insurance = q.annual.filter(a => a.category === 'Home insurance');
+      assert.equal(insurance.length, 2, 'the sample has a yearly home insurance bill in two years');
+      assert.ok(!q.spikes.some(s => s.category === 'Home insurance'), 'not a spike');
+      assert.equal(await page.textContent('#rv-annual-h'), 'Yearly bills (not unusual)');
+      const card = await page.textContent('#rv-annual');
+      assert.match(card, /not unusual/);
+      assert.match(card, /needs no decision/);
+      assert.equal((card.match(/\$1,104\.00/g) || []).length >= 2, true, 'both yearly payments listed');
+      assert.match(card, /Home insurance: \$92\.00 a month \(\$1,104\.00 a year\)/, 'the budget line for it');
+      assert.ok(!card.includes('Dental'), 'the real spike is not in the yearly list');
+      // The Spikes tab counts only the real spike.
+      assert.match(await page.textContent('#rv-tab-spikes'), /Spikes\s*1/);
+      // Every payment opens in Spending.
+      const links = await page.$$eval('#rv-annual a[href^="#/spending?"]', as => as.map(a => a.getAttribute('href')));
+      for (const a of insurance) assert.ok(links.some(h => h.includes('txn=' + a.ids[0])), 'payment ' + a.month + ' links to Spending');
+      assert.ok(await noHorizontalScroll(page));
+      await t.shot('review-yearly-bills');
+
+      await arrive(t, `#/review?queue=spikes&txn=${insurance[0].ids[0]}`);
+      await page.waitForFunction(() => /^rv-h-yr-/.test(document.activeElement && document.activeElement.id));
+      const item = await page.$eval('#rv-annual .rv-item.is-target', el => el.textContent);
+      assert.match(item, /The transaction you opened/);
+      assert.equal(await page.$$eval('.rv > .notice', ns => ns.length), 0, 'no "not waiting here" note');
+    },
+  },
+  {
+    name: 'links that name a transaction open its list, highlight it with text and focus it in every queue',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/review');
+      const q0 = await queues(page);
+      const dup = q0.duplicates[0];
+      const biz = q0.business[1].id;
+      // Decide a duplicate and a business purchase, so they sit in the "decided" lists.
+      await page.evaluate(([second, b]) => {
+        const H = window.HouseholdBudget, E = H.engine, st = H.getState(), at = '2026-09-30T10:00:00Z';
+        st.ledgerEdits[second] = E.review.editRecord(null, 'duplicate', 'exclude', 'Same charge listed twice', at);
+        st.ledgerEdits[b] = E.review.editRecord(null, 'business', 'business', 'Bought for work', at);
+        H.setState(st);
+      }, [dup.ids[1], biz]);
+
+      // Business: the filter that holds it is chosen, its checkbox is focused.
+      await arrive(t, `#/review?queue=business&txn=${biz}`);
+      await page.waitForFunction(id => document.activeElement && document.activeElement.id === 'rv-biz-' + id, biz);
+      assert.equal(await page.$eval('#rv-biz-f-business', a => a.getAttribute('aria-current')), 'true');
+      assert.match(await page.textContent(`#rv-biz-${biz}-row`), /The transaction you opened/);
+
+      // A contribution needs no answer: its collapsed list opens and the row is focused.
+      const exp = q0.expected[1];
+      await arrive(t, `#/review?queue=transfers&txn=${exp}`);
+      await page.waitForFunction(id => document.activeElement && document.activeElement.id === 'rv-tr-row-' + id, exp);
+      assert.ok(await page.$eval('#rv-tr-exp-list', d => d.open), 'list opened');
+      assert.match(await page.textContent('.rv > .notice'), /needs no answer/);
+
+      // A matched card payment: explained, highlighted in the matched list.
+      const pair = q0.paired[2];
+      await arrive(t, `#/review?queue=transfers&txn=${pair[1]}`);
+      await page.waitForFunction(id => document.activeElement && document.activeElement.id === 'rv-tr-pair-' + id, pair[0]);
+      assert.ok(await page.$eval('#rv-tr-paired-list', d => d.open));
+
+      // The copy that was kept: the decision on its pair is highlighted.
+      await arrive(t, `#/review?queue=duplicates&txn=${dup.ids[0]}`);
+      await page.waitForFunction(id => document.activeElement && document.activeElement.id === 'rv-dup-row-' + id, dup.ids[1]);
+      assert.match(await page.textContent('.rv > .notice'), /already decided/);
+
+      // A link to the wrong queue (Spending's links send mixed-retail rows to Uncertain) opens
+      // the queue where it waits, on the page that holds it, replacing the history entry.
+      const mixed = q0.mixed[30];
+      await arrive(t, `#/review?queue=uncertain&txn=${mixed}`);
+      await page.waitForFunction(id => location.hash === `#/review?queue=mixed&txn=${id}&from=uncertain`, mixed);
+      await page.waitForFunction(id => document.activeElement && document.activeElement.id === 'rv-h-' + id, mixed);
+      assert.match(await page.textContent('#rv-item-' + mixed), /The transaction you opened/);
+      assert.match(await page.textContent('.rv > .notice'), /listed in Mixed retail, so it opened here/);
+      assert.match(await page.textContent('.rv-pager-text'), /Page ([2-9]|\d\d) of/, "not among the newest 25, so the page holding it opened");
+      // After an action on the page, focus is not pulled back to the opened item.
+      await page.focus('#rv-keep-' + mixed);
+      await page.evaluate(() => { document.querySelector('.rv').dataset.old = '1'; window.BudgetUI.app.render(); });
+      await page.waitForFunction(() => document.querySelector('.rv') && !document.querySelector('.rv').dataset.old);
+      // Let the view's deferred focus step run (timers queued earlier fire first).
+      await page.evaluate(() => new Promise(r => setTimeout(r, 0)));
+      assert.equal(await focusedId(page), 'rv-keep-' + mixed);
+      // The wrong-queue address was replaced, so Back returns to Spending.
+      await page.goBack();
+      await page.waitForFunction(() => location.hash === '#/spending');
+    },
+  },
+  {
+    name: 'reconcile from a Spending link uses its dates; dates without data are Unknown, never $0',
+    viewport: 'both',
+    async run(t) {
+      const { page, assert } = t;
+      await arrive(t, '#/review?queue=reconcile&start=2026-03-01&end=2026-03-31');
+      await page.waitForSelector('#rv-rec');
+      const app = await page.evaluate(() => {
+        const ctx = window.HouseholdBudget.context();
+        return ctx.E.ledger.summarize(ctx.E.ledger.filter(ctx.txns, { start: '2026-03-01', end: '2026-03-31' }));
+      });
+      const metrics = await page.$$eval('#rv-rec .metric-value', els => els.map(e => e.textContent));
+      assert.equal(metrics[0], 'Not entered');
+      assert.equal(cents(metrics[1]), app.spendingCents);
+      assert.equal(await page.$eval('#rv-ref-start', i => i.value), '2026-03-01', 'form takes the dates');
+      assert.equal(await page.$eval('#rv-ref-end', i => i.value), '2026-03-31');
+      // Each part with rows lists them, and they add up to the part's amount.
+      const parts = await page.$$eval('#rv-rec-breakdown tbody tr', trs => trs.filter(tr => tr.querySelector('.rv-rows')).map(tr => {
+        const money = s => { const m = String(s).match(/([−-])?\$([\d,]+\.\d{2})/); const v = Math.round(Number(m[2].replace(/,/g, '')) * 100); return m[1] ? -v : v; };
+        return { total: money(tr.querySelector('td.num').textContent), rows: [...tr.querySelectorAll('.rv-rows li .num')].map(n => money(n.textContent)), links: [...tr.querySelectorAll('.rv-rows li a')].map(a => a.getAttribute('href')) };
+      }));
+      assert.ok(parts.length >= 2, 'several parts list their transactions');
+      for (const p of parts) {
+        assert.equal(p.rows.reduce((a, b) => a + b, 0), p.total, 'listed rows add up to the part');
+        for (const h of p.links) assert.match(h, /^#\/spending\?period=\d{4}-\d{2}&txn=/);
+      }
+      assert.ok(await noHorizontalScroll(page));
+
+      // Dates outside the data: unknown, no zero breakdown.
+      await page.goto(t.url + '#/review?queue=reconcile&start=2023-01-01&end=2023-01-31');
+      await page.waitForFunction(() => /2023/.test(document.querySelector('#rv-rec-h')?.textContent || ''));
+      const none = await page.$$eval('#rv-rec .metric-value', els => els.map(e => e.textContent));
+      assert.deepEqual(none.slice(1), ['Unknown', 'Unknown']);
+      assert.ok(!(await page.textContent('#rv-rec')).includes('$0.00'), 'no $0 shown for unknown spending');
+      assert.match(await page.textContent('#rv-rec'), /unknown, not \$0/);
+      assert.equal(await page.$('#rv-rec-breakdown'), null);
+      await t.shot('review-reconcile-nodata');
+
+      // Partly covered dates: the missing and partial months are named.
+      await page.goto(t.url + '#/review?queue=reconcile&start=2024-09-01&end=2024-12-31');
+      await page.waitForFunction(() => /2024/.test(document.querySelector('#rv-rec-h')?.textContent || ''));
+      const notes = await page.textContent('#rv-rec');
+      assert.match(notes, /Sep 2024 is not in your exports/);
+      assert.match(notes, /Oct–Dec 2024 are only partly covered/);
+      assert.match(notes, /only what is in the data/);
+    },
+  },
+  {
+    name: 'decided rows stop asking: a confirmed reimbursement leaves Uncertain, an answered transfer loses its warning',
+    async run(t) {
+      const { page, assert } = t;
+      await openQueue(t, 'reimbursements');
+      const [r] = (await queues(page)).reimb;
+      const base = '#rv-rb-' + r.chargeId;
+      await page.check(`${base}-s-confirmed`);
+      await page.fill(`${base}-reason`, 'Employer paid it back');
+      await page.press(`${base}-reason`, 'Enter');
+      await page.waitForFunction(id => window.HouseholdBudget.getState().ledgerEdits[id]?.reimbursement === 'confirmed', r.depositId);
+      // Focus stays on the decided item's heading.
+      await page.waitForFunction(id => document.activeElement && document.activeElement.id === 'rv-h-rb-' + id, r.chargeId);
+      await page.click('#rv-tab-uncertain');
+      await page.waitForFunction(() => location.hash === '#/review?queue=uncertain');
+      await page.waitForSelector('#rv-list');
+      assert.equal(await page.$('#rv-item-' + r.depositId), null, 'the deposit no longer asks where it came from');
+      assert.match(await page.textContent('#rv-list'), /confirmed reimbursement/);
+      assert.match(await page.textContent('#rv-tab-uncertain'), /Uncertain\s*1/);
+
+      await page.click('#rv-tab-transfers');
+      await page.waitForFunction(() => location.hash === '#/review?queue=transfers');
+      const [u] = (await queues(page)).unpaired;
+      await page.check(`#rv-tr-${u.id}-k-savings`);
+      await page.fill(`#rv-tr-${u.id}-reason`, 'Moved from our savings');
+      await page.click(`#rv-tr-${u.id}-save`);
+      await page.waitForFunction(id => window.HouseholdBudget.getState().ledgerEdits[id]?.subtype === 'savings', u.id);
+      await page.goto(t.url + '#/review?queue=edited&txn=' + u.id);
+      await page.waitForSelector('#rv-item-' + u.id);
+      const text = await page.textContent('#rv-item-' + u.id);
+      assert.match(text, /Savings transfer/);
+      assert.ok(!text.includes('Unmatched transfer'), 'answered: no stale warning badge');
+      // Undoing the answer from Transfers keeps unrelated decisions and logs the change.
+      await page.goto(t.url + '#/review?queue=transfers');
+      await page.click('#rv-tr-undo-' + u.id);
+      await page.waitForFunction(id => !window.HouseholdBudget.getState().ledgerEdits[id].kind, u.id);
+      assert.equal((await state(page)).ledgerEdits[u.id].history.length, 4, 'answer and undo both in the history');
+      await page.waitForSelector('#rv-item-' + u.id);
+    },
+  },
+  {
+    name: 'saved text is shown as text, never as markup',
+    viewport: 'both',
+    async run(t) {
+      const { page, assert } = t;
+      page.on('dialog', d => { t.errors.push('dialog: ' + d.message()); d.dismiss(); });
+      await t.open('#/review');
+      const q = await queues(page);
+      await page.evaluate(([X, unc, unpaired, mixed]) => {
+        const H = window.HouseholdBudget, E = H.engine, st = H.getState(), at = '2026-09-30T10:00:00Z';
+        const ed = (id, f, v) => { st.ledgerEdits[id] = E.review.editRecord(st.ledgerEdits[id], f, v, X, at); };
+        ed(unc, 'category', X);
+        ed(unpaired, 'kind', 'spend'); ed(unpaired, 'category', X);
+        ed(mixed, 'note', X);
+        st.ledgerEdits['tx-missing-' + X] = E.review.editRecord(null, 'category', X, X, at);
+        st.references = [{ id: 'ref-x', label: X, start: '2026-03-01', end: '2026-03-31', spendingCents: 12345, source: X }];
+        st.plan.bills[0].label = X;
+        st.plan.targets[X] = null;
+        H.setState(st);
+      }, [HOSTILE, q.uncertain[0].id, q.unpaired[0].id, q.mixed[0]]);
+      for (const hash of ['#/review', '#/review?queue=edited', '#/review?queue=transfers', '#/review?queue=reconcile&ref=ref-x', `#/review?queue=uncertain&txn=${encodeURIComponent(HOSTILE)}`, `#/review?queue=${encodeURIComponent(HOSTILE)}`]) {
+        await page.goto(t.url + hash);
+        await page.waitForSelector('.rv');
+        assert.equal(await page.$$eval('#view img', els => els.length), 0, hash + ': no injected element');
+        assert.ok((await page.textContent('#view')).includes('<img src=x'), hash + ': shown as text');
+      }
+      assert.equal(await page.evaluate(() => window.__xss || 0), 0);
+    },
+  },
+  {
+    name: 'with no transactions loaded the index claims nothing is complete or clear',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/review');
+      await page.evaluate(() => localStorage.setItem('household-budget:loaded-dataset', JSON.stringify({ dataset: { schemaVersion: 2, datasetId: 'empty-test', isSynthetic: true, generatedAt: null, currency: 'USD', accounts: [], transactions: [], coverageOverrides: {}, importLog: [], references: [], notes: [] } })));
+      await page.reload();
+      await page.waitForSelector('.rv');
+      const text = await page.textContent('.rv');
+      assert.match(text, /No transactions are loaded/);
+      assert.ok(!text.includes('Every month is complete'), 'coverage is not called complete');
+      assert.ok(!text.includes('Nothing waiting'), 'queues are not called clear');
+      assert.match(text, /No data yet/);
+      assert.equal(await page.$('.rv-metrics'), null, 'no $0 headline figures');
+      assert.ok(text.includes('Missing information'), 'budget inputs still listed');
+    },
+  },
+  {
+    name: 'store filters and pages are links: Back walks back through them',
+    async run(t) {
+      const { page, assert } = t;
+      await openQueue(t, 'mixed');
+      const chip = await page.$$eval('.rv-chips a', as => as[1].id);
+      await page.click('#' + chip);
+      await page.waitForFunction(() => /merchant=/.test(location.hash));
+      await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'rv-list-h');
+      const hashA = await page.evaluate(() => location.hash);
+      await page.click('#rv-chip-all');
+      await page.waitForFunction(() => location.hash === '#/review?queue=mixed');
+      await page.click('#rv-page-next');
+      await page.waitForFunction(() => location.hash === '#/review?queue=mixed&page=2');
+      await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'rv-list-h');
+      assert.match(await page.textContent('.rv-pager-text'), /Page 2 of/);
+      await page.goBack();
+      await page.waitForFunction(() => location.hash === '#/review?queue=mixed');
+      await page.goBack();
+      await page.waitForFunction(h => location.hash === h, hashA);
+      await page.waitForFunction(() => document.querySelector('.rv-chips a[aria-current]')?.id !== 'rv-chip-all');
+    },
+  },
+  {
+    name: 'every control and link has a name, ids are unique and tables have captions in every queue',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/review');
+      const q = await queues(page);
+      await page.evaluate(([second, unpaired]) => {
+        const H = window.HouseholdBudget, E = H.engine, st = H.getState(), at = '2026-09-30T10:00:00Z';
+        st.ledgerEdits[second] = E.review.editRecord(null, 'duplicate', 'exclude', 'Same charge listed twice', at);
+        st.ledgerEdits[unpaired] = E.review.editRecord(null, 'kind', 'transfer', 'Known transfer', at);
+        st.references = [{ id: 'ref-a', label: 'Card statement', start: '2026-03-01', end: '2026-03-31', spendingCents: 500000, source: 'Added in Data review' }];
+        H.setState(st);
+      }, [q.duplicates[0].ids[1], q.unpaired[0].id]);
+      for (const queue of ['', ...QUEUES.filter(x => x !== 'reconcile'), 'reconcile&ref=ref-a']) {
+        await page.goto(t.url + '#/review' + (queue ? '?queue=' + queue : ''));
+        await page.waitForSelector('.rv');
+        const r = await page.evaluate(() => {
+          document.querySelectorAll('#view details').forEach(d => { d.open = true; });
+          const name = el => {
+            if (el.getAttribute('aria-label')) return el.getAttribute('aria-label');
+            if (el.getAttribute('aria-labelledby')) return el.getAttribute('aria-labelledby').split(' ').map(i => document.getElementById(i)?.textContent || '').join(' ').trim();
+            const lab = el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+            if (lab) return lab.textContent.trim();
+            return (el.closest('label')?.textContent || el.textContent || '').trim();
+          };
+          const unnamed = [...document.querySelectorAll('#view input, #view select, #view button, #view a, #view summary')].filter(el => !name(el)).map(el => el.tagName + '#' + el.id);
+          const seen = {};
+          for (const el of document.querySelectorAll('#view [id]')) seen[el.id] = (seen[el.id] || 0) + 1;
+          return { unnamed, dupIds: Object.keys(seen).filter(k => seen[k] > 1), noCaption: [...document.querySelectorAll('#view table')].filter(tb => !tb.querySelector('caption')).length };
+        });
+        assert.deepEqual(r, { unnamed: [], dupIds: [], noCaption: 0 }, (queue || 'index') + ': names, ids and captions');
+      }
     },
   },
 ];

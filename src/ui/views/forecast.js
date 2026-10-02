@@ -148,7 +148,8 @@
     const order = scenarios.map(s => s.id);
     const ids = new Set(order);
     const horizon = HORIZONS.includes(Number(p.horizon)) ? Number(p.horizon) : DEFAULT_HORIZON;
-    const start = E.months.isMonth(p.start) ? p.start : ctx.forecastStart;
+    const bounds = startBounds(ctx);
+    const start = E.months.isMonth(p.start) && p.start >= bounds.min && p.start <= bounds.max ? p.start : ctx.forecastStart;
     // Comparison columns keep the scenario order (the current budget first), so differences
     // are always measured against the same reference.
     const pick = list => { const set = new Set(list.filter(id => ids.has(id))); return order.filter(id => set.has(id)).slice(0, MAX_COMPARE); };
@@ -240,8 +241,12 @@
     const id = String(m.id || '');
     const bid = (kind, key) => domId('bud-' + kind, String(key));
     if (id.startsWith('target:')) return ctx.href('budget', { section: 'targets', focus: bid('target', id.slice(7)) });
-    if (id.startsWith('personal:')) return ctx.href('budget', { section: 'income', focus: bid('personal', id.slice(9)) });
-    if (id.startsWith('pay:')) return ctx.href('budget', { section: 'income' });
+    if (id.startsWith('personal:')) {
+      // Blocked by an unknown transfer into joint: that amount is the field to fill in.
+      const blocked = (plan.incomes || []).find(s => s.personId === id.slice(9) && s.kind === 'contribution' && !E.money.isCents(s.jointPerPaycheckCents));
+      return ctx.href('budget', { section: 'income', focus: blocked ? bid('inc-joint', blocked.id) : bid('personal', id.slice(9)) });
+    }
+    if (id.startsWith('pay:')) return ctx.href('budget', { section: 'income', focus: 'bud-add-income-name' });
     if (id === 'jointCash') return ctx.href('budget', { section: 'savings', focus: 'bud-cash' });
     const stream = (plan.incomes || []).find(s => s.id === id);
     if (stream) return ctx.href('budget', { section: 'income', focus: bid(ctx.scope === 'joint' || stream.kind === 'contribution' ? 'inc-joint' : 'inc-net', id) });
@@ -358,6 +363,28 @@
     return { month: first.month, all, personal, item, text: (all ? 'Unknown in every month: ' : `Unknown from ${monthName(first.month)}: `) + why + '.' };
   }
 
+  /** Every month's net is unknown, so counts such as "months with cash going down" are unknown too. */
+  const noKnownMonth = proj => proj.summary.unknownNetMonths.length === proj.rows.length;
+
+  /** Lowest known value of the measure shown (balance or change in cash) and its month. */
+  function lowestOf(proj, bal) {
+    let lo = null;
+    for (const r of proj.rows) {
+      const v = bal ? r.balanceCents : r.cumulativeCents;
+      if (known(v) && (lo === null || v < lo.cents)) lo = { cents: v, month: r.month };
+    }
+    return lo;
+  }
+
+  /** First month with a projected balance: the entered balance already includes its own month. */
+  function balanceOpenMonth(ctx) {
+    const asOf = ctx.state.plan.balances && ctx.state.plan.balances.asOf;
+    return asOf && E.dates.isDate(asOf) ? E.months.of(E.dates.addDays(asOf, 1)) : null;
+  }
+
+  /** Earliest and latest start month offered: ten years either side of the default start. */
+  const startBounds = ctx => ({ min: E.months.add(ctx.forecastStart, -120), max: E.months.add(ctx.forecastStart, 120) });
+
   /** Link or button that fixes one missing item (Budget for plan inputs, the event field here). */
   function fixControl(ctx, R, m, scenario, { label = 'Fix' } = {}) {
     if (!m) return '';
@@ -386,7 +413,8 @@
   function header(ctx, R) {
     const scopeCtl = c.segmented({ label: 'Show', name: 'scope', options: SCOPE_OPTIONS, value: ctx.scope, action: 'set-scope' });
     const horizonCtl = c.segmented({ label: 'Months ahead', name: 'fc-horizon', options: HORIZONS.map(h => ({ value: h, label: String(h) })), value: R.horizon, action: 'fc:horizon' });
-    const startCtl = `<div class="field fc-start"><label for="fc-start">Starting month</label><input id="fc-start" type="month" value="${esc(R.start)}" data-action="fc:start" aria-describedby="fc-start-error"><p class="field-error" id="fc-start-error" role="alert" hidden></p></div>`;
+    const b = startBounds(ctx);
+    const startCtl = `<div class="field fc-start"><label for="fc-start">Starting month</label><input id="fc-start" type="month" value="${esc(R.start)}" min="${esc(b.min)}" max="${esc(b.max)}" data-action="fc:start" aria-describedby="fc-start-error"><p class="field-error" id="fc-start-error" role="alert" hidden></p></div>`;
     return c.pageHeader({
       eyebrow: 'Forecast',
       title: 'Plan ahead with scenarios',
@@ -422,8 +450,8 @@
       ? 'Your budget as entered. It cannot hold changes and is always kept; to change it, edit the budget.'
       : [s.description ? short(s.description, 120) : '', plural(s.events.length, 'change')].filter(Boolean).join(' · ');
     const badges = [
-      isBase ? c.badge('Current budget', 'info') : '',
-      selected ? c.badge('Editing', 'good') : '',
+      // The current budget is shown, not edited here (it cannot hold changes).
+      selected ? c.badge(isBase ? 'Showing' : 'Editing', 'good') : '',
       gapsN ? c.badge(plural(gapsN, 'change') + ' missing amounts', 'warn') : '',
     ].filter(Boolean).join(' ');
     const name = navLink(ctx, linkParams(ctx, R, { scenario: s.id }), esc(s.name), { id: domId('fc-sel', s.id), cls: 'fc-sc-name', current: selected });
@@ -465,7 +493,7 @@
   function scenarioBar(ctx, R) {
     const full = R.compare.length >= MAX_COMPARE;
     return `<section class="card fc-bar" id="fc-scenarios" aria-labelledby="fc-scenarios-h">
-      <div class="card-head"><div><h2 id="fc-scenarios-h">Scenarios</h2><p class="card-sub">Select a scenario to edit it. Tick up to ${MAX_COMPARE} to compare them side by side.</p></div></div>
+      <div class="card-head"><div><h2 id="fc-scenarios-h" tabindex="-1">Scenarios</h2><p class="card-sub">Select a scenario to edit it. Tick up to ${MAX_COMPARE} to compare them side by side.</p></div></div>
       <ul class="fc-sc-list">${ctx.state.scenarios.map(s => scenarioRow(ctx, R, s)).join('')}</ul>
       <p class="fine" id="fc-cmp-limit"${full ? '' : ' hidden'}>${MAX_COMPARE} scenarios are being compared, the most at once. Untick one to compare another.</p>
       ${newScenarioForm(ctx)}
@@ -487,7 +515,7 @@
     const series = cols.map(col => ({ name: col.name, values: col.projection.rows.map(r => r[measure]) }));
     const anyKnown = series.some(s => s.values.some(known));
 
-    const gaps = cols.map((col, i) => (infos[i] ? `<li><strong>${esc(col.name)}</strong>: ${esc(infos[i].text)} ${fixControl(ctx, R, infos[i].item, scenarios[i], { label: 'Enter it' })}</li>` : '')).filter(Boolean);
+    const gaps = cols.map((col, i) => (infos[i] ? `<li><strong>${esc(col.name)}</strong>: ${esc(infos[i].text)}${infos[i].item ? ` <span class="fc-cause">Missing: ${esc(infos[i].item.label)}.</span>` : ''} ${fixControl(ctx, R, infos[i].item, scenarios[i], { label: 'Enter it' })}</li>` : '')).filter(Boolean);
     const measureNote = bal
       ? `Each line is one scenario's projected joint cash, starting from the balance entered in Budget${ctx.scope === 'household' ? ' (money in personal accounts is not included)' : ''}.`
       : `Each line is one scenario's running change in ${where}, starting at $0. <a href="${esc(budgetFix(ctx, { id: 'jointCash' }))}">Enter today's joint cash balance</a> to see projected balances instead.`;
@@ -508,25 +536,30 @@
       return `<span class="fc-v${tone && v < 0 ? ' tone-bad' : ''}" data-key="${esc(key)}" data-scenario="${esc(col.scenarioId)}" data-cents="${v}">${esc(signed ? signedWhole(v) : whole(v))}</span>${delta}`;
     };
     const per = fn => Object.fromEntries(cols.map((col, i) => ['c' + i, fn(i, col)]));
-    const knownOnly = i => (cols[i].projection.summary.unknownNetMonths.length ? '<small>Known months only</small>' : '');
+    // When later months are unknown, a lowest point or a count can only describe the known months.
+    const knownOnly = i => (cols[i].projection.summary.unknownNetMonths.length ? '<small class="fc-known-only">Known months only</small>' : '');
+    const noneKnown = (i, key, col) => `<span class="fc-unknown" data-key="${esc(key)}" data-scenario="${esc(col.scenarioId)}">Unknown</span><small>No month is known yet</small>`;
     const display = [
       { label: 'Money coming in', ...per(i => cell('totalIncome', i, { tone: false })) },
       { label: 'Money going out', ...per(i => cell('totalOut', i, { tone: false })) },
       { label: `<strong>Change in cash by ${esc(fmt.month(end))}</strong>`, ...per(i => cell('endCumulative', i, { signed: true })) },
       ...(bal ? [{ label: `<strong>Cash at the end of ${esc(fmt.month(end))}</strong>`, ...per(i => cell('endBalance', i)) }] : []),
       { label: bal ? 'Lowest balance' : 'Lowest point (change in cash)', ...per((i, col) => {
-        const lo = col.projection.summary.lowest;
-        const v = bal ? lo.balanceCents : lo.cumulativeCents;
-        if (!known(v)) return '<span class="fc-unknown">Unknown</span>';
+        const lo = lowestOf(col.projection, bal);
+        if (!lo) return noneKnown(i, 'lowest', col);
+        const v = lo.cents;
         return `<span class="fc-v${v < 0 ? ' tone-bad' : ''}" data-key="lowest" data-scenario="${esc(col.scenarioId)}" data-cents="${v}">${esc(bal ? whole(v) : signedWhole(v))}</span><small>${esc(fmt.month(lo.month))}</small>${knownOnly(i)}`;
       }) },
       { label: 'Months with more going out than coming in', ...per((i, col) => {
+        if (noKnownMonth(col.projection)) return noneKnown(i, 'negativeMonths', col);
         const list = col.projection.summary.negativeMonths;
         return `<span class="fc-v${list.length ? ' tone-warn' : ''}" data-key="negativeMonths" data-scenario="${esc(col.scenarioId)}">${list.length}</span>${list.length ? `<small>${esc(list.slice(0, 4).map(fmt.month).join(', ') + (list.length > 4 ? '…' : ''))}</small>` : ''}${knownOnly(i)}`;
       }) },
       ...(bal ? [{ label: 'First month cash falls below $0', ...per((i, col) => {
         const m = col.projection.summary.firstNegativeBalanceMonth;
-        return m ? `<span class="tone-bad">${esc(fmt.month(m))}</span>` : '<span>None</span>' + knownOnly(i);
+        if (m) return `<span class="tone-bad">${esc(fmt.month(m))}</span>`;
+        if (!lowestOf(col.projection, true)) return noneKnown(i, 'firstNegativeBalance', col);
+        return '<span>None</span>' + knownOnly(i);
       }) }] : []),
       { label: 'Set aside for savings goals', ...per(i => cell('savedForGoals', i, { tone: false })) },
       { label: 'Savings goals', ...per((i, col) => {
@@ -584,9 +617,23 @@
     const neg = sm.negativeMonths;
     const goals = proj.goals;
     const funded = goals.filter(g => g.status === 'funded').length;
+    const partly = sm.unknownNetMonths.length > 0;
+    const negMetric = noKnownMonth(proj)
+      ? { value: 'Unknown', tone: '', sub: 'No month is known yet' }
+      : {
+        value: String(neg.length),
+        tone: neg.length ? 'warn' : '',
+        sub: (neg.length ? esc(neg.slice(0, 3).map(fmt.month).join(', ') + (neg.length > 3 ? '…' : '')) : 'None') + (partly ? ` <span class="fc-known-only">(known months only: ${esc(plural(sm.unknownNetMonths.length, 'month'))} unknown)</span>` : ''),
+      };
     return `<div class="metrics fc-result" aria-label="Result for ${esc(s.name)}">
-      ${c.metric({ label: bal ? `Cash at the end of ${end}` : `Change in cash by ${end}`, value: value === null ? 'Unknown' : (bal ? whole(value) : signedWhole(value)), tone: value !== null && value < 0 ? 'bad' : '', sub })}
-      ${c.metric({ label: 'Months with more going out', value: String(neg.length), tone: neg.length ? 'warn' : '', sub: neg.length ? esc(neg.slice(0, 3).map(fmt.month).join(', ') + (neg.length > 3 ? '…' : '')) : (sm.unknownNetMonths.length ? 'None among the known months' : 'None') })}
+      ${c.metric({
+        label: bal ? `Cash at the end of ${end}` : `Change in cash by ${end}`,
+        value: value === null ? 'Unknown' : (bal ? whole(value) : signedWhole(value)),
+        tone: value !== null && value < 0 ? 'bad' : '',
+        status: value !== null && proj.missing.length ? c.badge('Incomplete', 'warn') : '',
+        sub: sub + (value !== null && proj.missing.length ? ` <span class="fc-known-only">Leaves out ${esc(plural(proj.missing.length, 'missing amount'))}.</span>` : ''),
+      })}
+      ${c.metric({ label: 'Months with more going out', ...negMetric })}
       ${c.metric({ label: 'Missing amounts', value: String(proj.missing.length), tone: proj.missing.length ? 'warn' : '', sub: proj.missing.length ? 'Left out of these totals, not counted as $0' : 'Everything needed is entered' })}
       ${c.metric({ label: 'Savings goals funded', value: goals.length ? `${funded} of ${goals.length}` : '—', tone: goals.some(g => g.status === 'short') ? 'warn' : '', sub: goals.length ? 'See the goals panel' : 'No goals yet' })}
     </div>`;
@@ -891,7 +938,7 @@
     const isBase = s.id === BASELINE;
     const desc = isBase
       ? `<div class="fc-base-note">${c.notice({ tone: 'info', title: 'This is your budget as entered.', body: 'It cannot hold planned changes, so it always shows where your current budget leads. To change the budget itself, edit it in Budget. To explore a change, start a scenario from it.', actions: `<a class="btn btn-small btn-secondary" href="${esc(ctx.href('budget'))}">Edit the budget</a>${btn('Start a scenario from the current budget', { id: 'fc-base-dup', action: 'fc:duplicate', variant: 'primary', data: { id: s.id } })}` })}</div>`
-      : `<div class="field fc-desc"><label for="fc-desc">Description (optional)</label><textarea id="fc-desc" rows="2" maxlength="${LIMITS.note || 500}" data-bind="scenarios[id=${esc(s.id)}].description" data-type="text" data-message="${esc(`Description saved for “${s.name}”.`)}" aria-describedby="fc-desc-error" placeholder="What this scenario explores">${esc(s.description || '')}</textarea><p class="field-error" id="fc-desc-error" role="alert" hidden></p></div>`;
+      : `<div class="field fc-desc"><label for="fc-desc">Description (optional)</label><textarea id="fc-desc" rows="3" maxlength="${LIMITS.note || 500}" data-bind="scenarios[id=${esc(s.id)}].description" data-type="text" data-message="${esc(`Description saved for “${s.name}”.`)}" aria-describedby="fc-desc-error" placeholder="What this scenario explores">${esc(s.description || '')}</textarea><p class="field-error" id="fc-desc-error" role="alert" hidden></p></div>`;
     return `<section class="card fc-editor" id="fc-editor" aria-labelledby="fc-editor-h">
       <div class="card-head"><div><p class="eyebrow">${isBase ? 'Selected: current budget' : 'Selected scenario'}</p><h2 id="fc-editor-h" tabindex="-1">${esc(s.name)}</h2></div></div>
       ${resultStrip(ctx, R, proj, baseProj)}
@@ -930,7 +977,7 @@
     // The three that change the numbers most stay visible; the full list is one click away.
     const key = [proj.assumptions[0], extra[0], proj.startBalanceCents === null ? 'Joint cash balance not entered: the forecast shows the change in cash, not a balance.' : null].filter(Boolean);
     return `<section class="card fc-missing" id="fc-missing" aria-labelledby="fc-missing-h">
-      <div class="card-head"><div><h2 id="fc-missing-h">What this forecast leaves out</h2><p class="card-sub">For “${esc(s.name)}”.</p></div></div>
+      <div class="card-head"><div><h2 id="fc-missing-h" tabindex="-1">What this forecast leaves out</h2><p class="card-sub">For “${esc(s.name)}”.</p></div></div>
       ${body}
       ${outsideNote}
       <ul class="fc-key-assumptions">${key.map(a => `<li>${esc(a)}</li>`).join('')}</ul>
@@ -996,7 +1043,7 @@
   function monthFlags(r, pay, bal) {
     const out = [];
     if (pay.extra) out.push(`<span class="fc-flag-extra">${c.badge(pay.extra + ' paychecks', 'info')}</span>`);
-    if (r.netCents === null) out.push(c.badge('Unknown', 'warn', { title: r.netUnknownReason === 'personal_spending' ? 'Personal spending cannot be worked out' : 'Some income is not entered' }));
+    if (r.netCents === null) out.push(`<span class="fc-flag-unknown">${c.badge(r.netUnknownReason === 'personal_spending' ? 'Personal spending unknown' : 'Income unknown', 'warn')}</span>`);
     else if (r.netCents < 0) out.push(`<span class="fc-flag-neg">${c.badge('Cash goes down', 'bad')}</span>`);
     if (bal && r.balanceCents !== null && r.balanceCents < 0) out.push(c.badge('Below $0', 'bad'));
     if (r.unassignedCents !== null && r.unassignedCents < 0) out.push(c.badge('Goals not covered', 'warn'));
@@ -1026,8 +1073,9 @@
     const recurringOut = r.eventLines.filter(l => l.type === 'recurring' && l.direction === 'expense');
     const recurringKnown = recurringOut.reduce((a, l) => a + (l.cents || 0), 0);
     const targets = r.spendingCents - recurringKnown;
+    const unsetTargets = proj.missing.filter(m => m.source === 'plan' && String(m.id || '').startsWith('target:')).length;
     const outLines = [
-      line(`<a href="${esc(ctx.href('budget', { section: 'targets' }))}">${esc(ctx.scope === 'household' ? 'Spending targets and personal spending' : 'Spending targets')}</a>`, esc(money(targets)), 'From your budget'),
+      line(`<a href="${esc(ctx.href('budget', { section: 'targets' }))}">${esc(ctx.scope === 'household' ? 'Spending targets and personal spending' : 'Spending targets')}</a>`, esc(money(targets)), 'From your budget' + (unsetTargets ? `; leaves out ${plural(unsetTargets, 'target')} not entered` : '')),
       ...recurringOut.map(l => line(esc(l.label), l.cents === null ? '<span class="fc-unknown">Missing</span>' : esc(money(l.cents)), l.cents === null ? 'Not counted until the amount is entered' : 'Scenario change, every month')),
       line(`<a href="${esc(ctx.href('budget', { section: 'bills' }))}">Bills</a>`, esc(money(r.billsCents)), 'Monthly amounts from your budget'),
       ...r.eventLines.filter(l => (l.type === 'one_time' || l.type === 'goal_spend') && l.direction === 'expense').map(l => line(esc(l.label), l.cents === null ? '<span class="fc-unknown">Missing</span>' : esc(money(l.cents)), l.cents === null ? 'Not counted until the amount is entered' : l.fromGoalCents ? `${money(l.fromGoalCents)} paid from savings set aside earlier` : (l.type === 'goal_spend' ? 'Savings goal spent' : 'One-time'))),
@@ -1046,7 +1094,10 @@
       r.balanceCents !== null ? line('<strong>Balance</strong>', esc(money(r.balanceCents))) : '',
     ].filter(Boolean);
     const warn = r.warnings.length ? `<ul class="fc-warn-list">${r.warnings.map(w => `<li>${c.badge('Note', 'warn')} ${esc(w)}</li>`).join('')}</ul>` : '';
-    const unknownNote = r.netCents === null ? `<p class="fine tone-warn">${esc(r.netUnknownReason === 'personal_spending' ? "Net is unknown: someone's personal spending can't be worked out because their transfer to joint is unknown." : 'Net is unknown because some income this month is not entered.')} See “What this forecast leaves out”.</p>` : '';
+    const unknownLines = r.incomeLines.filter(l => l.basis !== 'none' && l.cents === null).map(l => l.label);
+    const unknownNote = r.netCents === null ? `<p class="fine tone-warn">${esc(r.netUnknownReason === 'personal_spending'
+      ? "Net is unknown: someone's personal spending can't be worked out because their transfer to joint is unknown."
+      : 'Net is unknown because some income this month is not entered' + (unknownLines.length ? ': ' + listText(unknownLines) : '') + '.')} It is not counted as $0. See “What this forecast leaves out”.</p>` : '';
     const planned = r.netCents !== null && r.netCents < 0 && r.goalDrawsCents > 0
       ? `<p class="fine">Cash goes down this month partly because ${esc(money(r.goalDrawsCents))} set aside in earlier months is spent, as planned.</p>` : '';
     const history = spendingLink(ctx, null, null);
@@ -1062,30 +1113,47 @@
     </div>`;
   }
 
+  /** Which column of a month has an event whose amount is missing (left out of that total). */
+  function missingIn(r) {
+    const miss = l => l.cents === null;
+    return {
+      income: r.eventLines.some(l => miss(l) && (l.direction === 'income' || l.direction === 'income_loss')),
+      spending: r.eventLines.some(l => miss(l) && l.type === 'recurring' && l.direction === 'expense'),
+      oneTime: r.eventLines.some(l => miss(l) && (l.type === 'one_time' || l.type === 'goal_spend') && l.direction === 'expense'),
+    };
+  }
+
   function monthsCard(ctx, R, proj) {
     const bal = proj.startBalanceCents !== null;
+    const open = bal ? balanceOpenMonth(ctx) : null;
+    const notYet = r => bal && open && r.month < open;
     const cell = (cls, label, value) => `<span class="fc-c ${cls}"><span class="fc-l">${label}</span><span class="fc-n">${value}</span></span>`;
     const u = v => (v === null || v === undefined ? '<span class="fc-unknown">Unknown</span>' : esc(whole(v)));
     const us = v => (v === null || v === undefined ? '<span class="fc-unknown">Unknown</span>' : esc(signedWhole(v)));
+    const plusMissing = '<small class="fc-plus-missing">+ missing</small>';
+    const firstUnknown = proj.summary.unknownNetMonths[0] || null;
     const items = proj.rows.map(r => {
       const pay = paycheckInfo(ctx, r);
       const flags = monthFlags(r, pay, bal);
+      const miss = missingIn(r);
       const payText = pay.items.length ? pay.items.map(p => `<span class="${p.isExtra ? 'fc-pay-extra' : ''}">${esc(p.name)} ${p.assumed ? '~' : ''}${esc(p.n)}</span>`).join(', ') : '—';
+      const oneTime = r.oneTimeCents ? u(r.oneTimeCents) + (miss.oneTime ? plusMissing : '') : (miss.oneTime ? '<span class="fc-unknown">Missing</span>' : '—');
+      const balance = notYet(r) ? `<span class="fc-dim">From ${esc(fmt.month(open))}</span>` : u(r.balanceCents);
       const stateCls = [r.netCents !== null && r.netCents < 0 ? 'is-negative' : '', bal && r.balanceCents !== null && r.balanceCents < 0 ? 'is-below-zero' : '', r.netCents === null ? 'is-unknown' : '', pay.extra ? 'has-extra-pay' : ''].filter(Boolean).join(' ');
-      return `<li><details class="fc-month ${stateCls}" id="fc-m-${esc(r.month)}" data-month="${esc(r.month)}" data-income-cents="${r.incomeCents ?? ''}" data-net-cents="${r.netCents ?? ''}" data-cumulative-cents="${r.cumulativeCents ?? ''}">
+      return `<li><details class="fc-month ${stateCls}" id="fc-m-${esc(r.month)}" data-month="${esc(r.month)}" data-income-cents="${r.incomeCents ?? ''}" data-net-cents="${r.netCents ?? ''}" data-cumulative-cents="${r.cumulativeCents ?? ''}"${bal ? ` data-balance-cents="${r.balanceCents ?? ''}"` : ''}>
         <summary class="fc-row${bal ? ' has-balance' : ''}">
           <span class="fc-c fc-c-month"><span class="fc-chev" aria-hidden="true"></span><strong>${esc(fmt.month(r.month))}</strong>${flags.length ? `<span class="fc-flags">${flags.join(' ')}</span>` : ''}</span>
           ${cell('fc-desk fc-c-pay', 'Paychecks ', payText)}
-          ${cell('num', 'In ', u(r.incomeCents))}
-          ${cell('num fc-desk', 'Spending ', u(r.spendingCents))}
+          ${cell('num', 'In ', u(r.incomeCents) + (miss.income && r.incomeCents !== null ? plusMissing : ''))}
+          ${cell('num fc-desk', 'Spending ', u(r.spendingCents) + (miss.spending ? plusMissing : ''))}
           ${cell('num fc-desk', 'Bills ', u(r.billsCents))}
-          ${cell('num fc-desk', 'One-time ', r.oneTimeCents ? u(r.oneTimeCents) : '—')}
-          ${cell('num fc-phone', 'Out ', u(r.outCents))}
+          ${cell('num fc-desk', 'One-time ', oneTime)}
+          ${cell('num fc-phone', 'Out ', u(r.outCents) + (miss.spending || miss.oneTime ? plusMissing : ''))}
           ${cell('num fc-c-net' + (r.netCents !== null && r.netCents < 0 ? ' tone-bad' : ''), 'Net ', us(r.netCents))}
           ${cell('num fc-desk', 'To goals ', r.contributionsCents ? u(r.contributionsCents) : '—')}
           ${cell('num fc-desk' + (r.unassignedCents !== null && r.unassignedCents < 0 ? ' tone-warn' : ''), 'Left after goals ', us(r.unassignedCents))}
-          ${cell('num fc-c-cum', 'Change so far ', us(r.cumulativeCents))}
-          ${bal ? cell('num fc-c-bal' + (r.balanceCents !== null && r.balanceCents < 0 ? ' tone-bad' : ''), 'Balance ', u(r.balanceCents)) : ''}
+          ${cell('num fc-c-cum', 'Change so far ', us(r.cumulativeCents) + (r.cumulativeCents === null && r.netCents !== null && firstUnknown ? `<small class="fc-dim">since ${esc(fmt.month(firstUnknown))}</small>` : ''))}
+          ${bal ? cell('num fc-c-bal' + (r.balanceCents !== null && r.balanceCents < 0 ? ' tone-bad' : ''), 'Balance ', balance) : ''}
         </summary>
         ${monthBody(ctx, R, proj, r)}
       </details></li>`;
@@ -1100,6 +1168,13 @@
       sm.unknownNetMonths.length ? `${plural(sm.unknownNetMonths.length, 'month')} unknown` : '',
       bal && sm.firstNegativeBalanceMonth ? `cash below $0 from ${fmt.month(sm.firstNegativeBalanceMonth)}` : '',
     ].filter(Boolean);
+    const unsetTargets = proj.missing.filter(m => m.source === 'plan' && String(m.id || '').startsWith('target:')).length;
+    const notes = [
+      unsetTargets ? `Spending leaves out ${esc(plural(unsetTargets, 'spending target'))} not entered yet, so real spending is likely higher. <button type="button" id="fc-months-see-missing" class="fc-linkbtn" data-action="fc:focus" data-target="fc-missing-h">See which</button>` : '',
+      open && proj.rows.some(notYet) ? `Balances start in ${esc(fmt.month(open))}: the balance entered is dated ${esc(fmt.date(ctx.state.plan.balances.asOf))} and already includes the months before.` : '',
+      proj.rows.some(r => Object.values(missingIn(r)).some(Boolean)) ? '<span class="fc-plus-missing">+ missing</span> next to a total: a change in that month has no amount yet, so the total leaves it out.' : '',
+      proj.rows.some(r => paycheckInfo(ctx, r).items.some(p => p.assumed)) ? '~ before a paycheck count: assumed, because that pay schedule is not entered.' : '',
+    ].filter(Boolean);
     const tableCols = [
       { key: 'm', label: 'Month' }, { key: 'pay', label: 'Paychecks' }, { key: 'in', label: 'In', align: 'right' },
       { key: 'sp', label: 'Spending', align: 'right' }, { key: 'bills', label: 'Bills', align: 'right' }, { key: 'one', label: 'One-time', align: 'right' },
@@ -1111,12 +1186,13 @@
     const ts = v => fmt.money(v, { signed: true, fallback: 'Unknown' });
     const tableRows = proj.rows.map(r => {
       const pay = paycheckInfo(ctx, r);
-      const notes = [pay.extra ? pay.extra + ' paychecks' : '', r.netCents === null ? 'Unknown' : r.netCents < 0 ? 'Cash goes down' : '', bal && r.balanceCents !== null && r.balanceCents < 0 ? 'Below $0' : '', r.unassignedCents !== null && r.unassignedCents < 0 ? 'Goals not covered' : '', r.eventLines.some(l => l.cents === null) ? 'Missing amount' : ''].filter(Boolean).join('; ');
-      return { m: fmt.month(r.month), pay: pay.items.map(p => `${p.name} ${p.assumed ? '~' : ''}${p.n}`).join(', ') || '—', in: t(r.incomeCents), sp: t(r.spendingCents), bills: t(r.billsCents), one: t(r.oneTimeCents), out: t(r.outCents), net: ts(r.netCents), goals: t(r.contributionsCents), left: ts(r.unassignedCents), cum: ts(r.cumulativeCents), bal: t(r.balanceCents), notes };
+      const notes = [pay.extra ? pay.extra + ' paychecks' : '', r.netCents === null ? (r.netUnknownReason === 'personal_spending' ? 'Personal spending unknown' : 'Income unknown') : r.netCents < 0 ? 'Cash goes down' : '', bal && r.balanceCents !== null && r.balanceCents < 0 ? 'Below $0' : '', r.unassignedCents !== null && r.unassignedCents < 0 ? 'Goals not covered' : '', r.eventLines.some(l => l.cents === null) ? 'Missing amount' : ''].filter(Boolean).join('; ');
+      return { m: fmt.month(r.month), pay: pay.items.map(p => `${p.name} ${p.assumed ? '~' : ''}${p.n}`).join(', ') || '—', in: t(r.incomeCents), sp: t(r.spendingCents), bills: t(r.billsCents), one: t(r.oneTimeCents), out: t(r.outCents), net: ts(r.netCents), goals: t(r.contributionsCents), left: ts(r.unassignedCents), cum: ts(r.cumulativeCents), bal: notYet(r) ? 'From ' + fmt.month(open) : t(r.balanceCents), notes };
     });
     const fullTable = c.disclosure('Show every month as one table', c.table({ caption: `Month-by-month forecast for ${R.selected.name}`, columns: tableCols, rows: tableRows, cls: 'fc-full-table' }), { cls: 'fc-full' });
     return `<section class="card fc-months-card" id="fc-months" aria-labelledby="fc-months-h">
       <div class="card-head"><div><h2 id="fc-months-h">Month by month: ${esc(R.selected.name)}</h2><p class="card-sub">${esc(TIMING[proj.timing] ? TIMING[proj.timing].short : proj.timing)}. Open a month to see each paycheck, bill and change behind its totals.${flagsSummary.length ? ' ' + esc(flagsSummary.join('; ')) + '.' : ''}</p></div></div>
+      ${notes.length ? `<ul class="fc-months-notes">${notes.map(n => `<li>${n}</li>`).join('')}</ul>` : ''}
       <div class="fc-months">
         ${head}
         <ol class="fc-month-list" aria-label="Months">${items}</ol>
@@ -1158,7 +1234,47 @@
   // Links from other views may carry ?focus=<element id>: focus it once per navigation.
   let handledFocus = null;
 
+  /**
+   * Month inputs fire `change` on every keystroke that forms a valid month, and every change here
+   * re-renders the page, which resets the field while the year is half typed (typing 2028 saved
+   * 0008-05). Typed months are therefore applied on Enter or when leaving the field; a month
+   * picked from the browser's calendar (no keystrokes) still applies at once. Implausible years
+   * are explained instead of saved. Installed once on the view container, for this view only.
+   */
+  function installMonthTyping(container) {
+    if (container.fcMonthTyping) return;
+    container.fcMonthTyping = true;
+    const mine = el => el && el.matches && el.matches('input[type="month"][data-bind], input[type="month"][data-action]') && !!el.closest('.fc-controls, .fc-page');
+    const IGNORE = ['Tab', 'Shift', 'Escape', 'Enter', 'Control', 'Alt', 'Meta'];
+    const commit = el => {
+      el.removeAttribute('data-fc-typed');
+      const v = el.value;
+      const year = Number(String(v).slice(0, 4));
+      if (v && (!E.months.isMonth(v) || year < 1990 || year > 2200)) {
+        setError(el.id, `Check the year: ${v.slice(0, 4)} does not look right. Type the month as YYYY-MM.`);
+        return;
+      }
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    container.addEventListener('keydown', ev => {
+      const el = ev.target;
+      if (!mine(el)) return;
+      if (ev.key === 'Enter') {
+        if (el.getAttribute('data-fc-typed')) { ev.preventDefault(); ev.stopPropagation(); commit(el); }
+        return;
+      }
+      if (!IGNORE.includes(ev.key)) el.setAttribute('data-fc-typed', '1');
+    }, true);
+    container.addEventListener('change', ev => {
+      if (mine(ev.target) && ev.target.getAttribute('data-fc-typed')) ev.stopPropagation();
+    }, true);
+    container.addEventListener('focusout', ev => {
+      if (mine(ev.target) && ev.target.getAttribute('data-fc-typed')) commit(ev.target);
+    }, true);
+  }
+
   function afterRender(container, ctx) {
+    installMonthTyping(container);
     const target = ctx && ctx.route.params.focus;
     if (!target) handledFocus = null;
     else if (handledFocus !== target + '|' + JSON.stringify(ctx.route.params)) {
@@ -1186,8 +1302,8 @@
     return String(raw).trim();
   }
 
-  // app.js runs a form's data-action for clicks inside the form as well as on submit; forms here
-  // act only on submit (Enter or the submit button).
+  // Forms here act only on submit (Enter or the submit button); app.js already ignores clicks
+  // inside a form, and this guard keeps that true if an action is ever called another way.
   const isSubmit = ev => !ev || ev.type === 'submit';
 
   function findEvent(ctx, sid, eid) {
@@ -1243,7 +1359,9 @@
     'fc:start': (ctx, el) => {
       const R = routeOf(ctx);
       const v = el.value;
+      const b = startBounds(ctx);
       if (v && !E.months.isMonth(v)) { setError(el.id, 'Choose a month (YYYY-MM).'); return; }
+      if (v && (v < b.min || v > b.max)) { setError(el.id, `Choose a month from ${fmt.month(b.min)} to ${fmt.month(b.max)}.`); return; }
       setError(el.id, null);
       go(ctx, linkParams(ctx, R, { start: v && v !== ctx.forecastStart ? v : undefined }));
     },
@@ -1336,7 +1454,7 @@
       const over = {};
       if (R.selected.id === id) over.scenario = undefined;
       if (R.compareFromUrl) over.compare = R.compare.filter(x => x !== id).join(',') || undefined;
-      go(ctx, linkParams(ctx, R, over), { focus: 'fc-new-name' });
+      go(ctx, linkParams(ctx, R, over), { focus: 'fc-scenarios-h' });
     },
 
     'fc:template': (ctx, el) => {

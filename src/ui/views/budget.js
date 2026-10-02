@@ -147,6 +147,25 @@
     return 'an account not confirmed yet';
   }
 
+  /**
+   * Categories a target or bill can use: the taxonomy, categories of spending rows, targets and
+   * bills. Leaves out names only used on transfers, income and payments ("Transfer", "Income"…),
+   * which are never spending.
+   */
+  function spendCategories(ctx) {
+    return ctx.memo('bud-spend-cats', () => {
+      const set = new Set(E.categories.names());
+      for (const t of ctx.txns) {
+        if (t.kind !== 'spend') continue;
+        if (t.category) set.add(t.category);
+        for (const part of t.parts || []) if (part.category) set.add(part.category);
+      }
+      for (const k of Object.keys(ctx.state.plan.targets || {})) set.add(k);
+      for (const b of ctx.state.plan.bills || []) if (b.category) set.add(b.category);
+      return E.categories.sortNames([...set]);
+    });
+  }
+
   // ------------------------------------------------------------------ form fields (with stable ids and toast messages)
   function helpAndError(id, help) {
     return `<p class="field-help" id="${esc(id)}-help">${help}</p><p class="field-error" id="${esc(id)}-error" role="alert" hidden></p>`;
@@ -181,11 +200,18 @@
     // "Actual paydays" needs a month: use the first month after the data (where the forecast starts).
     return ctx.state.plan.settings.incomeTiming === 'actual' ? { month: ctx.forecastStart } : {};
   }
-  function timingText(ctx, timing) {
-    if (timing === 'actual') return fmt.monthLong(ctx.forecastStart) + ', actual paydays';
+  /** How income is counted. The summary shows one month; the forecast counts every month. */
+  function timingText(ctx, timing, { forecast = false } = {}) {
+    if (timing === 'actual') return forecast ? 'actual paydays, month by month' : fmt.monthLong(ctx.forecastStart) + ', actual paydays';
     if (timing === 'average') return 'annual average month';
     return 'typical month';
   }
+  /**
+   * Link to the transactions behind a figure. Every actual and usual amount on this page is
+   * joint-account spending (targets and joint bills are joint-funded), so the link opens the same
+   * accounts and its total matches.
+   */
+  const spendHref = (ctx, params) => ctx.href('spending', { ...params, scope: 'joint' });
 
   /** Bills split into regular bills and debt payments (both in plan.bills). */
   function buckets(summary, ctx) {
@@ -221,10 +247,23 @@
         avg12: new Map(u12.categories.map(x => [x.category, x.averageCents])),
         adjusted12,
         baselineMonths: u.baselineMonths,
+        baselineMonths12: u12.baselineMonths,
         usableCount: u.usableCount,
         usable12: u12.usableCount,
       };
     });
+  }
+
+  /**
+   * Link to the transactions behind an average. A run of whole months opens that range in
+   * Spending, which shows the same "per month over N months" figure; months with gaps (a partial
+   * month left out) open the selected month with the same window, where Spending explains them.
+   */
+  function usualHref(ctx, cmp, cat, months, window) {
+    if (!months || !months.length) return null;
+    const first = months[0], last = months[months.length - 1];
+    if (E.months.range(first, last).length === months.length) return spendHref(ctx, { period: first === last ? first : first + '..' + last, cat });
+    return spendHref(ctx, { period: cmp.month, cat, window });
   }
 
   /**
@@ -234,18 +273,27 @@
    */
   function suggestionFor(cmp, category) {
     if (!cmp.month) return { cents: null, basis: null, irregular: false };
-    if (E.categories.isSeasonal(category) && cmp.usable12 > 0) {
+    const sig = cmp.signals.get(category);
+    const irregular = !!sig && sig.signal === 'irregular';
+    // Seasonal categories, and categories with one unusual month in the short window (a one-off
+    // bill or purchase), use the 12-month average: a 3-month average of one charge is not a
+    // monthly cost. The basis is named on the button.
+    if ((E.categories.isSeasonal(category) || irregular) && cmp.usable12 > 0) {
       const avg = cmp.avg12.has(category) ? cmp.avg12.get(category) : 0;
       const adj = cmp.adjusted12[category] ? cmp.adjusted12[category].adjustedAvgCents : avg;
-      const sig = cmp.signals12.get(category);
-      return { cents: adj ?? avg, basis: adj !== avg ? 'seasonal-adjusted' : 'seasonal', irregular: !!sig && sig.signal === 'irregular', signal: sig };
+      const cents = adj ?? avg;
+      return { cents, basis: 'year', adjusted: known(adj) && adj !== avg, irregular, signal: sig };
     }
     const row = cmp.rows.get(category);
-    const sig = cmp.signals.get(category);
-    if (!row) return { cents: cmp.usableCount ? 0 : null, basis: 'usual', irregular: false, signal: sig };
+    if (!row) return { cents: cmp.usableCount ? 0 : null, basis: 'usual', irregular, signal: sig };
     const adjusted = row.adjustedUsualCents;
     const useAdjusted = known(adjusted) && adjusted !== row.usualCents;
-    return { cents: useAdjusted ? adjusted : row.usualCents, basis: useAdjusted ? 'adjusted' : 'usual', irregular: !!sig && sig.signal === 'irregular', signal: sig };
+    return { cents: useAdjusted ? adjusted : row.usualCents, basis: 'usual', adjusted: useAdjusted, irregular, signal: sig };
+  }
+  /** Words for a suggestion's basis, used on buttons and in the bulk-fill summary. */
+  function basisText(cmp, s) {
+    const n = s.basis === 'year' ? cmp.usable12 : cmp.usableCount;
+    return `${n}-month average${s.adjusted ? ', without rows you left out of planning' : ''}`;
   }
 
   /** Blank targets the bulk action would fill, and the ones it leaves blank (with why). */
@@ -257,7 +305,7 @@
       const s = suggestionFor(cmp, cat);
       if (!known(s.cents) || s.cents <= 0) noHistory.push(cat);
       else if (s.irregular) oneOff.push(cat);
-      else fill.push({ category: cat, cents: s.cents, basis: s.basis });
+      else fill.push({ category: cat, cents: s.cents, basis: s.basis, note: s.basis === 'year' ? basisText(cmp, s) : '' });
     }
     return { blank, fill, noHistory, oneOff };
   }
@@ -291,20 +339,46 @@
         forecast = { before: before.summary.endCumulativeCents, after: after.summary.endCumulativeCents };
       } catch (err) { forecast = null; }
       const unknownLine = lines.find(l => /^The effect on money left/.test(l)) || null;
-      return { wc, detail, outDelta: outAfter - outBefore, inDelta, forecast, unknownLine };
+      const touched = key => JSON.stringify(prev.plan[key]) !== JSON.stringify(st.plan[key]);
+      return { wc, detail, outDelta: outAfter - outBefore, inDelta, forecast, unknownLine, savingsChanged: touched('savings'), incomeChanged: touched('incomes') || touched('settings') };
     });
+  }
+
+  /** "some income is unknown" from a plan summary's remainingUnknownNote. */
+  function unknownWhy(summary) {
+    return String(summary.remainingUnknownNote || 'Money left over cannot be worked out because some income is unknown.')
+      .replace(/^Money left over cannot be worked out because /, '').replace(/\.$/, '');
   }
 
   function changeHeadline(ch) {
     const { wc } = ch;
+    const before = wc.before.remainingCents, after = wc.after.remainingCents;
     if (known(wc.remainingDeltaCents)) {
       const year = known(wc.annualDeltaCents) ? `, ${signed(wc.annualDeltaCents)} a year` : '';
       return wc.remainingDeltaCents === 0
-        ? `Remaining stays at ${money(wc.after.remainingCents)} a month.`
-        : `Remaining went from ${money(wc.before.remainingCents)} to ${money(wc.after.remainingCents)} (${signed(wc.remainingDeltaCents)} a month${year}).`;
+        ? `Remaining stays at ${money(after)} a month.`
+        : `Remaining went from ${money(before)} to ${money(after)} (${signed(wc.remainingDeltaCents)} a month${year}).`;
     }
-    const why = wc.after.remainingCents === null ? (wc.after.remainingUnknownNote || 'Some income is unknown.') : (wc.before.remainingUnknownNote || 'Some income was unknown.');
-    return (ch.outDelta ? `Going out ${signed(ch.outDelta)} a month. ` : '') + 'Remaining is unknown: ' + why.replace(/^Money left over cannot be worked out because /, '').replace(/\.$/, '') + '.';
+    // One side is unknown: say which, never a difference against an unknown.
+    if (before === null && after !== null) return `Remaining is now ${money(after)} a month. Before this change it could not be worked out: ${unknownWhy(wc.before)}.`;
+    if (before !== null && after === null) return `Remaining was ${money(before)} a month and now cannot be worked out: ${unknownWhy(wc.after)}.`;
+    return (ch.outDelta ? `Going out ${signed(ch.outDelta)} a month. ` : '') + `Remaining is still unknown: ${unknownWhy(wc.after)}.`;
+  }
+
+  /**
+   * Whole-household view only: a change in someone's take-home pay moves their personal spending
+   * by the same amount (the whole personal share of pay is counted as spent), so Remaining does
+   * not move. Returns the plain explanation when that is what happened, else ''.
+   */
+  function payChangeNote(ctx, ch) {
+    if (ctx.scope !== 'household' || !ch.inDelta) return '';
+    const moved = ch.wc.before.personal.map(p => {
+      const a = ch.wc.after.personal.find(x => x.personId === p.personId);
+      return a && known(p.spendingCents) && known(a.spendingCents) && a.spendingCents !== p.spendingCents ? { name: a.name, delta: a.spendingCents - p.spendingCents } : null;
+    }).filter(Boolean);
+    if (!moved.length) return '';
+    const names = listText(moved.map(m => m.name));
+    return `In the whole-household view, all of ${moved.length === 1 ? possessive(names) : "each person's"} pay that does not reach joint counts as personal spending, so ${moved.length === 1 ? `${possessive(names)} personal spending` : 'personal spending'} changed by ${moved.map(m => signed(m.delta)).join(' and ')} too${known(ch.wc.remainingDeltaCents) && ch.wc.remainingDeltaCents === 0 ? ' and Remaining did not change' : ''}. Remaining moves when the money reaching joint or the joint costs change.`;
   }
 
   // ------------------------------------------------------------------ summary panel
@@ -338,8 +412,9 @@
   }
 
   function summaryRow(ctx, { label, value, sub = '', section, tone = '', cls = '', id }) {
-    const name = section ? sectionLink(ctx, section, esc(label)) : esc(label);
-    return `<div class="bud-sum-row ${esc(cls)}"${id ? ` id="${esc(id)}"` : ''}><dt>${name}</dt><dd class="num ${tone ? 'tone-' + esc(tone) : ''}">${esc(value)}</dd>${sub ? `<p class="bud-sum-sub">${sub}</p>` : ''}</div>`;
+    // The summary stays on screen across sections, so its links keep focus by id.
+    const name = section ? sectionLink(ctx, section, esc(label), { id: id ? id + '-link' : undefined }) : esc(label);
+    return `<div class="bud-sum-row ${esc(cls)}"${id ? ` id="${esc(id)}"` : ''}><dt>${name}</dt><dd class="num ${tone ? 'tone-' + esc(tone) : ''}">${esc(value)}</dd>${sub ? `<dd class="bud-sum-sub">${sub}</dd>` : ''}</div>`;
   }
 
   function summaryPanel(ctx, plan, cmp, change) {
@@ -412,30 +487,52 @@
     rows.push(summaryRow(ctx, { label: 'Remaining', value: remaining === null ? 'Unknown' : whole(remaining), tone: remaining !== null && remaining < 0 ? 'bad' : '', sub: remainingSub, cls: 'bud-sum-total', id: 'bud-sum-remaining' }));
 
     // What changed (after an edit in this session)
+    const incomeText = s => (s.income.totalCents !== null ? money(s.income.totalCents)
+      : known(s.income.lowerBoundCents) && s.income.lowerBoundCents > 0 ? 'at least ' + money(s.income.lowerBoundCents) : 'unknown');
+    let flowLine = '';
+    if (change) {
+      const inB = incomeText(change.wc.before), inA = incomeText(change.wc.after);
+      if (change.inDelta) flowLine = `Coming in ${signed(change.inDelta)} a month; going out ${signed(change.outDelta)} a month.`;
+      else if (inB !== inA) flowLine = `Coming in: ${inB} → ${inA} a month.${change.outDelta ? ` Going out ${signed(change.outDelta)} a month.` : ''}`;
+    }
+    const payNote = change ? payChangeNote(ctx, change) : '';
+    // The forecast can count actual paydays (three-paycheck months), so its yearly change may
+    // differ from 12 × the monthly change; say so instead of leaving two numbers that disagree.
+    const fc = change && change.forecast;
+    const fcDelta = fc && fc.before !== null && fc.after !== null ? fc.after - fc.before : null;
+    const fcDiffers = fcDelta !== null && known(change.wc.annualDeltaCents) && fcDelta !== change.wc.annualDeltaCents;
+    const scenarioTiming = st.scenarios[0] && st.scenarios[0].assumptions && st.scenarios[0].assumptions.incomeTiming;
+    const fcWhy = !fcDiffers ? ''
+      : change.savingsChanged ? 'Money set aside for goals stays in your cash in the forecast, and a goal is only taken out when it is spent, so the forecast moves differently from Remaining.'
+        : change.incomeChanged && scenarioTiming === 'actual' ? 'The forecast counts actual paydays, including months with an extra paycheck, so it differs from 12 × the monthly change.'
+          : 'The forecast uses its own settings and dates, so it can differ from 12 × the monthly change.';
     const changeBox = change ? glue(`<div class="bud-change" id="bud-change">
         <h3>What changed</h3>
         <p class="bud-change-head"><strong>${esc(changeHeadline(change))}</strong></p>
-        ${change.inDelta ? `<p>Coming in ${esc(signed(change.inDelta))} a month; going out ${esc(signed(change.outDelta))} a month${ctx.scope === 'household' && change.outDelta ? ' (personal spending is the personal share of pay, so it moves with pay)' : ''}.</p>` : ''}
-        ${change.forecast ? `<p class="bud-change-forecast">12-month forecast, change in ${ctx.scope === 'joint' ? 'joint cash' : 'cash'}: ${change.forecast.before === null || change.forecast.after === null
-          ? `${esc(change.forecast.before === null ? 'Unknown' : signed(change.forecast.before))} → ${esc(change.forecast.after === null ? 'Unknown' : signed(change.forecast.after))}`
-          : `${esc(signed(change.forecast.before))} → ${esc(signed(change.forecast.after))} (${esc(signed(change.forecast.after - change.forecast.before))})`}.</p>` : ''}
+        ${flowLine ? `<p>${esc(flowLine)}</p>` : ''}
+        ${payNote ? `<p class="bud-change-why">${esc(payNote)}</p>` : ''}
+        ${fc ? `<p class="bud-change-forecast">12-month forecast, change in ${ctx.scope === 'joint' ? 'joint cash' : 'cash'}: ${fcDelta === null
+          ? `${esc(fc.before === null ? 'Unknown' : signed(fc.before))} → ${esc(fc.after === null ? 'Unknown' : signed(fc.after))}`
+          : `${esc(signed(fc.before))} → ${esc(signed(fc.after))} (${esc(signed(fcDelta))})`}.${fcWhy ? ` ${esc(fcWhy)}` : ''}</p>` : ''}
         ${change.detail.length ? `<ul class="bud-change-lines">${change.detail.slice(0, 4).map(l => `<li>${esc(l)}</li>`).join('')}${change.detail.length > 4 ? `<li>${esc(plural(change.detail.length - 4, 'more change'))}</li>` : ''}</ul>` : ''}
-        <button type="button" class="btn btn-small btn-secondary" id="bud-undo" data-action="undo">Undo this change</button>
+        <button type="button" class="btn btn-small btn-secondary" id="bud-undo" data-action="budget:undo">Undo this change</button>
       </div>`) : '';
 
     // Last month against the plan
     let pvaLine = '';
     if (cmp.month) {
+      // Every category row is either planned (a known target or joint bill) or not, so the two parts
+      // add up to the month's joint spending, which is what the linked Spending page totals.
       const planned = cmp.pva.filter(r => r.plannedCents !== null);
       const plannedSum = planned.reduce((a, r) => a + r.plannedCents, 0);
       const actualSum = planned.reduce((a, r) => a + r.actualCents, 0);
+      const unplannedSpend = cmp.pva.filter(r => r.plannedCents === null).reduce((a, r) => a + r.actualCents, 0);
       const over = planned.filter(r => r.status === 'over').sort((x, y) => y.diffToPlanCents - x.diffToPlanCents);
-      const unplannedSpend = cmp.pva.filter(r => r.plannedCents === null && r.actualCents > 0).reduce((a, r) => a + r.actualCents, 0);
       pvaLine = `<div class="bud-sum-note" id="bud-sum-pva"><h3>${esc(fmt.monthLong(cmp.month))} against the plan</h3>
-        <p>Spent <a href="${esc(ctx.href('spending', { period: cmp.month }))}">${esc(money(actualSum))}</a> where the plan expected ${esc(money(plannedSum))}${ctx.scope === 'household' ? ' (joint accounts)' : ''}.
-        ${over.length ? `Over plan: ${over.slice(0, 2).map(r => `<a href="${esc(ctx.href('spending', { period: cmp.month, cat: r.category }))}">${esc(r.category)}</a> ${esc(signed(r.diffToPlanCents))}`).join(', ')}${over.length > 2 ? ` and ${esc(over.length - 2)} more` : ''}.` : 'No category over plan.'}
-        ${unplannedSpend > 0 ? ` ${esc(money(unplannedSpend))} more in categories with no target.` : ''}
-        ${sectionLink(ctx, 'targets', 'Every category')}</p></div>`;
+        <p>Joint accounts spent <a href="${esc(spendHref(ctx, { period: cmp.month }))}">${esc(money(actualSum + unplannedSpend))}</a>.
+        Categories with a plan: ${esc(money(actualSum))}, where the plan expected ${esc(money(plannedSum))}.${unplannedSpend ? ` Categories with no target: ${esc(money(unplannedSpend))}.` : ''}
+        ${over.length ? `Over plan: ${over.slice(0, 2).map(r => `<a href="${esc(spendHref(ctx, { period: cmp.month, cat: r.category }))}">${esc(r.category)}</a> ${esc(signed(r.diffToPlanCents))}`).join(', ')}${over.length > 2 ? ` and ${esc(over.length - 2)} more` : ''}.` : 'No category over plan.'}
+        ${sectionLink(ctx, 'targets', 'Every category', { id: 'bud-sum-pva-link' })}</p></div>`;
     } else {
       pvaLine = `<div class="bud-sum-note"><p class="fine">No complete month of transactions yet, so there is nothing to compare the plan with.</p></div>`;
     }
@@ -445,12 +542,24 @@
     try {
       const proj = ctx.project(st.scenarios[0].id, { months: 12 });
       const end = proj.summary.endCumulativeCents;
+      const cash = ctx.scope === 'joint' ? 'joint cash' : 'cash';
       const scenarioTiming = st.scenarios[0].assumptions?.incomeTiming;
       const timingNote = scenarioTiming && scenarioTiming !== st.plan.settings.incomeTiming
-        ? ` The forecast counts income by its own setting (${esc(timingText(ctx, scenarioTiming))}); change it in Forecast.` : '';
-      next12 = `<div class="bud-sum-note" id="bud-sum-next12"><h3>Next 12 months</h3><p>${end === null
-        ? `How much ${ctx.scope === 'joint' ? 'joint cash' : 'cash'} changes is unknown while some income is unknown. <a href="${esc(ctx.href('forecast'))}">Forecast</a>`
-        : `${ctx.scope === 'joint' ? 'Joint cash' : 'Cash'} changes by <a href="${esc(ctx.href('forecast'))}"><strong class="${end < 0 ? 'tone-bad' : ''}">${esc(signed(end))}</strong></a> if the plan is followed.`}${timingNote}</p></div>`;
+        ? ` The forecast counts income by its own setting (${esc(timingText(ctx, scenarioTiming, { forecast: true }))}); change it in Forecast.` : '';
+      let text;
+      if (end === null) {
+        // Say which unknown blocks it: income, or personal spending behind an unknown transfer.
+        const reasons = new Set(proj.rows.map(r => r.netUnknownReason).filter(Boolean));
+        const why = reasons.has('income') ? 'some income is unknown'
+          : reasons.has('personal_spending') ? "someone's personal spending can't be worked out while their transfer into joint is unknown"
+            : 'some amounts are unknown';
+        text = `How much ${cash} changes is unknown: ${esc(why)}. <a href="${esc(ctx.href('forecast'))}">Open Forecast</a>.`;
+      } else {
+        const kept = proj.summary.totalContributionsCents;
+        text = `${cash === 'cash' ? 'Cash' : 'Joint cash'} changes by <a href="${esc(ctx.href('forecast'))}"><strong class="${end < 0 ? 'tone-bad' : ''}">${esc(signed(end))}</strong></a> if the plan is followed${kept > 0 ? `, including ${esc(money(kept))} set aside for savings goals (still your cash)` : ''}.`
+          + (proj.missing.length ? ` <span class="tone-warn">Leaves out ${esc(plural(proj.missing.length, 'missing amount'))}, so the real change is likely lower.</span>` : '');
+      }
+      next12 = `<div class="bud-sum-note" id="bud-sum-next12"><h3>Next 12 months</h3><p>${text}${timingNote}</p></div>`;
     } catch (err) { next12 = ''; }
 
     // Missing inputs, each linked to the field that fixes it
@@ -466,7 +575,7 @@
 
     return `<aside class="card bud-summary" aria-labelledby="bud-summary-h">
       <div class="bud-summary-head">
-        <h2 id="bud-summary-h">Monthly plan</h2>
+        <h2 id="bud-summary-h" tabindex="-1">Monthly plan</h2>
         <p class="card-sub">${esc(ctx.scope === 'joint' ? 'Joint accounts' : 'Whole household')} · ${esc(timingText(ctx, plan.timing))}</p>
       </div>
       <dl class="bud-sum-list">${rows.join('')}</dl>
@@ -659,16 +768,28 @@
         ['Transfers into joint', p.contributionsCents === null ? 'Unknown' : money(p.contributionsCents)],
         ['Left for personal spending', p.spendingCents === null ? 'Unknown' : money(p.spendingCents)],
       ];
+      // A known share of pay with an unknown transfer into joint: personal spending cannot be
+      // worked out. Point at the transfer amount that fixes it.
+      const blocked = p.unknownBecause === 'contribution'
+        ? (ctx.state.plan.incomes || []).filter(s => s.kind === 'contribution' && s.personId === p.personId && !E.money.isCents(s.jointPerPaycheckCents))
+        : [];
+      const blockedNote = p.unknownBecause === 'contribution'
+        ? `<p class="bud-counts tone-warn">${esc(`${possessive(p.name)} personal spending can't be worked out until the amount ${p.name} transfers into joint is entered.`)}${blocked.length ? ` ${sectionLink(ctx, 'income', 'Enter it', { params: { focus: fid('inc-joint', blocked[0].id) } })}` : ''}</p>`
+        : '';
       return `<div class="bud-person">
         <h3>${esc(p.name)}</h3>
         <dl class="kv">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
         ${p.shortfallCents > 0 ? c.notice({ tone: 'warn', body: esc(`Personal bills and transfers are ${money(p.shortfallCents)} more than the personal share of pay. Check whether other personal money covers this.`) }) : ''}
+        ${blockedNote}
         <p class="fine">${esc(p.note)}</p>
         ${moneyField({ id: fid('personal', p.personId), label: `${possessive(p.name)} personal spending estimate (a month)`, path: `plan.personalSpending[personId=${p.personId}].monthlyCents`, cents: est ? est.monthlyCents : null, placeholder: 'Unknown',
           message: `${possessive(p.name)} personal spending estimate saved.`, help: p.source === 'allocation' ? 'Not used: the personal share of pay above is counted instead.' : 'Used in the whole-household view only while the personal share of pay is unknown.' })}
       </div>`;
     }).join('');
-    return c.card(`<div class="bud-people">${body}</div>`, { title: 'Personal accounts', id: 'bud-personal',
+    // The documented household model, said where the household will wonder about it.
+    const why = `<div class="bud-why" id="bud-pay-why"><h3>Why changing take-home pay does not change Remaining in the whole-household view</h3>
+      <p>All of a person's pay that does not reach joint is counted as their personal spending (after their personal bills and transfers into joint). So when take-home pay goes up and the amount reaching joint stays the same, personal spending goes up by the same amount, and Remaining stays the same. Remaining changes when the amount reaching joint changes, or when joint costs change.${ctx.scope === 'joint' ? ' In the joint view, personal accounts are not part of the budget at all.' : ''}</p></div>`;
+    return c.card(`${ctx.scope === 'household' ? why : ''}<div class="bud-people">${body}</div>${ctx.scope === 'household' ? '' : c.disclosure('Why changing take-home pay does not change Remaining', why.replace(/<h3>[^<]*<\/h3>/, ''), { cls: 'bud-why-more' })}`, { title: 'Personal accounts', id: 'bud-personal',
       subtitle: 'Pay that does not reach joint pays personal bills and transfers into joint first. What is left counts once as personal spending in the whole-household view, so nothing is counted twice.' });
   }
 
@@ -704,27 +825,41 @@
     return c.badge('Existing bill', 'neutral');
   }
 
+  /** The latest yearly payment of a category seen in the data (review.queues annualSpikes), or null. */
+  function yearlyPayment(ctx, category, upTo) {
+    let q;
+    try { q = ctx.reviewQueues(); } catch (err) { return null; }
+    const list = ((q && q.annualSpikes) || []).filter(x => x.category === category && (!upTo || x.month <= upTo));
+    return list.length ? list.reduce((a, x) => (x.month > a.month ? x : a)) : null;
+  }
+
   function billActual(ctx, b, cmp) {
     if (b.status === 'planned') return '<span class="muted">Not a bill yet, so there is nothing to compare.</span>';
-    if (b.fundedFrom === 'p1' || b.fundedFrom === 'p2') return `<span class="muted">Paid from ${esc(possessive(ctx.person(b.fundedFrom)))} personal account, which is not in the imported data.</span>`;
+    if (b.fundedFrom === 'p1' || b.fundedFrom === 'p2') {
+      const imported = (ctx.dataset.accounts || []).some(a => a.scope === 'personal' && a.ownerId === b.fundedFrom);
+      return `<span class="muted">Paid from ${esc(possessive(ctx.person(b.fundedFrom)))} personal account${imported ? '. This page compares joint accounts only.' : ', which is not in the imported data.'}</span>`;
+    }
     if (!cmp.month) return '<span class="muted">No complete month of data yet.</span>';
-    if (b.fundedFrom === 'unknown') return '<span class="muted">Who pays is not confirmed; it is not seen in the joint data.</span>';
+    if (b.fundedFrom === 'unknown') return '<span class="muted">Who pays is not confirmed, so it is not compared with the joint accounts yet.</span>';
     if (!b.category) {
       // Debt payments are not category spending: show the month's joint debt payments, labelled as a total.
       const s = E.ledger.summarize(E.ledger.filter(ctx.txns, { months: [cmp.month], scope: 'joint' }));
-      return `<span class="bud-k">All joint debt payments, ${esc(fmt.month(cmp.month))}</span> <a href="${esc(ctx.href('spending', { period: cmp.month, kind: 'debt' }))}">${esc(money(s.debtPaymentsCents))}</a>`;
+      return `<span class="bud-k">All joint debt payments, ${esc(fmt.month(cmp.month))}</span> <a href="${esc(spendHref(ctx, { period: cmp.month, kind: 'debt' }))}">${esc(money(s.debtPaymentsCents))}</a>`;
     }
     const row = cmp.rows.get(b.category);
     const actual = row ? row.actualCents : 0;
     const shared = row && row.sources.filter(x => x.kind === 'bill').length > 1;
-    return `<span class="bud-k">${esc(fmt.month(cmp.month))} actual${shared ? `, all of ${esc(b.category)}` : ''}</span> <a href="${esc(ctx.href('spending', { period: cmp.month, cat: b.category }))}">${esc(money(actual))}</a>`;
+    // A yearly bill reads $0 in most months: name the yearly payment so $0 is not misread.
+    const yearly = yearlyPayment(ctx, b.category, cmp.month);
+    const yearlyNote = yearly ? `<small class="bud-yearly">Paid once a year: <a href="${esc(spendHref(ctx, { period: yearly.month, cat: b.category }))}">${esc(money(yearly.totalCents))}</a> in ${esc(fmt.month(yearly.month))}, about ${esc(money(Math.round(yearly.totalCents / 12)))} a month.</small>` : '';
+    return `<span class="bud-k">${esc(fmt.month(cmp.month))} actual${shared ? `, all of ${esc(b.category)}` : ''}</span> <a href="${esc(spendHref(ctx, { period: cmp.month, cat: b.category }))}">${esc(money(actual))}</a>${yearlyNote}`;
   }
 
   function billItem(ctx, b, cmp) {
     const pathOf = f => `plan.bills[id=${b.id}].${f}`;
     const msg = what => `${b.label}: ${what} saved.`;
-    const cats = UI.shared.categoryOptions(ctx);
-    const catOptions = [{ value: '__null__', label: 'None (a debt payment, not category spending)' }, ...cats.map(n => ({ value: n, label: n }))];
+    const cats = spendCategories(ctx);
+    const catOptions = [{ value: '__null__', label: 'None (not compared with spending; for debt payments)' }, ...cats.map(n => ({ value: n, label: n }))];
     const debt = b.debtId ? ctx.state.plan.debts.find(d => d.id === b.debtId) : null;
     const meta = [BILL_TYPE_LABEL[b.type] || 'Other', b.category || null, b.endMonth ? 'Final payment ' + fmt.month(b.endMonth) : null].filter(Boolean).join(' · ');
     return `<li class="bud-bill" id="${esc(fid('bill', b.id))}">
@@ -745,7 +880,7 @@
           ${inputField({ id: fid('bill-end', b.id), label: 'Final payment month', path: pathOf('endMonth'), value: b.endMonth || '', type: 'month', dataType: 'month', placeholder: 'YYYY-MM', message: msg('final payment month'), help: 'Leave blank if unknown.' })}
         </div>
         ${inputField({ id: fid('bill-note', b.id), label: 'Note', path: pathOf('note'), value: b.note || '', maxlength: 500, message: msg('note') })}
-        ${debt ? `<p class="fine">Pays the debt ${sectionLink(ctx, 'debts', esc(debt.label))}.</p>` : ''}
+        ${debt ? `<p class="fine">Pays the debt ${sectionLink(ctx, 'debts', esc(debt.label), { params: { focus: fid('debt-card', debt.id) + '-h' } })}.</p>` : ''}
         <div class="bud-remove-row">${c.button('Remove this bill', { action: 'budget:remove-item', variant: 'danger', cls: 'btn-small', data: { list: 'bills', id: b.id, label: b.label, focus: 'bud-add-bill-name' } })}</div>
       </div></details>
     </li>`;
@@ -770,13 +905,13 @@
         <ul class="bud-bill-list">${list.map(b => billItem(ctx, b, cmp)).join('')}</ul>
       </section>`;
     }).join('');
-    const cats = UI.shared.categoryOptions(ctx);
+    const cats = spendCategories(ctx);
     const addForm = `<form class="bud-add-form" data-action="budget:add-bill" aria-label="Add a bill">
         <div class="field"><label for="bud-add-bill-name">Name</label><input id="bud-add-bill-name" name="label" maxlength="80" placeholder="e.g. Car insurance" aria-describedby="bud-add-bill-name-error"><p class="field-error" id="bud-add-bill-name-error" role="alert" hidden></p></div>
         <div class="field"><label for="bud-add-bill-amount">Monthly amount</label><div class="input-money"><span aria-hidden="true">$</span><input id="bud-add-bill-amount" name="amount" inputmode="decimal" autocomplete="off" placeholder="Not entered" aria-describedby="bud-add-bill-amount-error"></div><p class="field-error" id="bud-add-bill-amount-error" role="alert" hidden></p></div>
         <div class="field"><label for="bud-add-bill-from">Paid from</label><select id="bud-add-bill-from" name="fundedFrom">${fundingOptions(ctx).map(o => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('')}</select></div>
         <div class="field"><label for="bud-add-bill-type">Type</label><select id="bud-add-bill-type" name="type">${BILL_TYPE_OPTIONS.map(o => `<option value="${esc(o.value)}"${o.value === 'other' ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select></div>
-        <div class="field"><label for="bud-add-bill-cat">Category</label><select id="bud-add-bill-cat" name="category"><option value="__null__">None (a debt payment)</option>${cats.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('')}</select></div>
+        <div class="field"><label for="bud-add-bill-cat">Category</label><select id="bud-add-bill-cat" name="category"><option value="__null__">None (for debt payments)</option>${cats.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('')}</select></div>
         <div class="bud-add-actions"><button class="btn btn-secondary" type="submit">Add bill</button></div>
       </form>`;
     const intro = `<p class="fine">Fixed monthly costs, including loan and card payments. A blank amount is left out of the totals and listed as missing, never counted as $0. ${cmp.month ? `Actual amounts are from ${esc(fmt.monthLong(cmp.month))}, joint accounts.` : ''}</p>`;
@@ -805,28 +940,30 @@
     const rowId = fid('target-row', cat);
     const inputId = fid('target', cat);
     const seasonal = E.categories.isSeasonal(cat);
-    const baseline = cmp.baselineMonths;
-    const usualHref = baseline.length ? ctx.href('spending', { period: baseline[0] === baseline[baseline.length - 1] ? baseline[0] : baseline[0] + '..' + baseline[baseline.length - 1], cat }) : null;
     const billSources = row ? row.sources.filter(x => x.kind === 'bill') : [];
 
     // Actual (latest complete month) and its status against the plan
     const actualCell = !cmp.month ? '<span class="muted">No data</span>'
-      : `<a href="${esc(ctx.href('spending', { period: cmp.month, cat }))}">${esc(money(row ? row.actualCents : 0))}</a>`
+      : `<a href="${esc(spendHref(ctx, { period: cmp.month, cat }))}">${esc(money(row ? row.actualCents : 0))}</a>`
         + `<span class="bud-status">${cents === null ? c.badge('No target', 'neutral') : statusBadge(row)}</span>`
         + (billSources.length ? `<small>Plan includes ${esc(billSources.map(x => x.label + ' ' + money(x.plannedCents)).join(', '))}</small>` : '');
 
     // Usual (history), kept visually apart from the target
     let usualCell = '<span class="muted">No history</span>';
     if (cmp.month && row && known(row.usualCents)) {
-      usualCell = usualHref ? `<a href="${esc(usualHref)}">${esc(money(row.usualCents))}</a>` : esc(money(row.usualCents));
+      const href = usualHref(ctx, cmp, cat, cmp.baselineMonths, cmp.window);
+      usualCell = href ? `<a href="${esc(href)}">${esc(money(row.usualCents))}</a>` : esc(money(row.usualCents));
       if (known(row.adjustedUsualCents) && row.adjustedUsualCents !== row.usualCents) usualCell += `<small>Adjusted ${esc(money(row.adjustedUsualCents))}: without rows you left out of planning</small>`;
       if (sig && sig.signal === 'irregular' && sig.irregular) usualCell += `<small class="tone-warn">Only ${esc(fmt.month(sig.irregular.month))} had spending (${esc(money(sig.irregular.cents))}): not a monthly cost</small>`;
-      if (seasonal && cmp.usable12) usualCell += `<small>Seasonal. 12-month average ${esc(money(sug.cents))}</small>`;
+      if (sug.basis === 'year' && known(sug.cents)) {
+        const yearHref = usualHref(ctx, cmp, cat, cmp.baselineMonths12, 12);
+        usualCell += `<small>${seasonal ? 'Seasonal: depends on the time of year. ' : ''}${esc(basisText(cmp, sug)).replace(/^./, m => m.toUpperCase())}: ${yearHref ? `<a href="${esc(yearHref)}">${esc(money(sug.cents))}</a>` : esc(money(sug.cents))}</small>`;
+      }
     } else if (cmp.month && row && row.usualCents === null) {
       usualCell = '<span class="muted">No full months yet</span>';
     }
     if (known(sug.cents) && sug.cents > 0 && sug.cents !== cents) {
-      usualCell += `<button type="button" class="btn btn-small btn-ghost bt-use" id="${esc(fid('use-usual', cat))}" data-action="budget:use-usual" data-cat="${esc(cat)}" data-cents="${esc(sug.cents)}">Use ${esc(money(sug.cents))}<span class="sr-only"> as the ${esc(cat)} target (${seasonal ? '12-month' : 'usual'} average)</span></button>`;
+      usualCell += `<button type="button" class="btn btn-small btn-ghost bt-use" id="${esc(fid('use-usual', cat))}" data-action="budget:use-usual" data-cat="${esc(cat)}" data-cents="${esc(sug.cents)}" data-basis="${esc(basisText(cmp, sug))}">Use ${esc(money(sug.cents))}${sug.basis === 'year' ? `<span class="bt-use-basis" aria-hidden="true">${esc(cmp.usable12)}-month avg.</span>` : ''}<span class="sr-only"> as the ${esc(cat)} target (${esc(basisText(cmp, sug))})</span></button>`;
     }
 
     return `<tr class="bt-row${cents === null ? ' is-unset' : ''}" id="${esc(rowId)}">
@@ -880,9 +1017,9 @@
     // Bulk fill (explicit, one undoable change, never touches entered targets)
     const fp = fillPlan(ctx, cmp);
     let fill = '';
-    if (fp.blank.length) {
+    if (fp.blank.length && cmp.month) {
       const why = [];
-      why.push(fp.fill.length ? `Copies the usual average into ${esc(plural(fp.fill.length, 'blank target'))}: ${fp.fill.map(f => `${esc(f.category)} ${esc(money(f.cents))}`).join(', ')}.` : 'No blank target has a regular usual amount to copy.');
+      why.push(fp.fill.length ? `Copies the usual average into ${esc(plural(fp.fill.length, 'blank target'))}: ${fp.fill.map(f => `${esc(f.category)} ${esc(money(f.cents))}${f.note ? ` (${esc(f.note)})` : ''}`).join(', ')}.` : 'No blank target has a regular usual amount to copy.');
       const stay = [];
       if (fp.noHistory.length) stay.push(`${esc(listText(fp.noHistory))} (no spending in ${esc(baseText)})`);
       if (fp.oneOff.length) stay.push(`${esc(listText(fp.oneOff))} (one unusual month: set ${fp.oneOff.length === 1 ? 'it' : 'these'} yourself)`);
@@ -909,27 +1046,40 @@
         <h3 id="bud-unbudgeted-h">Not budgeted yet</h3>
         ${unplanned.length ? `<p class="fine">Recent spending with no target or bill, so the plan leaves it out.</p>
         <ul class="bud-unb-list">${unplanned.map(u => {
-          const amt = known(u.usual) && u.usual > 0 ? u.usual : null;
-          return `<li><div><a href="${esc(ctx.href('spending', { period: cmp.month, cat: u.cat }))}">${esc(u.cat)}</a>
-            <small>Usual ${esc(known(u.usual) ? money(u.usual) : 'unknown')} (${esc(win)}-month average) · ${esc(fmt.month(cmp.month))} ${esc(money(u.actual))}${u.sig && u.sig.signal === 'irregular' ? ' · one month only' : ''}</small></div>
-            <button type="button" class="btn btn-small btn-secondary" id="${esc(fid('add-unb', u.cat))}" data-action="budget:add-target" data-cat="${esc(u.cat)}" data-cents="${esc(amt ?? '')}">${esc(amt !== null ? 'Add at ' + money(amt) : 'Add target')}</button></li>`;
+          // Same suggestion as "Use" on a target row: a one-off or seasonal category uses the
+          // 12-month average, named on the button.
+          const sug = suggestionFor(cmp, u.cat);
+          const amt = known(sug.cents) && sug.cents > 0 ? sug.cents : null;
+          const usualText = known(u.usual) ? `Usual ${money(u.usual)} (${win}-month average)` : 'Usual unknown';
+          return `<li><div><a href="${esc(spendHref(ctx, { period: cmp.month, cat: u.cat }))}">${esc(u.cat)}</a>
+            <small>${esc(usualText)} · ${esc(fmt.month(cmp.month))} ${esc(money(u.actual))}${u.sig && u.sig.signal === 'irregular' ? ' · one month only' : ''}${amt !== null && sug.basis === 'year' ? ` · ${esc(basisText(cmp, sug))} ${esc(money(amt))}` : ''}</small></div>
+            <button type="button" class="btn btn-small btn-secondary" id="${esc(fid('add-unb', u.cat))}" data-action="budget:add-target" data-cat="${esc(u.cat)}" data-cents="${esc(amt ?? '')}" data-basis="${esc(amt !== null ? basisText(cmp, sug) : '')}">${esc(amt !== null ? 'Add at ' + money(amt) : 'Add target')}<span class="sr-only">${esc(` for ${u.cat}${amt !== null ? ` (${basisText(cmp, sug)})` : ''}`)}</span></button></li>`;
         }).join('')}</ul>` : `<p class="fine">Every category with spending in ${esc(baseText)} or ${esc(fmt.month(cmp.month))} has a target or a bill.</p>`}
       </section>` : '';
 
     const billCats = [...new Set(cmp.pva.filter(r => r.kind === 'bill').map(r => r.category))];
-    const free = UI.shared.categoryOptions(ctx).filter(n => !(n in targets));
+    // Categories already planned as joint bills stay available but say so (a target on top of the
+    // bill would plan the same spending twice); the first other category is preselected.
+    const billCatSet = new Set((ctx.state.plan.bills || []).filter(b => b.category).map(b => b.category));
+    const free = spendCategories(ctx).filter(n => !(n in targets));
+    const firstFree = free.find(n => !billCatSet.has(n));
     const addForm = `<form class="bud-add-form" data-action="budget:add-target-form" aria-label="Add a spending target">
-        <div class="field"><label for="bud-add-target-cat">Category</label><select id="bud-add-target-cat" name="category">${free.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('')}</select></div>
+        <div class="field"><label for="bud-add-target-cat">Category</label><select id="bud-add-target-cat" name="category">${free.map(n => `<option value="${esc(n)}"${n === firstFree ? ' selected' : ''}>${esc(n)}${billCatSet.has(n) ? ' (already a bill)' : ''}</option>`).join('')}</select></div>
         <div class="field"><label for="bud-add-target-amount">Monthly target</label><div class="input-money"><span aria-hidden="true">$</span><input id="bud-add-target-amount" name="amount" inputmode="decimal" autocomplete="off" placeholder="Not set" aria-describedby="bud-add-target-amount-help bud-add-target-amount-error"></div>
           <p class="field-help" id="bud-add-target-amount-help">Blank adds it as not set.</p><p class="field-error" id="bud-add-target-amount-error" role="alert" hidden></p></div>
         <div class="bud-add-actions"><button class="btn btn-secondary" type="submit">Add target</button></div>
       </form>`;
 
-    const explain = `<p class="fine bud-legend"><span class="bud-key bud-key-target" aria-hidden="true"></span><strong>Your target</strong> is the plan. <span class="bud-key bud-key-usual" aria-hidden="true"></span><strong>Usual</strong> is history: the average of ${esc(plural(cmp.usableCount, 'full month'))} before ${esc(cmp.month ? fmt.month(cmp.month) : 'the latest month')} (${esc(baseText)}). ${cmp.month ? `Actual is ${esc(fmt.monthLong(cmp.month))}, the latest complete month. ` : ''}Joint accounts only. Click an amount to see the transactions.</p>`;
+    const history = !cmp.month
+      ? 'history from your transactions. No complete month of transactions is loaded yet, so there is no history to show.'
+      : cmp.usableCount
+        ? `history: the average of ${plural(cmp.usableCount, 'full month')} before ${fmt.month(cmp.month)} (${baseText}).`
+        : `history, but none of the ${win} months before ${fmt.month(cmp.month)} is fully covered by your exports, so there is no usual amount yet.`;
+    const explain = `<p class="fine bud-legend"><span class="bud-key bud-key-target" aria-hidden="true"></span><strong>Your target</strong> is the plan. <span class="bud-key bud-key-usual" aria-hidden="true"></span><strong>Usual</strong> is ${esc(history)} ${cmp.month ? `Actual is ${esc(fmt.monthLong(cmp.month))}, the latest complete month. Joint accounts only. Click an amount to see the transactions.` : ''}</p>`;
     const windowToggle = c.segmented({ label: 'Usual = average of', name: 'bud-window', options: WINDOW_OPTIONS, value: win, action: 'budget:set-window' });
 
     return `<div class="stack">
-      ${c.card(`${explain}${fill}${table}${billCats.length ? `<p class="fine bud-billcats">${esc(listText(billCats))} ${billCats.length === 1 ? 'is' : 'are'} planned as bills; see ${sectionLink(ctx, 'bills', 'Bills')}.</p>` : ''}${notBudgeted}`,
+      ${c.card(`${explain}${fill}${table}${billCats.length ? `<p class="fine bud-billcats">${esc(listText(billCats))} ${billCats.length === 1 ? 'is' : 'are'} planned as bills; see ${sectionLink(ctx, 'bills', 'Bills', { params: { focus: 'bud-bills-h' } })}.</p>` : ''}${notBudgeted}`,
         { title: 'Spending targets', id: 'bud-targets', subtitle: 'What you aim to spend each month by category, next to what actually happened.', actions: windowToggle })}
       ${c.card(addForm, { title: 'Add a spending target', id: 'bud-add-target' })}
     </div>`;
@@ -1096,10 +1246,14 @@
 
     const facts = (sum ? sum.lines : []).filter(l => !['promo', 'escrow', 'paymentsLeft'].includes(l.key)).map(l => {
       let value = l.value;
+      let b = FACT_BADGE[l.status];
       if (l.key === 'payment' && bill && E.money.isCents(bill.monthlyCents)) {
         value = `${money(bill.monthlyCents)} a month, paid from ${fundingText(ctx, bill.fundedFrom)}`;
+        // The status is about the amount; who pays is said in the text (and may be unconfirmed).
+        if (b) b = [l.status === 'confirmed' ? 'Amount confirmed' : 'Amount: ' + b[0].toLowerCase(), b[1]];
       }
-      const b = FACT_BADGE[l.status];
+      // The badge already says how sure the figure is; drop the same words in brackets.
+      if (b) value = String(value).replace(/\s*\((approximate|statement balance|confirmed)\)$/i, '');
       return `<dt>${esc(l.label)}</dt><dd>${esc(value)}${b ? ` ${c.badge(b[0], b[1])}` : ''}</dd>`;
     }).join('');
     const lb = sum ? sum.lowerBound : null;
@@ -1145,7 +1299,7 @@
       ${promoBlock(ctx, d, bill)}
       ${illustration(d, bill)}
       ${details}`;
-    return c.card(body, { title: d.label, id: fid('debt-card', d.id), cls: 'bud-debt-card', subtitle: `${esc(owner)}${bill ? ` · paid by the bill ${sectionLink(ctx, 'bills', esc(bill.label))}` : ' · no payment linked'}` });
+    return c.card(body, { title: d.label, id: fid('debt-card', d.id), cls: 'bud-debt-card', subtitle: `${esc(owner)}${bill ? ` · paid by the bill ${sectionLink(ctx, 'bills', esc(bill.label), { params: { focus: fid('bill-amt', bill.id) } })}` : ' · no payment linked'}` });
   }
 
   function debtsSection(ctx) {
@@ -1206,13 +1360,23 @@
 
     const target = ctx.route.params.focus;
     if (!target) handledFocus = null;
-    else if (handledFocus !== location.hash) {
+    else {
+      // Once per navigation; again when the same link is used twice (the app then re-renders the
+      // same URL and moves focus to the page title, which this replaces with the field).
+      const first = handledFocus !== location.hash;
       handledFocus = location.hash;
       const el = document.getElementById(target);
       if (el) {
-        const d = el.closest('details');
-        if (d) d.open = true;
-        setTimeout(() => { el.focus({ preventScroll: true }); el.scrollIntoView({ block: 'center' }); }, 0);
+        if (first) { const d = el.closest('details'); if (d) d.open = true; }
+        // A heading target (a card it links to) becomes focusable for this purpose only.
+        if (!el.matches('a[href], button, input, select, textarea, summary, [tabindex]')) el.setAttribute('tabindex', '-1');
+        setTimeout(() => {
+          if (!first && !(document.activeElement && document.activeElement.id === 'page-title')) return;
+          const d = el.closest('details');
+          if (d) d.open = true;
+          el.focus({ preventScroll: true });
+          el.scrollIntoView({ block: 'center' });
+        }, 0);
       }
     }
 
@@ -1224,17 +1388,30 @@
     const fresh = st.meta && st.meta.updatedAt && Date.now() - Date.parse(st.meta.updatedAt) < 3000;
     if (shownPlan && st.plan !== shownPlan && top && top.plan === shownPlan && fresh) {
       const ch = lastChange(ctx);
+      // On wide screens the summary scrolls on its own: bring the new "What changed" box into
+      // its view (the page itself does not move, so the edited field stays where it was).
+      const box = container.querySelector('#bud-change');
+      const panel = box && box.closest('.bud-summary');
+      if (panel && panel.scrollHeight > panel.clientHeight + 1 && getComputedStyle(panel).position === 'sticky') {
+        const bottom = box.offsetTop + box.offsetHeight + 8;
+        if (bottom > panel.scrollTop + panel.clientHeight) panel.scrollTop = Math.min(box.offsetTop - 8, bottom - panel.clientHeight);
+      }
       const toastEl = document.getElementById('toast');
       if (ch && toastEl && !toastEl.hidden) {
         const base = (toastEl.querySelector('span') || {}).textContent || '';
         const wc = ch.wc;
         let extra = '';
         if (known(wc.remainingDeltaCents) && wc.remainingDeltaCents !== 0) extra = `Remaining ${money(wc.before.remainingCents)} → ${money(wc.after.remainingCents)} a month (${signed(wc.remainingDeltaCents)}).`;
+        else if (known(wc.remainingDeltaCents) && payChangeNote(ctx, ch)) extra = 'Remaining unchanged: in the whole-household view, personal spending moves with take-home pay.';
+        else if (wc.before.remainingCents === null && wc.after.remainingCents !== null) extra = `Remaining is now ${money(wc.after.remainingCents)} a month.`;
         else if (!known(wc.remainingDeltaCents) && ch.outDelta) extra = `Going out ${signed(ch.outDelta)} a month.`;
         if (extra) ctx.app.toast((base ? base + ' ' : '') + extra, { undo: true });
       }
     }
     shownPlan = st.plan;
+    // Lets tools and browser tests wait for the render that shows the current plan and scope.
+    const layout = container.querySelector('.bud-layout');
+    if (layout) { layout.__budPlan = st.plan; layout.dataset.scope = ctx.scope; }
   }
 
   // ------------------------------------------------------------------ actions
@@ -1256,11 +1433,17 @@
     return v;
   }
   const lastId = (state, list) => { const items = state.plan[list] || []; return items.length ? items[items.length - 1].id : null; };
-  // app.js also delegates clicks inside a <form data-action> to the form, so a click on a field or
-  // on the submit button would run the action too (twice, with the submit). Forms act on submit only.
+  // Forms act on submit only (app.js already ignores clicks inside a form; this keeps it true if a
+  // form action is ever run another way).
   const onSubmit = fn => (ctx, form, ev) => (ev && ev.type === 'submit' ? fn(ctx, form, ev) : undefined);
 
   const actions = {
+    /** Undo from the "What changed" box: the box goes away, so focus moves to the summary it updated. */
+    'budget:undo': ctx => {
+      ctx.app.undo();
+      focusAfterRender('bud-summary-h');
+    },
+
     'budget:set-window': (ctx, el) => {
       const value = Number(el.dataset.value || el.value);
       ctx.app.update(st => E.state.setPath(st, 'plan.settings.comparisonWindow', value), { undoable: false });
@@ -1269,7 +1452,7 @@
     'budget:use-usual': (ctx, el) => {
       const cat = el.dataset.cat;
       const cents = Number(el.dataset.cents);
-      ctx.app.update(st => E.state.setPath(st, 'plan.targets.' + cat, cents), { message: `${cat} target set to its usual ${money(cents)}.` });
+      ctx.app.update(st => E.state.setPath(st, 'plan.targets.' + cat, cents), { message: `${cat} target set to ${money(cents)}, the ${el.dataset.basis || 'usual average'}.` });
       focusAfterRender(fid('target', cat));
     },
 
@@ -1279,14 +1462,15 @@
       ctx.app.update(st => fp.fill.reduce((s, f) => {
         if (s.plan.targets[f.category] !== null) return s; // never overwrite an entered target
         return E.state.setPath(s, 'plan.targets.' + f.category, f.cents);
-      }, st), { message: `Filled ${plural(fp.fill.length, 'empty target')} from usual averages: ${fp.fill.map(f => f.category + ' ' + money(f.cents)).join(', ')}. Entered targets were not changed.` });
-      focusAfterRender('bud-fill');
+      }, st), { message: `Filled ${plural(fp.fill.length, 'empty target')} from usual averages: ${fp.fill.map(f => f.category + ' ' + money(f.cents) + (f.note ? ` (${f.note})` : '')).join(', ')}. Entered targets were not changed.` });
+      // The button is disabled once nothing is left to fill, so move to the first filled target.
+      focusAfterRender(fid('target', fp.fill[0].category));
     },
 
     'budget:add-target': (ctx, el) => {
       const cat = el.dataset.cat;
       const cents = el.dataset.cents === '' || el.dataset.cents === undefined ? null : Number(el.dataset.cents);
-      ctx.app.update(st => E.state.setPath(st, 'plan.targets.' + cat, cents), { message: cents === null ? `Added a ${cat} target (not set yet).` : `Added a ${cat} target of ${money(cents)}, its usual amount.` });
+      ctx.app.update(st => E.state.setPath(st, 'plan.targets.' + cat, cents), { message: cents === null ? `Added a ${cat} target (not set yet).` : `Added a ${cat} target of ${money(cents)}, the ${el.dataset.basis || 'usual average'}.` });
       focusAfterRender(fid('target', cat));
     },
 

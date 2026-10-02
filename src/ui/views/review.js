@@ -150,6 +150,7 @@
       merchant: String(raw.merchant || ''),
       status: ['pending', 'business', 'household', 'all'].includes(raw.status) ? raw.status : '',
       ref: String(raw.ref || ''),
+      from: QUEUES[raw.from] ? raw.from : '',
     };
   }
 
@@ -181,6 +182,13 @@
   function openTransfers(q) {
     return (q.transfers.unpaired || []).filter(u => !u.expected && !answeredTransfer(u));
   }
+  /** Uncertain rows that still need an answer. A row that counts nowhere (a confirmed
+   *  reimbursement, a business cost) cannot change any total, so it is not asked about. The
+   *  engine still lists it (reported); this filter does nothing once that changes. */
+  const NOT_COUNTED = ['reimbursed', 'business'];
+  function uncertainOpen(q) {
+    return q.uncertain.filter(t => !NOT_COUNTED.includes(t.excluded));
+  }
   function spikeState(ctx, s) {
     const map = byIdMap(ctx);
     const vals = s.ids.map(id => (map.get(id) && map.get(id).edit ? map.get(id).edit.planningBaseline || null : null));
@@ -197,8 +205,9 @@
 
   function queueInfo(ctx, q) {
     return ctx.memo('rv-info', () => {
-      const uncSpend = q.uncertain.filter(t => t.kind === 'spend');
-      const uncOther = q.uncertain.filter(t => t.kind !== 'spend');
+      const unc = uncertainOpen(q);
+      const uncSpend = unc.filter(t => t.kind === 'spend');
+      const uncOther = unc.filter(t => t.kind !== 'spend');
       const tOpen = openTransfers(q);
       const rPending = q.reimbursements.filter(r => r.status === 'pending');
       const bPending = q.business.filter(t => t.status === 'pending');
@@ -209,18 +218,18 @@
       if (uncSpend.length) uncParts.push(`${money(sum(uncSpend, spendOf))} of spending in an uncertain category`);
       if (uncOther.length) uncParts.push(`${count(uncOther.length, 'deposit or transfer', 'deposits or transfers')} to identify`);
       return {
-        uncertain: { open: q.uncertain.length, impact: uncParts.join(' · ') },
+        uncertain: { open: unc.length, impact: uncParts.join(' · ') },
         mixed: { open: q.mixedRetail.length, impact: q.mixedRetail.length ? `${money(sum(q.mixedRetail, spendOf))} of spending with no specific category` : '' },
         duplicates: { open: q.duplicates.length, impact: q.duplicates.length ? `${money(dupCents)} would leave spending if they are copies` : '' },
-        transfers: { open: tOpen.length, impact: tOpen.length ? `${money(sum(tOpen, t => Math.abs(t.amountCents)))} moved with no matching account` : `${count(q.transfers.paired.length, 'matched pair')} explained` },
+        transfers: { open: tOpen.length, impact: tOpen.length ? `${money(sum(tOpen, t => Math.abs(t.amountCents)))} moved with no matching account` : q.transfers.paired.length ? `${count(q.transfers.paired.length, 'matched pair')} explained` : '' },
         reimbursements: { open: rPending.length, impact: rPending.length ? `${money(sum(rPending, r => (r.charge ? Math.max(0, spendOf(r.charge)) : 0)))} counted in spending until you confirm` : '' },
         business: { open: bPending.length, impact: bPending.length ? `${money(sum(bPending, grossSpend))} counted as household spending until you decide` : '' },
         spikes: { open: sOpen.length, impact: sOpen.length ? sOpen.slice(0, 2).map(s => `${s.category} ${fmt.month(s.month)} (${fmt.money(s.totalCents, { whole: true })})`).map(esc).join(', ') : '' },
-        coverage: { open: q.coverageGaps.length, impact: q.coverageGaps.length ? esc(E.compare.describeMonths(q.coverageGaps.map(g => g.month))) + ' left out of averages' : 'Every month is complete' },
+        coverage: { open: q.coverageGaps.length, impact: !ctx.months.length ? 'No data loaded yet' : q.coverageGaps.length ? esc(E.compare.describeMonths(q.coverageGaps.map(g => g.month))) + ' left out of averages' : 'Every month is complete' },
         edited: { open: q.edited.length, impact: q.orphanEdits.length ? `${count(q.orphanEdits.length, 'correction')} for transactions not in the loaded data` : '' },
         reconcile: { open: refs.length, impact: refs.length ? `${count(refs.length, 'reference')} to compare` : 'No reference totals entered yet' },
         stakes: {
-          open: q.duplicates.length + q.uncertain.length + tOpen.length + rPending.length + bPending.length + sOpen.length,
+          open: q.duplicates.length + unc.length + tOpen.length + rPending.length + bPending.length + sOpen.length,
           changeCents: dupCents + sum(rPending, r => (r.charge ? Math.max(0, spendOf(r.charge)) : 0)) + sum(bPending, grossSpend),
           categoryCents: sum(uncSpend, spendOf) + sum(q.mixedRetail, spendOf),
         },
@@ -228,9 +237,11 @@
     });
   }
 
-  function countBadge(key, info) {
+  function countBadge(key, info, hasData = true) {
     const n = info[key].open;
     const type = QUEUES[key].type;
+    // Without data nothing is known to be complete or clear.
+    if (!hasData && key !== 'edited' && key !== 'reconcile') return c.badge('No data yet', 'neutral');
     if (key === 'coverage') return n ? c.badge(fmt.count(n, 'partial month'), 'info') : c.badge('All complete', 'good');
     if (key === 'edited') return c.badge(n ? fmt.count(n, 'correction') : 'None yet', 'neutral');
     if (key === 'reconcile') return c.badge(n ? fmt.count(n, 'reference') : 'Tool', 'neutral');
@@ -281,6 +292,22 @@
   function facts(rows) {
     return `<dl class="rv-facts">${rows.filter(Boolean).map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${v}</dd></div>`).join('')}</dl>`;
   }
+  /**
+   * Status badges without warnings the household has already answered (the shared helper shows
+   * import flags as they were, e.g. "Unmatched transfer" after saying where the money went).
+   */
+  function badgesFor(t) {
+    const e = t.edit || {};
+    const answered = {
+      unpaired_transfer: e.kind != null,
+      reimbursement_candidate: e.reimbursement != null,
+      business_candidate: e.business != null,
+      duplicate_candidate: e.duplicate != null,
+      mixed_retail: e.category != null || !!t.splitApplied,
+      needs_category_review: e.category != null || e.kind != null || e.splits != null,
+    };
+    return sh().badges({ ...t, flags: (t.flags || []).filter(f => !answered[f]) });
+  }
   const bankCat = t => (t.sourceCategory ? esc(t.sourceCategory) : '<span class="muted">None in the bank file</span>');
   function confidenceBadge(t) {
     const m = { high: ['High confidence', 'good'], medium: ['Medium confidence', 'info'], low: ['Low confidence', 'warn'] }[t.confidence] || ['Confidence not recorded', 'neutral'];
@@ -293,9 +320,19 @@
     return esc(t.category);
   }
 
+  /**
+   * A queue item. `highlight` marks the transaction a link opened (route param txn): it is shown
+   * with a text label (not colour alone) and its heading receives focus on arrival.
+   */
   function item(key, headId, inner, { cls = '', highlight = false } = {}) {
-    return `<article class="rv-item ${esc(cls)}${highlight ? ' is-target' : ''}" id="rv-item-${esc(key)}" data-rv-item="${esc(key)}" data-rv-head="${esc(headId)}" aria-labelledby="${esc(headId)}">${highlight ? '<p class="rv-target-note">The transaction you opened</p>' : ''}${inner}</article>`;
+    return `<article class="rv-item ${esc(cls)}${highlight ? ' is-target' : ''}" id="rv-item-${esc(key)}" data-rv-item="${esc(key)}" data-rv-head="${esc(headId)}"${highlight ? ` data-rv-target="${esc(headId)}"` : ''} aria-labelledby="${esc(headId)}">${highlight ? '<p class="rv-target-note">The transaction you opened</p>' : ''}${inner}</article>`;
   }
+
+  /** Table row attributes for the transaction a link opened: highlighted, labelled and focusable. */
+  function targetRow(isTarget, id) {
+    return isTarget ? { id, class: 'is-target', tabindex: '-1', 'data-rv-target': id } : {};
+  }
+  const TARGET_TAG = '<small class="rv-target-tag">The transaction you opened</small>';
 
   function listCard(body, { title, subtitle = '', actions = '' }) {
     return c.card(body, { title, subtitle, actions, id: 'rv-list' });
@@ -435,7 +472,8 @@
   // ------------------------------------------------------------------ index
   function indexBody(ctx, q, info) {
     const st = info.stakes;
-    const metrics = `<div class="metrics rv-metrics">
+    const hasData = ctx.dataset.transactions.length > 0;
+    const metrics = !hasData ? '' : `<div class="metrics rv-metrics">
       ${c.metric({ label: 'Waiting for a decision', value: String(st.open), sub: st.open ? 'Across the queues below' : 'Nothing is waiting' })}
       ${c.metric({ label: 'Spending that may change', value: fmt.money(st.changeCents), sub: 'Possible duplicates, reimbursements and business costs. Counted until you decide.' })}
       ${c.metric({ label: 'Spending in an unclear category', value: fmt.money(st.categoryCents), sub: 'Counted in totals; only the category is uncertain.' })}
@@ -447,10 +485,10 @@
     const row = k => `<li class="rv-qrow${info[k].open && QUEUES[k].type === 'decision' ? ' is-open' : ''}">
         <div class="rv-qrow-main"><h4><a href="${esc(qHref(ctx, k))}" id="rv-q-${esc(k)}">${esc(QUEUES[k].title)}</a></h4>
           <p>${esc(QUEUES[k].line)}</p>${info[k].impact ? `<p class="rv-qrow-impact">${info[k].impact}</p>` : ''}</div>
-        <div class="rv-qrow-status">${countBadge(k, info)}</div>
+        <div class="rv-qrow-status">${countBadge(k, info, hasData)}</div>
       </li>`;
     const group = (title, keys, id) => (keys.length ? `<h3 class="rv-qgroup" id="${esc(id)}">${esc(title)}</h3><ul class="rv-qlist" aria-labelledby="${esc(id)}">${keys.map(row).join('')}</ul>` : '');
-    const list = c.card(`${group('Waiting for you', open, 'rv-g-open')}${group('Information and tools', other, 'rv-g-info')}${group('Nothing waiting', clear, 'rv-g-clear')}`,
+    const list = c.card(`${group('Waiting for you', open, 'rv-g-open')}${group('Information and tools', other, 'rv-g-info')}${group(hasData ? 'Nothing waiting' : 'Filled in once data is loaded', clear, 'rv-g-clear')}`,
       { title: 'Review queues', subtitle: 'Most important first: items that change totals, then categories, then information.', id: 'rv-queues' });
     return `<div class="stack">${metrics}<div class="rv-index-grid"><div class="stack">${list}</div><div class="stack">${missingCard(ctx)}${howCard(ctx)}</div></div></div>`;
   }
@@ -505,9 +543,11 @@
 
   // ------------------------------------------------------------------ uncertain
   function queueUncertain(ctx, P, q) {
-    const list = q.uncertain.slice().sort(byDateDesc);
+    const list = uncertainOpen(q).sort(byDateDesc);
+    const skipped = q.uncertain.length - list.length;
+    const skippedNote = skipped ? `<p class="fine rv-skipped">${count(skipped, 'other transaction')} the import was unsure about ${skipped === 1 ? 'is' : 'are'} not listed: you decided ${skipped === 1 ? 'it is' : 'they are'} not counted (a confirmed reimbursement or a business cost), so ${skipped === 1 ? 'its' : 'their'} category changes no total.</p>` : '';
     const intro = `<p class="rv-intro">The import was not sure about these. Choose a category (or, for money coming in, say what it is). The bank's original category is kept next to yours, and your reason goes into the <a href="${esc(qHref(ctx, 'edited'))}">corrections log</a>.</p>`;
-    if (!list.length) return intro + listCard(c.empty('Nothing is waiting here. Every uncertain transaction has an answer.', c.linkButton('See the corrections log', qHref(ctx, 'edited'))), { title: 'Waiting for a category' });
+    if (!list.length) return intro + listCard(c.empty('Nothing is waiting here. Every uncertain transaction has an answer.', c.linkButton('See the corrections log', qHref(ctx, 'edited'))) + skippedNote, { title: 'Waiting for a category' });
     const spend = list.filter(t => t.kind === 'spend');
     const other = list.filter(t => t.kind !== 'spend');
     const sub = [count(list.length, 'transaction'), spend.length ? `${money(sum(spend, spendOf))} counted in spending` : '', other.length ? `${count(other.length, 'deposit or transfer', 'deposits or transfers')} (not spending)` : ''].filter(Boolean).join(' · ');
@@ -522,14 +562,16 @@
       ]) + extra + (t.kind === 'spend' ? categoryForm(ctx, t) : kindForm(ctx, t, 'rv-uk'));
       return item(t.id, hid(t.id), body, { highlight: P.txn === t.id });
     }).join('');
-    return intro + listCard(`<div class="rv-items">${items}</div>`, { title: 'Waiting for a category', subtitle: sub });
+    return intro + listCard(`<div class="rv-items">${items}</div>${skippedNote}`, { title: 'Waiting for a category', subtitle: sub });
   }
 
   // ------------------------------------------------------------------ mixed retail
   function queueMixed(ctx, P, q) {
     const all = q.mixedRetail.slice().sort(byDateDesc);
     const merchants = [...E.util.groupBy(all, merchantOf).entries()].map(([name, rows]) => ({ name, n: rows.length, cents: sum(rows, spendOf) })).sort((a, b) => b.n - a.n || (a.name < b.name ? -1 : 1));
-    const merchant = merchants.some(m => m.name === P.merchant) ? P.merchant : '';
+    // A link to one purchase shows it even when a store filter would hide it.
+    const opened = P.txn ? all.find(t => t.id === P.txn) : null;
+    const merchant = merchants.some(m => m.name === P.merchant) && !(opened && merchantOf(opened) !== P.merchant) ? P.merchant : '';
     const filtered = merchant ? all.filter(t => merchantOf(t) === merchant) : all;
     let page = P.page;
     if (!page && P.txn) {
@@ -594,7 +636,7 @@
       const before = monthTotals(ctx, m).spendingCents;
       const cents = spendOf(b);
       const effect = b.kind === 'spend' && !b.excluded
-        ? `Not counting the second copy lowers ${esc(fmt.monthLong(m))} spending by <strong>${money(cents)}</strong>, from ${money(before)} to ${money(before - cents)}.`
+        ? `Not counting the second copy lowers <a href="${esc(ctx.href('spending', { period: m }))}">${esc(fmt.monthLong(m))} spending</a> by <strong>${money(cents)}</strong>, from ${money(before)} to ${money(before - cents)}.`
         : `The second copy is ${esc(lowerFirst(sh().kindLabel(b)))}, not spending, so this decision does not change spending.`;
       const reasonId = 'rv-dup-' + a.id + '-reason';
       const conf = { high: ['Very likely a duplicate', 'warn'], medium: ['Possibly a duplicate', 'warn'], low: ['Less likely a duplicate', 'info'] }[d.confidence] || ['Possible duplicate', 'warn'];
@@ -612,12 +654,19 @@
     const list = q.duplicates.length
       ? listCard(`<div class="rv-items">${items}</div>`, { title: 'Possible duplicates', subtitle: `${count(q.duplicates.length, 'pair')} · both copies counted until you decide` })
       : listCard(c.empty('No possible duplicates are waiting.'), { title: 'Possible duplicates' });
-    return intro + list + decidedDuplicates(ctx);
+    return intro + list + decidedDuplicates(ctx, P);
   }
 
-  function decidedDuplicates(ctx) {
+  const nearCopy = (x, t) => x.id !== t.id && x.accountId === t.accountId && x.amountCents === t.amountCents && Math.abs(E.dates.daysBetween(x.date, t.date)) <= 3;
+
+  function decidedDuplicates(ctx, P) {
     const rows = ctx.txns.filter(t => t.edit && (t.edit.duplicate === 'exclude' || t.edit.duplicate === 'keep')).sort(byDateDesc);
     if (!rows.length) return '';
+    // The opened transaction, or (for the copy that was kept and has no decision itself) the copy
+    // that is no longer counted.
+    const opened = P.txn ? findTxn(ctx, P.txn) : null;
+    const targetId = !opened ? null : rows.some(t => t.id === opened.id) ? opened.id
+      : ((rows.find(t => t.edit.duplicate === 'exclude' && nearCopy(t, opened)) || {}).id || null);
     const reasonOf = t => {
       const h = (t.edit.history || []).filter(x => x.field === 'duplicate');
       return h.length ? h[h.length - 1].reason : '';
@@ -629,13 +678,14 @@
       caption: 'Duplicate decisions already made',
       columns: [
         { key: 'date', label: 'Date', html: t => `<span class="nowrap">${esc(fmt.date(t.date))}</span>` },
-        { key: 'm', label: 'Merchant', html: t => `<a href="${esc(txnHref(ctx, t))}">${esc(merchantOf(t))}</a><small>${esc(t.accountLabel)}</small>` },
+        { key: 'm', label: 'Merchant', html: t => `<a href="${esc(txnHref(ctx, t))}">${esc(merchantOf(t))}</a><small>${esc(t.accountLabel)}</small>${t.id === targetId ? TARGET_TAG : ''}` },
         { key: 'd', label: 'Decision', html: t => `${t.edit.duplicate === 'exclude' ? c.badge('Not counted', 'neutral') : c.badge('Not a duplicate', 'good')}<small>${esc(reasonOf(t))}</small>` },
         { key: 'a', label: 'Amount', align: 'right', html: t => esc(sh().amountText(t)) },
         { key: 'x', label: 'Change', html: t => `<button type="button" class="btn btn-ghost btn-small" id="rv-dup-reopen-${esc(t.id)}" data-action="review:decide" data-txns="${esc(partners(t).join(','))}" data-field="duplicate" data-value="" data-reason="Reopened for review" data-focus="rv-list-h" data-message="Duplicate decision reopened: both copies count again.">Reopen<span class="sr-only">: ${esc(merchantOf(t))}, ${esc(fmt.date(t.date))}</span></button>` },
       ],
       rows,
       cls: 'rv-compact',
+      rowAttrs: t => targetRow(t.id === targetId, 'rv-dup-row-' + t.id),
     });
     return c.card(table, { title: 'Already decided', subtitle: 'Reopen a decision to put the pair back in the list.', id: 'rv-dup-done' });
   }
@@ -663,13 +713,14 @@
       caption: 'Transfers you have answered',
       columns: [
         { key: 'date', label: 'Date', html: u => `<span class="nowrap">${esc(fmt.date(u.date))}</span>` },
-        { key: 'm', label: 'Transaction', html: u => `<a href="${esc(txnHref(ctx, u))}">${esc(merchantOf(u))}</a><small>${esc(u.accountLabel)}</small>` },
+        { key: 'm', label: 'Transaction', html: u => `<a href="${esc(txnHref(ctx, u))}">${esc(merchantOf(u))}</a><small>${esc(u.accountLabel)}</small>${u.id === P.txn ? TARGET_TAG : ''}` },
         { key: 'k', label: 'Now counted as', html: u => `${esc(sh().kindLabel(u))}<small>${esc(u.edit.kindReason || '')}</small>` },
         { key: 'a', label: 'Amount', align: 'right', html: u => esc(sh().amountText(u)) },
-        { key: 'x', label: 'Change', html: u => `<button type="button" class="btn btn-ghost btn-small" id="rv-tr-undo-${esc(u.id)}" data-action="review:revert" data-txn="${esc(u.id)}" data-focus="rv-list-h">Undo answer<span class="sr-only">: ${esc(merchantOf(u))}, ${esc(fmt.date(u.date))}</span></button>` },
+        { key: 'x', label: 'Change', html: u => `<button type="button" class="btn btn-ghost btn-small" id="rv-tr-undo-${esc(u.id)}" data-action="review:revert" data-txn="${esc(u.id)}" data-fields="kind,subtype,category,splits" data-message="Answer removed: it is counted as imported again." data-focus="rv-list-h">Undo answer<span class="sr-only">: ${esc(merchantOf(u))}, ${esc(fmt.date(u.date))}</span></button>` },
       ],
       rows: answered,
       cls: 'rv-compact',
+      rowAttrs: u => targetRow(u.id === P.txn, 'rv-tr-row-' + u.id),
     }), { title: 'Answered', subtitle: 'They no longer need a decision. Undo an answer to go back to the imported classification.', id: 'rv-tr-done' }) : '';
 
     // Expected: nothing to fix (e.g. contributions from a personal account outside the data).
@@ -679,19 +730,20 @@
         caption: 'Transfers with no other side expected',
         columns: [
           { key: 'date', label: 'Date', html: u => `<span class="nowrap">${esc(fmt.date(u.date))}</span>` },
-          { key: 'm', label: 'Transaction', html: u => `<a href="${esc(txnHref(ctx, u))}">${esc(merchantOf(u))}</a><small>${esc(u.accountLabel)}</small>` },
+          { key: 'm', label: 'Transaction', html: u => `<a href="${esc(txnHref(ctx, u))}">${esc(merchantOf(u))}</a><small>${esc(u.accountLabel)}</small>${u.id === P.txn ? TARGET_TAG : ''}` },
           { key: 'k', label: 'Counted as', text: u => sh().kindLabel(u) },
           { key: 'a', label: 'Amount', align: 'right', html: u => esc(sh().amountText(u)) },
         ],
         rows: expected,
         cls: 'rv-compact',
+        rowAttrs: u => targetRow(u.id === P.txn, 'rv-tr-row-' + u.id),
       }), { cls: 'rv-inner-disclosure' }).replace('<details', '<details id="rv-tr-exp-list"')}` : '';
     const expectedCard = expected.length ? c.card(expectedBody, { title: 'No other side expected', subtitle: 'Nothing to fix: the other account is not part of your data.', id: 'rv-tr-expected' }) : '';
 
-    return intro + openCard + answeredCard + pairedCard(ctx, q) + expectedCard;
+    return intro + openCard + answeredCard + pairedCard(ctx, q, P) + expectedCard;
   }
 
-  function pairedCard(ctx, q) {
+  function pairedCard(ctx, q, P) {
     const paired = q.transfers.paired || [];
     if (!paired.length) return '';
     const card = paired.filter(p => p.kind === 'card_payment');
@@ -703,11 +755,12 @@
       caption: 'Matched transfers and card payments',
       columns: [
         { key: 'date', label: 'Date', html: p => `<span class="nowrap">${esc(fmt.date(p.txns[0].date))}</span>${p.daysApart ? `<small>${esc(p.daysApart)} day${p.daysApart === 1 ? '' : 's'} apart</small>` : ''}` },
-        { key: 'm', label: 'From → to', html: p => `<a href="${esc(txnHref(ctx, p.txns[0]))}">${esc(p.txns[0].accountLabel)}</a> → <a href="${esc(txnHref(ctx, p.txns[1]))}">${esc(p.txns[1].accountLabel)}</a><small>${esc(p.kind === 'card_payment' ? 'Card payment' : sh().kindLabel(p.txns[0]))}</small>` },
+        { key: 'm', label: 'From → to', html: p => `<a href="${esc(txnHref(ctx, p.txns[0]))}">${esc(p.txns[0].accountLabel)}</a> → <a href="${esc(txnHref(ctx, p.txns[1]))}">${esc(p.txns[1].accountLabel)}</a><small>${esc(p.kind === 'card_payment' ? 'Card payment' : sh().kindLabel(p.txns[0]))}</small>${p.ids.includes(P.txn) ? TARGET_TAG : ''}` },
         { key: 'a', label: 'Amount', align: 'right', html: p => `${money(p.cents)}${p.amountsMatch ? '' : '<small>Amounts differ</small>'}` },
       ],
       rows: paired.slice().sort((a, b) => byDateDesc(a.txns[0], b.txns[0])),
       cls: 'rv-compact',
+      rowAttrs: p => targetRow(p.ids.includes(P.txn), 'rv-tr-pair-' + p.ids[0]),
     });
     const body = `<ul class="rv-paired">
         ${line(card, 'card payments', 'Paying the card bill moves money from checking to the card. The purchases on the card are the spending, so counting the payment too would count them twice.')}
@@ -811,33 +864,39 @@
     const intro = `<p class="rv-intro">Some purchases may be business costs (for example supplies bought for work). <strong>Pending ones are counted as household spending.</strong> Marking a purchase as business takes it out of household spending; it stays in your data.</p>`;
     if (!all.length) return intro + listCard(c.empty('No possible business purchases in the data.'), { title: 'Possible business purchases' });
     const of = s => all.filter(t => t.status === s);
-    const metrics = `<div class="metrics rv-metrics">${['pending', 'business', 'household'].map(s => c.metric({
-      label: { pending: 'Pending', business: 'Business', household: 'Household' }[s],
-      value: fmt.money(sum(of(s), grossSpend)),
-      sub: `${count(of(s).length, 'purchase')} · ${{ pending: 'counted as household spending until decided', business: 'not counted as household spending', household: 'counted as household spending' }[s]}`,
-    })).join('')}</div>`;
-    const status = P.status || (of('pending').length ? 'pending' : 'all');
+    const opened = P.txn ? all.find(t => t.id === P.txn) || null : null;
+    const status = P.status || (opened ? opened.status : of('pending').length ? 'pending' : 'all');
     const shown = status === 'all' ? all : of(status);
-    const filters = `<ul class="rv-chips" aria-label="Show">${['pending', 'business', 'household', 'all'].map(s => `<li>${goLink(ctx, `${esc({ pending: 'Pending', business: 'Business', household: 'Household', all: 'All' }[s])} <span class="rv-chip-n">${esc(s === 'all' ? all.length : of(s).length)}</span>`, { queue: 'business', status: s }, { current: status === s, id: 'rv-biz-f-' + s })}</li>`).join('')}</ul>`;
+    const NAME = { pending: 'Pending', business: 'Business', household: 'Household', all: 'All' };
+    const SUB = { pending: 'counted as household spending until decided', business: 'not counted as household spending', household: 'counted as household spending' };
+    // Each total opens the list of purchases behind it.
+    const metrics = `<div class="metrics rv-metrics rv-biz-metrics">${['pending', 'business', 'household'].map(s => goLink(ctx,
+      `<span class="metric-label">${esc(NAME[s])}</span><span class="metric-value">${money(sum(of(s), grossSpend))}</span><span class="metric-sub">${count(of(s).length, 'purchase')} · ${esc(SUB[s])}</span>`,
+      { queue: 'business', status: s }, { id: 'rv-biz-m-' + s, cls: 'metric metric-link', current: status === s, sr: ` (show ${NAME[s].toLowerCase()} purchases)` })).join('')}</div>`;
+    const filters = `<ul class="rv-chips" aria-label="Show">${['pending', 'business', 'household', 'all'].map(s => `<li>${goLink(ctx, `${esc(NAME[s])} <span class="rv-chip-n">${esc(s === 'all' ? all.length : of(s).length)}</span>`, { queue: 'business', status: s }, { current: status === s, id: 'rv-biz-f-' + s })}</li>`).join('')}</ul>`;
+    const hiddenNote = opened && !shown.includes(opened)
+      ? `<p class="fine rv-skipped">${esc(merchantOf(opened))}, ${esc(fmt.date(opened.date))} is ${esc(NAME[opened.status].toLowerCase())}, so it is not in this list. ${goLink(ctx, `Show ${esc(NAME[opened.status].toLowerCase())} purchases`, { queue: 'business', status: opened.status, txn: opened.id }, { id: 'rv-biz-show-opened', focus: 'rv-biz-' + opened.id })}</p>` : '';
     const rows = shown.map(t => {
       const id = 'rv-biz-' + t.id;
-      return `<tr>
+      const isTarget = !!opened && t.id === opened.id;
+      return `<tr id="${esc(id)}-row"${isTarget ? ` class="is-target" data-rv-target="${esc(id)}"` : ''}>
         <td class="rv-sel"><input type="checkbox" id="${esc(id)}" name="rv-biz-sel" value="${esc(t.id)}" data-action="review:biz-sel" aria-labelledby="${esc(id)}-m ${esc(id)}-d ${esc(id)}-a"></td>
-        <th scope="row"><label for="${esc(id)}" id="${esc(id)}-m">${esc(merchantOf(t))}</label><small><span id="${esc(id)}-d">${esc(fmt.date(t.date))}</span> · <a href="${esc(txnHref(ctx, t))}">Open<span class="sr-only"> ${esc(merchantOf(t))}, ${esc(fmt.date(t.date))} in Spending</span></a></small></th>
+        <th scope="row"><label for="${esc(id)}" id="${esc(id)}-m">${esc(merchantOf(t))}</label><small><span id="${esc(id)}-d">${esc(fmt.date(t.date))}</span> · <a href="${esc(txnHref(ctx, t))}">Open<span class="sr-only"> ${esc(merchantOf(t))}, ${esc(fmt.date(t.date))} in Spending</span></a></small>${isTarget ? TARGET_TAG : ''}</th>
         <td>${esc(t.category)}<small>Bank: ${esc(t.sourceCategory || 'none')}</small></td>
         <td>${c.badge(BIZ_STATUS[t.status][0], BIZ_STATUS[t.status][1])}</td>
         <td class="num" id="${esc(id)}-a">${money(grossSpend(t))}</td>
       </tr>`;
     }).join('');
+    const foot = `<tfoot><tr><td class="rv-sel"></td><th scope="row" colspan="3">${count(shown.length, 'purchase')} shown</th><td class="num">${money(sum(shown, grossSpend))}</td></tr></tfoot>`;
     const table = shown.length ? `<div class="table-wrap rv-biz-wrap" tabindex="0" role="region" aria-label="Possible business purchases">
         <table class="table rv-biz-table"><caption class="sr-only">Possible business purchases, ${esc(status === 'all' ? 'all' : status)}</caption>
         <thead><tr><th scope="col"><span class="sr-only">Select</span></th><th scope="col">Merchant</th><th scope="col">Category</th><th scope="col">Status</th><th scope="col" class="num">Amount</th></tr></thead>
-        <tbody>${rows}</tbody></table></div>` : c.empty(`No ${status} purchases.`);
+        <tbody>${rows}</tbody>${foot}</table></div>` : c.empty(`No ${status} purchases.`);
     const tools = `<div class="rv-biz" id="rv-biz">
       <div class="rv-biz-top"><label class="check" for="rv-biz-all"><input type="checkbox" id="rv-biz-all" data-action="review:biz-all"> Select all ${esc(shown.length)} shown</label>
         <p class="rv-biz-count" id="rv-biz-count" aria-live="polite">None selected</p></div>
       <p class="field-error" id="rv-biz-sel-error" role="alert" hidden></p>
-      ${table}
+      ${hiddenNote}${table}
       <div class="rv-biz-decide">${reasonField('rv-biz-reason', { set: 'business', label: 'Why? (one reason for all selected)' })}
         <div class="rv-form-actions">
           <button type="button" class="btn btn-primary btn-small" id="rv-biz-business" data-action="review:business" data-value="business">Business — not household spending</button>
@@ -853,12 +912,61 @@
     const win = windowOf(ctx);
     const intro = `<p class="rv-intro">A category-month far above its usual level, such as a dental episode, is real spending and <strong>always stays in your actual totals</strong>. If it is not expected again, you can leave it out of the <em>planning baseline</em>: the usual amounts that budgets and targets are based on.</p>`;
     const items = q.spikes.map(s => spikeItem(ctx, s, win, P)).join('');
-    const annual = q.annualSpikes || [];
-    const annualNote = annual.length ? `<p class="fine rv-annual">Not listed because they recur once a year (an annual bill, not a spike): ${annual.map(s => `${esc(s.category)} in ${esc(fmt.month(s.month))} (${money(s.totalCents)}${s.annualMatch ? `; also ${money(s.annualMatch.cents)} in ${esc(fmt.month(s.annualMatch.month))}` : ''})`).join('; ')}. Budget annual bills through the plan.</p>` : '';
     const card = q.spikes.length
-      ? listCard(`<div class="rv-items">${items}</div>${annualNote}`, { title: 'Unusual months', subtitle: `${count(q.spikes.length, 'category-month')} at least 3 times the usual level and $500 or more` })
-      : listCard(c.empty('No unusual months found.') + annualNote, { title: 'Unusual months' });
-    return intro + card;
+      ? listCard(`<div class="rv-items">${items}</div>`, { title: 'Unusual months', subtitle: `${count(q.spikes.length, 'category-month')} at least 3 times the usual level and $500 or more` })
+      : listCard(c.empty('No unusual months found.'), { title: 'Unusual months' });
+    return intro + card + yearlyBills(ctx, q, P);
+  }
+
+  /**
+   * Yearly bills: category-months the engine recognised as a payment that recurs about a year
+   * apart (review.queues().annualSpikes). Not unusual, so nothing to decide; listed so the
+   * household can see why a large month is not flagged and whether the budget plans for it.
+   */
+  function yearlyBills(ctx, q, P) {
+    const annual = q.annualSpikes || [];
+    if (!annual.length) return '';
+    const map = byIdMap(ctx);
+    const plan = ctx.state.plan;
+    const inCat = (t, category) => sum(E.ledger.partsOf(t).filter(p => p.category === category), p => p.spendCents);
+    const groups = [...E.util.groupBy(annual, s => s.category).entries()].map(([category, list]) => ({
+      category,
+      list: list.slice().sort((a, b) => (a.month < b.month ? 1 : a.month > b.month ? -1 : 0)),
+    }));
+    const items = groups.map(g => {
+      const key = 'yr-' + domId('c', g.category).slice(2);
+      const headId = hid(key);
+      const rows = g.list.flatMap(s => s.ids.map(id => map.get(id)).filter(Boolean)).sort(byDateDesc);
+      const latest = g.list[0];
+      const table = stackTable({
+        caption: `${g.category} payments about a year apart`,
+        columns: [
+          { key: 'date', label: 'Date', html: t => `<span class="nowrap">${esc(fmt.date(t.date))}</span>` },
+          { key: 'm', label: 'Merchant', html: t => `<a href="${esc(txnHref(ctx, t))}">${esc(merchantOf(t))}</a><small>${esc(t.accountLabel)}</small>${t.id === P.txn ? TARGET_TAG : ''}` },
+          { key: 'mo', label: 'Month', html: t => `<a href="${esc(ctx.href('spending', { period: monthOf(t), cat: g.category }))}">${esc(fmt.month(monthOf(t)))}</a>` },
+          { key: 'a', label: 'Amount', align: 'right', html: t => money(inCat(t, g.category)) },
+        ],
+        rows,
+        cls: 'rv-compact',
+      });
+      const bills = (plan.bills || []).filter(b => b.category === g.category);
+      const target = (plan.targets || {})[g.category];
+      const billText = b => (typeof b.monthlyCents === 'number'
+        ? `${esc(b.label)}: <strong>${money(b.monthlyCents)}</strong> a month (${money(b.monthlyCents * 12)} a year)${b.status === 'planned' ? ', planned' : ''}`
+        : `${esc(b.label)}: amount <strong>not set</strong>`);
+      const budgetLine = bills.length || typeof target === 'number'
+        ? `In your budget · plan: ${[...bills.map(billText), ...(typeof target === 'number' ? [`target <strong>${money(target)}</strong> a month`] : [])].join('; ')}. <a href="${esc(ctx.href('budget', { section: bills.length ? 'bills' : 'targets' }))}">Open in Budget</a>`
+        : `In your budget · plan: <strong>Not set</strong>. A yearly ${money(latest.totalCents)} is ${money(Math.round(latest.totalCents / 12))} a month if set aside evenly. <a href="${esc(ctx.href('budget', { section: 'bills' }))}">Add it as a bill in Budget</a>`;
+      const ms = g.list.map(s => fmt.month(s.month));
+      const months = ms.length > 1 ? ms.slice(0, -1).join(', ') + ' and ' + ms[ms.length - 1] : ms[0];
+      const body = `<div class="rv-item-head"><h3 id="${esc(headId)}" tabindex="-1">${esc(g.category)}</h3>${c.badge('Yearly bill — not unusual', 'info')}</div>
+        <p>Paid in ${esc(months)}${g.list.length === 1 && latest.annualMatch ? ` and ${esc(fmt.month(latest.annualMatch.month))}` : ''}: a similar amount about a year apart, so ${esc(fmt.monthLong(latest.month))} is not marked as unusual.</p>
+        ${table}
+        <p class="rv-target-line">${budgetLine}</p>`;
+      return item(key, headId, body, { highlight: rows.some(t => t.id === P.txn) });
+    }).join('');
+    return c.card(`<p class="fine">A payment that comes back 11 to 13 months later at a similar size, such as a yearly insurance premium, is a regular bill rather than an unusual month. It needs no decision here. It always stays in actual spending; plan for it in Budget as a monthly amount set aside.</p><div class="rv-items">${items}</div>`,
+      { title: 'Yearly bills (not unusual)', subtitle: `${count(groups.length, 'category', 'categories')} paid about once a year · not counted as spikes`, id: 'rv-annual' });
   }
 
   function spikeItem(ctx, s, win, P) {
@@ -908,7 +1016,7 @@
         <div class="rv-tiles">${tile('If kept in', kept.avg, state !== 'exclude')}${tile('If left out', left.avg, state === 'exclude')}</div>
         <p class="rv-target-line">Your target for ${esc(s.category)} · plan: ${typeof target === 'number' ? `<strong>${money(target)}</strong> a month (set by you, not changed by this)` : `<strong>Not set</strong>. <a href="${esc(ctx.href('budget', { section: 'targets', focus: domId('bud-target', s.category) }))}">Set a target in Budget</a>`}</p>
       </div>
-      <p class="rv-effect">Actual spending does not change either way: ${esc(fmt.monthLong(s.month))} still shows ${money(actualMonth)} of ${esc(s.category)}, and the month's total stays ${money(monthTotals(ctx, s.month).spendingCents)}.</p>
+      <p class="rv-effect">Actual spending does not change either way: ${esc(fmt.monthLong(s.month))} still shows <a href="${esc(ctx.href('spending', { period: s.month, cat: s.category }))}">${money(actualMonth)} of ${esc(s.category)}</a>, and <a href="${esc(ctx.href('spending', { period: s.month }))}">the month's total</a> stays ${money(monthTotals(ctx, s.month).spendingCents)}.</p>
       ${decide}`;
     return item(key, headId, body, { highlight: s.ids.includes(P.txn) });
   }
@@ -996,7 +1104,7 @@
       const active = hasActive(t.edit);
       const head = txnHead(ctx, t);
       const f = facts([
-        ['Counted now as', `${categoryNow(t)} ${sh().badges(t)}`],
+        ['Counted now as', `${categoryNow(t)} ${badgesFor(t)}`],
         ['Bank category (original)', bankCat(t)],
         ['Imported as', esc(t.baseKind === 'spend' ? t.baseCategory : `${sh().KIND_LABEL[t.baseKind] || t.baseKind}${t.baseSubtype && sh().SUBTYPE_LABEL[t.baseSubtype] ? ' · ' + sh().SUBTYPE_LABEL[t.baseSubtype] : ''}`)],
       ]);
@@ -1036,7 +1144,8 @@
       const pendingBiz = q.business.filter(t => t.status === 'pending' && inP(t) && !t.excluded);
       const uncertain = q.uncertain.filter(t => t.kind === 'spend' && inP(t) && !t.excluded);
       const dupes = q.duplicates.filter(d => inP(d.txns[1]) && d.txns[1].kind === 'spend' && !d.txns[1].excluded).map(d => d.txns[1]);
-      const excluded = all.filter(t => t.excluded && t.kind === 'spend');
+      // Not counted, or counted only in part (the paid-back part of a partly reimbursed charge).
+      const excluded = all.filter(t => t.kind === 'spend' && (t.excluded || t.reimbursedCents));
       const txDate = t => {
         const m = /Transaction date (\d{4}-\d{2}-\d{2})/.exec(t.baseNote || t.note || '');
         return m ? m[1] : null;
@@ -1045,9 +1154,15 @@
       const after = E.dates.addDays(end, BOUNDARY_DAYS);
       const postedAfter = ctx.txns.filter(t => !t.excluded && t.kind === 'spend' && t.date > end && t.date <= after && txDate(t) && txDate(t) >= start && txDate(t) <= end);
       const months = E.months.range(start.slice(0, 7), end.slice(0, 7));
-      const partial = months.filter(m => (ctx.coverageMap[m] || E.ledger.coverage(ctx.dataset, m)).status !== 'full');
+      const statusOf = m => (ctx.coverageMap[m] || E.ledger.coverage(ctx.dataset, m)).status;
+      // Incomplete = partly covered (some days or accounts missing) or not covered at all.
+      const partial = months.filter(m => statusOf(m) === 'partial');
+      const missing = months.filter(m => statusOf(m) === 'none');
+      const incomplete = months.filter(m => statusOf(m) !== 'full');
+      // Nothing in the data for these dates: the app's spending is unknown, never $0.
+      const noData = !all.length && missing.length === months.length;
       const totalDays = E.dates.daysBetween(start, end) + 1;
-      return { all, s, counted, byAccount, pendingReimb, pendingBiz, uncertain, dupes, excluded, boughtBefore, postedAfter, partial, months, totalDays };
+      return { all, s, counted, byAccount, pendingReimb, pendingBiz, uncertain, dupes, excluded, boughtBefore, postedAfter, partial, missing, incomplete, noData, months, totalDays };
     });
   }
 
@@ -1077,15 +1192,16 @@
     if (!refs.length) return c.card(c.empty('No reference totals yet. Add one with the form.'), { title: 'Reference totals', id: 'rv-refs' });
     const rows = refs.map(r => {
       const d = reconcileData(ctx, r.start, r.end);
-      const diff = typeof r.spendingCents === 'number' ? r.spendingCents - d.s.spendingCents : null;
-      return { r, app: d.s.spendingCents, diff };
+      const app = d.noData ? null : d.s.spendingCents;
+      const diff = typeof r.spendingCents === 'number' && app !== null ? r.spendingCents - app : null;
+      return { r, app, diff, d };
     });
     const table = stackTable({
       caption: 'Reference totals and the app’s spending for the same dates',
       columns: [
-        { key: 'l', label: 'Reference', html: x => `${goLink(ctx, esc(x.r.label), { queue: 'reconcile', ref: x.r.id }, { id: 'rv-ref-open-' + x.r.id, focus: 'rv-rec-h', current: selected && selected.ref && selected.ref.id === x.r.id })}<small>${esc(fmt.date(x.r.start))} – ${esc(fmt.date(x.r.end))} · ${esc(x.r.origin === 'user' ? 'Added by you' : 'From the data file' + (x.r.source ? ` (${x.r.source})` : ''))}</small>` },
-        { key: 'ref', label: 'Reference', align: 'right', html: x => money(x.r.spendingCents) },
-        { key: 'app', label: 'App', align: 'right', html: x => money(x.app) },
+        { key: 'l', label: 'Name', html: x => `${goLink(ctx, esc(x.r.label), { queue: 'reconcile', ref: x.r.id }, { id: 'rv-ref-open-' + x.r.id, focus: 'rv-rec-h', current: selected && selected.ref && selected.ref.id === x.r.id })}<small>${esc(fmt.date(x.r.start))} – ${esc(fmt.date(x.r.end))} · ${esc(x.r.origin === 'user' ? 'Added by you' : 'From the data file' + (x.r.source ? ` (${x.r.source})` : ''))}</small>` },
+        { key: 'ref', label: 'Reference total', align: 'right', html: x => money(x.r.spendingCents) },
+        { key: 'app', label: 'App spending', align: 'right', html: x => (x.app === null ? 'Unknown<small>No data for these dates</small>' : `${money(x.app)}${x.d.incomplete.length ? '<small>Incomplete data</small>' : ''}`) },
         { key: 'd', label: 'Difference', align: 'right', html: x => (x.diff === null ? 'Unknown' : Math.abs(x.diff) < MATCH_TOLERANCE ? c.badge('Agree', 'good') : esc(fmt.diff(x.diff))) },
         { key: 'x', label: 'Remove', html: x => (x.r.origin === 'user' ? `<button type="button" class="btn btn-ghost btn-small" id="rv-ref-rm-${esc(x.r.id)}" data-action="review:ref-remove" data-ref="${esc(x.r.id)}">Remove<span class="sr-only"> ${esc(x.r.label)}</span></button>` : '<span class="fine">Part of the data</span>') },
       ],
@@ -1115,25 +1231,33 @@
     const { start, end, ref } = sel;
     const d = reconcileData(ctx, start, end);
     const s = d.s;
-    const app = s.spendingCents;
+    const app = d.noData ? null : s.spendingCents;
     const refCents = ref && typeof ref.spendingCents === 'number' ? ref.spendingCents : null;
-    const diff = refCents === null ? null : refCents - app;
+    const diff = refCents === null || app === null ? null : refCents - app;
     const pp = periodParam(start, end);
     const sp = extra => ctx.href('spending', { period: pp.period, ...extra });
     const periodText = `${fmt.date(start)} – ${fmt.date(end)}`;
-    const diffText = diff === null ? 'Not compared' : Math.abs(diff) < MATCH_TOLERANCE ? 'Agree within $1' : fmt.diff(diff);
-    const diffSub = diff === null ? 'Add the reference total to compare' : Math.abs(diff) < MATCH_TOLERANCE ? 'Nothing to explain' : diff > 0 ? 'The reference is higher than the app' : 'The reference is lower than the app';
+    const diffText = app === null ? 'Unknown' : diff === null ? 'Not compared' : Math.abs(diff) < MATCH_TOLERANCE ? 'Agree within $1' : fmt.diff(diff);
+    const diffSub = app === null ? 'There is no data to compare with'
+      : diff === null ? 'Add the reference total to compare'
+        : (Math.abs(diff) < MATCH_TOLERANCE ? 'Nothing to explain' : diff > 0 ? 'The reference is higher than the app' : 'The reference is lower than the app')
+          + (d.incomplete.length ? '. Part of it may be data that is missing' : '');
     const metrics = `<div class="metrics rv-metrics">
       ${c.metric({ label: ref ? `Reference: ${ref.label}` : 'Reference', value: refCents === null ? 'Not entered' : fmt.money(refCents), sub: esc(periodText) })}
-      ${c.metric({ label: 'App spending, same dates', value: fmt.money(app), sub: `<a href="${esc(sp({ list: '1' }))}">${count(d.counted.filter(t => t.kind === 'spend').length, 'transaction')}</a>` })}
+      ${c.metric({ label: 'App spending, same dates', value: app === null ? 'Unknown' : fmt.money(app), sub: app === null ? 'No exports cover these dates' : `<a href="${esc(sp({ list: '1' }))}">${count(d.counted.filter(t => t.kind === 'spend').length, 'transaction')}</a>${d.incomplete.length ? ' · only what is in the data' : ''}` })}
       ${c.metric({ label: 'Difference (reference − app)', value: diffText, sub: diffSub, tone: diff !== null && Math.abs(diff) >= MATCH_TOLERANCE ? 'warn' : '' })}
     </div>`;
     const warns = [];
-    if (d.partial.length) warns.push(c.notice({ tone: 'warn', title: `${E.compare.describeMonths(d.partial)} ${d.partial.length === 1 ? 'is' : 'are'} only partly covered by your exports`, body: `The app can only count what is in the data for ${d.partial.length === 1 ? 'that month' : 'those months'}, so its total is likely too low there. <a href="${esc(qHref(ctx, 'coverage'))}">See coverage</a>.` }));
+    const dataSpan = ctx.months.length ? `Your data runs from ${fmt.month(ctx.months[0])} to ${fmt.month(ctx.months[ctx.months.length - 1])}.` : 'No transactions are loaded.';
+    if (d.noData) warns.push(c.notice({ tone: 'warn', title: 'Your exports do not cover these dates', body: `The app's spending for ${esc(periodText)} is unknown, not $0. ${esc(dataSpan)} Load exports for these dates in <a href="${esc(ctx.href('data'))}">Data &amp; privacy</a> to compare.` }));
+    else {
+      if (d.missing.length) warns.push(c.notice({ tone: 'warn', title: `${E.compare.describeMonths(d.missing)} ${d.missing.length === 1 ? 'is' : 'are'} not in your exports`, body: `The app's total leaves out ${d.missing.length === 1 ? 'that month' : 'those months'}, so it is too low by an unknown amount. ${esc(dataSpan)}` }));
+      if (d.partial.length) warns.push(c.notice({ tone: 'warn', title: `${E.compare.describeMonths(d.partial)} ${d.partial.length === 1 ? 'is' : 'are'} only partly covered by your exports`, body: `The app can only count what is in the data for ${d.partial.length === 1 ? 'that month' : 'those months'}, so its total is likely too low there. <a href="${esc(qHref(ctx, 'coverage'))}">See coverage</a>.` }));
+    }
     if (!pp.aligned) warns.push(c.notice({ tone: 'info', title: 'Spending links show whole months', body: `This period does not start and end on month boundaries. The totals here use exactly ${esc(periodText)}; links open the whole month${pp.period.includes('..') ? 's' : ''} in Spending.` }));
 
-    // Breakdown rows: [group, label, cents|null, count|null, counted text, href, note]
-    const R = (label, cents, n, counted, href, note = '') => ({ label, cents, n, counted, href, note });
+    // Breakdown rows. `list` (optional) holds the transactions behind the amount, shown on request.
+    const R = (label, cents, n, counted, href, note = '', list = null, amountOf = null) => ({ label, cents, n, counted, href, note, list, amountOf });
     const groups = [
       { title: 'What the app counts', rows: [
         R('Purchases', s.purchasesCents, null, 'Yes', sp({ list: '1' })),
@@ -1145,30 +1269,41 @@
         R('Debt payments', s.debtPaymentsCents, null, 'No, shown apart', sp({ kind: 'debt' }), 'Loan and financing payments are not category spending.'),
         R('Card payments', s.cardPaymentsCents, null, 'No', sp({ kind: 'card' }), 'Paying the card moves money; the card purchases are the spending.'),
         R('Moved to savings (net)', s.savedNetCents, null, 'No', sp({ kind: 'transfer' }), 'Saving is not spending.'),
-        R('Rows you excluded', s.excludedCents, d.excluded.length, 'No', sp({ show: 'excluded' }), 'Duplicates, reimbursed and business rows, and paid-back parts.'),
-        R('Bought in the period, posted after it', sum(d.postedAfter, spendOf), d.postedAfter.length, 'No (posted later)', d.postedAfter.length === 1 ? txnHref(ctx, d.postedAfter[0]) : sp({}), 'The app uses the posted date; a statement may use the purchase date.'),
+        R('Rows you excluded', s.excludedCents, d.excluded.length, 'No', sp({ show: 'excluded' }), 'Duplicates, reimbursed and business rows, and paid-back parts.', d.excluded, t => (t.excluded ? grossSpend(t) : t.reimbursedCents)),
+        R('Bought in the period, posted after it', sum(d.postedAfter, spendOf), d.postedAfter.length, 'No (posted later)', d.postedAfter.length === 1 ? txnHref(ctx, d.postedAfter[0]) : sp({}), 'The app uses the posted date; a statement may use the purchase date.', d.postedAfter),
       ] },
       { title: 'Counted, but may change', rows: [
-        R('Possible duplicates (second copies)', sum(d.dupes, spendOf), d.dupes.length, 'Yes, until decided', qHref(ctx, 'duplicates')),
-        R('Pending reimbursements', sum(d.pendingReimb, spendOf), d.pendingReimb.length, 'Yes, until confirmed', qHref(ctx, 'reimbursements')),
-        R('Pending business purchases', sum(d.pendingBiz, spendOf), d.pendingBiz.length, 'Yes, until decided', qHref(ctx, 'business')),
-        R('Uncertain categories', sum(d.uncertain, spendOf), d.uncertain.length, 'Yes (only the category is unsure)', qHref(ctx, 'uncertain')),
-        R('Posted in the period, bought before it', sum(d.boughtBefore, spendOf), d.boughtBefore.length, 'Yes (posted date)', d.boughtBefore.length === 1 ? txnHref(ctx, d.boughtBefore[0]) : sp({ list: '1' }), 'A statement by purchase date would leave these out.'),
+        R('Possible duplicates (second copies)', sum(d.dupes, spendOf), d.dupes.length, 'Yes, until decided', qHref(ctx, 'duplicates'), 'Decide in Data review.', d.dupes),
+        R('Pending reimbursements', sum(d.pendingReimb, spendOf), d.pendingReimb.length, 'Yes, until confirmed', qHref(ctx, 'reimbursements'), 'Decide in Data review.', d.pendingReimb),
+        R('Pending business purchases', sum(d.pendingBiz, spendOf), d.pendingBiz.length, 'Yes, until decided', qHref(ctx, 'business'), 'Decide in Data review.', d.pendingBiz),
+        R('Uncertain categories', sum(d.uncertain, spendOf), d.uncertain.length, 'Yes (only the category is unsure)', qHref(ctx, 'uncertain'), '', d.uncertain),
+        R('Posted in the period, bought before it', sum(d.boughtBefore, spendOf), d.boughtBefore.length, 'Yes (posted date)', d.boughtBefore.length === 1 ? txnHref(ctx, d.boughtBefore[0]) : sp({ list: '1' }), 'A statement by purchase date would leave these out.', d.boughtBefore),
       ] },
     ];
-    const rowsHtml = groups.map((g, gi) => g.rows.length ? `<tbody><tr class="rv-rec-group"><th scope="colgroup" colspan="4" id="rv-rec-g${gi}">${esc(g.title)}</th></tr>${g.rows.map(r => `<tr class="${r.label === 'App spending' ? 'rv-rec-total' : ''}${!r.cents && !r.n ? ' rv-zero' : ''}">
-        <th scope="row" headers="rv-rec-g${gi}"><a href="${esc(r.href)}">${esc(r.label)}</a>${r.n ? `<small>${count(r.n, 'row')}</small>` : ''}${r.note ? `<small>${esc(r.note)}</small>` : ''}</th>
+    const rowsHtml = groups.map((g, gi) => g.rows.length ? `<tbody><tr class="rv-rec-group"><th scope="colgroup" colspan="3" id="rv-rec-g${gi}">${esc(g.title)}</th></tr>${g.rows.map((r, ri) => `<tr class="${r.label === 'App spending' ? 'rv-rec-total' : ''}${!r.cents && !r.n ? ' rv-zero' : ''}">
+        <th scope="row" headers="rv-rec-g${gi}"><a href="${esc(r.href)}">${esc(r.label)}</a>${r.n ? `<small>${count(r.n, 'row')}</small>` : ''}${r.note ? `<small>${esc(r.note)}</small>` : ''}${rowList(ctx, r, gi, ri)}</th>
         <td class="num"><span class="rv-ml" aria-hidden="true">Amount</span>${money(r.cents)}</td>
         <td><span class="rv-ml" aria-hidden="true">Counted?</span>${esc(r.counted)}</td>
       </tr>`).join('')}</tbody>` : '').join('');
-    const partialRow = `<p class="fine">Months in the period: ${esc(E.compare.describeMonths(d.months))}. ${d.partial.length ? `<strong>Partial coverage: ${esc(E.compare.describeMonths(d.partial))}</strong> (<a href="${esc(qHref(ctx, 'coverage'))}">coverage</a>).` : 'All fully covered.'}</p>`;
+    const partialRow = `<p class="fine">Months in the period: ${esc(E.compare.describeMonths(d.months))}. ${d.incomplete.length ? `<strong>Incomplete coverage: ${esc(E.compare.describeMonths(d.incomplete))}</strong> (<a href="${esc(qHref(ctx, 'coverage'))}">coverage</a>).` : 'All fully covered.'}</p>`;
     const table = `<div class="table-wrap rv-rec-wrap" tabindex="0" role="region" aria-label="Breakdown of app spending for ${esc(periodText)}">
       <table class="table rv-rec-table"><caption class="sr-only">Breakdown of app spending for ${esc(periodText)}</caption>
       <thead><tr><th scope="col">Part</th><th scope="col" class="num">Amount</th><th scope="col">Counted in app spending?</th></tr></thead>${rowsHtml}</table></div>`;
     const breakdown = c.card(table + partialRow, { title: 'Breakdown', subtitle: 'The pieces that most often explain a gap. Each opens the transactions behind it.', id: 'rv-rec-breakdown' });
     const explain = diff === null || Math.abs(diff) < MATCH_TOLERANCE ? '' : explanations(ctx, d, groups, diff, start, end);
     const head = c.card(metrics + (warns.length ? `<div class="stack-sm rv-rec-notes">${warns.join('')}</div>` : ''), { title: ref ? `Comparing “${ref.label}”` : `App spending, ${periodText}`, subtitle: ref ? esc(periodText) : 'Enter the reference total for these dates to see the difference.', id: 'rv-rec' });
-    return { head, rest: explain + breakdown };
+    // With no data for the dates, a breakdown of zeros would only look like a known $0.
+    return { head, rest: d.noData ? '' : explain + breakdown };
+  }
+
+  /** The transactions behind one breakdown amount, each opening in Spending (audit detail). */
+  function rowList(ctx, r, gi, ri) {
+    if (!r.list || !r.list.length) return '';
+    const shown = r.list.slice().sort(byDateDesc).slice(0, 50);
+    const amount = r.amountOf || spendOf;
+    return `<details class="rv-rows" id="rv-rec-rows-${gi}-${ri}"><summary>Show ${r.list.length === 1 ? 'the transaction' : `the ${r.list.length} transactions`}<span class="sr-only">: ${esc(r.label)}</span></summary>
+      <ul>${shown.map(t => `<li><a href="${esc(txnHref(ctx, t))}">${esc(fmt.date(t.date))} · ${esc(merchantOf(t))}</a> <span class="num">${money(amount(t))}</span></li>`).join('')}</ul>
+      ${r.list.length > shown.length ? `<p class="fine">The newest ${shown.length} are listed.</p>` : ''}</details>`;
   }
 
   function explanations(ctx, d, groups, diff, start, end) {
@@ -1199,30 +1334,53 @@
   }
 
   // ------------------------------------------------------------------ where a transaction is waiting
-  function whereIs(q, id) {
-    if (q.uncertain.some(t => t.id === id)) return 'uncertain';
-    if (q.mixedRetail.some(t => t.id === id)) return 'mixed';
+  /**
+   * The queue that lists a transaction: where it waits for a decision (in the index's priority
+   * order, so a possible duplicate wins over its mixed-retail category), then where it is shown.
+   */
+  function whereIs(ctx, q, id) {
+    const t = findTxn(ctx, id);
     if (q.duplicates.some(d => d.ids.includes(id))) return 'duplicates';
-    if (openTransfers(q).some(t => t.id === id)) return 'transfers';
+    if (uncertainOpen(q).some(x => x.id === id)) return 'uncertain';
+    if (openTransfers(q).some(x => x.id === id)) return 'transfers';
     if (q.reimbursements.some(r => r.chargeId === id || r.depositId === id)) return 'reimbursements';
-    if (q.business.some(t => t.id === id)) return 'business';
-    if (q.spikes.some(s => s.ids.includes(id))) return 'spikes';
-    if (q.edited.some(t => t.id === id)) return 'edited';
+    if (q.business.some(x => x.id === id)) return 'business';
+    if (q.spikes.some(s => s.ids.includes(id)) || (q.annualSpikes || []).some(s => s.ids.includes(id))) return 'spikes';
+    if (q.mixedRetail.some(x => x.id === id)) return 'mixed';
+    if (t && t.edit && t.edit.duplicate) return 'duplicates';
+    if ((q.transfers.unpaired || []).some(x => x.id === id) || (q.transfers.paired || []).some(p => p.ids.includes(id))) return 'transfers';
+    if (q.edited.some(x => x.id === id)) return 'edited';
     return null;
   }
 
-  function targetNotice(ctx, P, q) {
+  /**
+   * Context for a link that names a transaction (txn param). `highlighted` says whether this
+   * queue's page marks it; if not, say where it is listed instead of silently showing nothing.
+   */
+  function targetNotice(ctx, P, q, highlighted) {
     if (!P.txn || !P.queue || ['coverage', 'reconcile'].includes(P.queue)) return '';
-    const where = whereIs(q, P.txn);
-    if (where === P.queue || (P.queue === 'transfers' && (q.transfers.unpaired || []).some(t => t.id === P.txn))) return '';
     const t = findTxn(ctx, P.txn);
-    if (t && P.queue === 'transfers' && (q.transfers.paired || []).some(p => p.ids.includes(P.txn))) {
-      return c.notice({ tone: 'info', title: `${merchantOf(t)}, ${fmt.date(t.date)} is matched with its other side.`, body: 'Both sides are in your data, so it is explained and not counted as spending. It is listed under “Matched, not counted as spending” below.' });
-    }
-    if (!t) return c.notice({ tone: 'warn', title: 'That transaction is not in the loaded data.', body: 'Corrections to it are kept in the corrections log.' });
+    if (!t) return c.notice({ tone: 'warn', title: 'That transaction is not in the loaded data.', body: `It may come from a file that is no longer loaded. Corrections to it are kept in the <a href="${esc(qHref(ctx, 'edited'))}">corrections log</a>.` });
     const label = `${merchantOf(t)}, ${fmt.date(t.date)}`;
+    if (highlighted) {
+      if (P.queue === 'transfers' && (q.transfers.paired || []).some(p => p.ids.includes(P.txn))) {
+        return c.notice({ tone: 'info', title: `${label} is matched with its other side.`, body: 'Both sides are in your data, so it is explained and not counted as spending. It is highlighted under “Matched, not counted as spending” below.' });
+      }
+      const u = P.queue === 'transfers' ? (q.transfers.unpaired || []).find(x => x.id === P.txn) : null;
+      if (u && u.expected && !answeredTransfer(u)) {
+        return c.notice({ tone: 'info', title: `${label} needs no answer.`, body: `${esc(u.reason)} It is highlighted under “No other side expected” below.` });
+      }
+      if (P.queue === 'duplicates' && !q.duplicates.some(d => d.ids.includes(P.txn))) {
+        return c.notice({ tone: 'info', title: `The possible duplicate of ${label} is already decided.`, body: 'The decision is highlighted under “Already decided” below. Reopen it there to decide again.' });
+      }
+      if (P.from && P.from !== P.queue) {
+        return c.notice({ tone: 'info', title: `${label} is listed in ${QUEUES[P.queue].title}, so it opened here.`, body: `The link asked for ${esc(QUEUES[P.from].title)}, where it is not waiting.` });
+      }
+      return '';
+    }
+    const where = whereIs(ctx, q, P.txn);
     return c.notice({ tone: 'info', title: `${label} is not waiting in ${QUEUES[P.queue].title}.`,
-      body: where ? `It is listed in <a href="${esc(qHref(ctx, where, { txn: t.id }))}">${esc(QUEUES[where].title)}</a>.` : `Nothing about it needs a decision. <a href="${esc(txnHref(ctx, t))}">Open it in Spending</a>.` });
+      body: where && where !== P.queue ? `It is listed in <a href="${esc(qHref(ctx, where, { txn: t.id }))}">${esc(QUEUES[where].title)}</a>.` : `Nothing about it needs a decision here. <a href="${esc(txnHref(ctx, t))}">Open it in Spending</a>.` });
   }
 
   // ------------------------------------------------------------------ render
@@ -1253,17 +1411,21 @@
       console.error(err);
       body = c.notice({ tone: 'bad', title: 'This queue could not be displayed.', body: esc(err.message) + ' Your saved corrections are unchanged.' });
     }
-    return `<div class="rv rv-q-${esc(P.queue || 'index')}">
+    // A link that names a transaction in the wrong queue (e.g. from a page that does not know
+    // every queue) opens the queue where it is listed instead, replacing the history entry.
+    const highlighted = / data-rv-target="/.test(body);
+    const where = P.txn && P.queue && !highlighted && !['coverage', 'reconcile'].includes(P.queue) && !P.from ? whereIs(ctx, q, P.txn) : null;
+    const redirect = where && where !== P.queue ? { queue: where, txn: P.txn, from: P.queue } : null;
+    return `<div class="rv rv-q-${esc(P.queue || 'index')}"${redirect ? ` data-rv-redirect="${esc(JSON.stringify(redirect))}"` : ''}>
       ${crumbs}${header}${tabs(ctx, P, info)}
       ${notes || noData ? `<div class="stack-sm rv-notes">${notes}${noData}</div>` : ''}
-      ${targetNotice(ctx, P, q)}
+      ${targetNotice(ctx, P, q, highlighted)}
       ${body}
     </div>`;
   }
 
   // ------------------------------------------------------------------ after render: focus, live sums
   let focusAfter = null;
-  let handledTarget = null;
 
   function focusEl(el) {
     if (!el) return;
@@ -1297,6 +1459,13 @@
       container.addEventListener('change', onInput);
       container.__rvBound = true;
     }
+    const moveTo = container.querySelector('[data-rv-redirect]');
+    if (moveTo) {
+      let params = null;
+      try { params = JSON.parse(moveTo.dataset.rvRedirect); } catch { params = null; }
+      // Deferred: never navigate from inside a render.
+      if (params) { setTimeout(() => ctx.app.navigate('review', params, { replace: true }), 0); return; }
+    }
     // Phones show the queue tabs as a scrolling strip: keep the current one in view.
     const strip = container.querySelector('.rv-tabs .section-nav');
     const cur = strip && strip.querySelector('[aria-current]');
@@ -1309,12 +1478,19 @@
       setTimeout(() => focusEl(document.getElementById(id) || document.getElementById('rv-list-h') || document.getElementById('page-title')), 0);
       return;
     }
-    const P = ctx.route.params || {};
-    if (P.txn && handledTarget !== location.hash) {
-      handledTarget = location.hash;
-      const target = container.querySelector('.rv-item.is-target');
-      if (target) setTimeout(() => focusEl(document.getElementById(target.dataset.rvHead)), 0);
-    } else if (!P.txn) handledTarget = null;
+    // A link that names a transaction (txn param): open its section and focus it, but only on
+    // arrival (a link, Back, a reload). The app has then focused the page heading, or nothing.
+    // After an action on this page focus is on a control and must stay there.
+    const target = container.querySelector('[data-rv-target]');
+    if (target) {
+      setTimeout(() => {
+        const a = document.activeElement;
+        if (a && a !== document.body && a.id !== 'page-title') return;
+        if (!container.contains(target)) return;
+        for (let d = target.closest('details'); d; d = d.parentElement && d.parentElement.closest('details')) d.open = true;
+        focusEl(document.getElementById(target.dataset.rvTarget) || target);
+      }, 0);
+    }
   }
 
   // ------------------------------------------------------------------ actions
@@ -1545,12 +1721,14 @@
       const id = el.dataset.txn;
       const edit = ctx.state.ledgerEdits[id];
       if (!edit) return;
-      // Only real edit fields are cleared (categoryReason/kindReason go with category/kind).
-      const fields = E.review.EDIT_FIELDS.filter(f => edit[f] !== undefined && edit[f] !== null);
+      // Only real edit fields are cleared (categoryReason/kindReason go with category/kind);
+      // data-fields limits it (e.g. undoing a transfer answer keeps a reimbursement decision).
+      const only = el.dataset.fields ? el.dataset.fields.split(',') : null;
+      const fields = E.review.EDIT_FIELDS.filter(f => edit[f] !== undefined && edit[f] !== null && (!only || only.includes(f)));
       if (!fields.length) return;
       if (el.dataset.focus) focusAfter = el.dataset.focus;
       else setFocusNext(el, el.dataset.stay === '1');
-      sh().editMany(ctx.app, fields.map(field => ({ txnId: id, field, value: null, reason: 'Reverted to the imported value' })), { message: 'Correction reverted to the imported values. The history is kept.' });
+      sh().editMany(ctx.app, fields.map(field => ({ txnId: id, field, value: null, reason: 'Reverted to the imported value' })), { message: el.dataset.message || 'Correction reverted to the imported values. The history is kept.' });
     },
 
     /** Add a reconciliation reference (state.references) and open its comparison. */

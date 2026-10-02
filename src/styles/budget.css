@@ -27,6 +27,7 @@
 .bud-sum-row dt a:hover { color: var(--brand); text-decoration-color: currentColor; }
 .bud-sum-row dd { margin: 0; text-align: right; font-weight: 700; font-size: 1rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .bud-sum-sub { grid-column: 1 / -1; margin: 2px 0 0; font-size: .76rem; line-height: 1.4; color: var(--text-3); }
+.bud-sum-row dd.bud-sum-sub { margin: 2px 0 0; text-align: left; font-weight: 400; font-size: .76rem; white-space: normal; letter-spacing: 0; }
 .bud-sum-total { margin-top: 2px; padding-top: 10px; border-top: 2px solid var(--border-strong); }
 .bud-sum-total dt { font-size: 1rem; }
 .bud-sum-total dd { font-size: 1.45rem; letter-spacing: -.02em; }
@@ -228,3 +229,19 @@
   .bud-facts { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .bud-facts dd { margin-bottom: var(--space-2); }
 }
+
+/* ------------------------------------------------------------- review follow-ups */
+/* "Use $X" for a seasonal or one-off category names its 12-month basis under the amount. */
+.bt-use-basis { display: block; font-size: .7rem; font-weight: 600; color: var(--text-3); }
+.bt-use { flex-direction: column; align-items: flex-end; gap: 0; }
+@media (max-width: 699px) { .bud-tt .bt-use { align-items: flex-start; } }
+.bud-yearly { display: block; margin-top: 4px; font-size: .78rem; color: var(--text-3); }
+.bud-change-why { color: var(--text-2); }
+.bud-why { margin: 0 0 var(--space-4); padding: var(--space-3); border-radius: var(--radius-sm); background: var(--info-soft); font-size: .88rem; }
+.bud-why h3 { font-size: .9rem; margin-bottom: 4px; }
+.bud-why p { margin: 0; }
+.bud-why-more { margin-top: var(--space-4); }
+.bud-why-more .bud-why { margin: 0; padding: 0; background: none; }
+.bud-summary-head h2:focus:not(:focus-visible) { outline: none; }
+/* Phones: the add button sits right under the fields instead of below a reserved gap. */
+@media (max-width: 599px) { .bud-add-actions { min-height: 0; } }

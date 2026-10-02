@@ -29,13 +29,14 @@
   const NO_BANK = 'No bank category';
 
   const KIND_OPTIONS = [
-    { value: 'spend', label: 'Spending', test: t => t.kind === 'spend' },
+    // `short` fits the Show select on a phone; `label` is used in headings and breadcrumbs.
+    { value: 'spend', label: 'Spending', short: 'Spending', test: t => t.kind === 'spend' },
     // Money coming in, as Overview counts it: income plus partners' contributions from personal accounts.
-    { value: 'income', label: 'Income & contributions', test: t => t.kind === 'income' || (t.kind === 'transfer' && t.subtype === 'contribution') },
-    { value: 'transfer', label: 'Transfers & savings', test: t => t.kind === 'transfer' },
-    { value: 'debt', label: 'Debt payments', test: t => t.kind === 'debt_payment' },
-    { value: 'card', label: 'Card payments', test: t => t.kind === 'card_payment' },
-    { value: 'all', label: 'Everything', test: () => true },
+    { value: 'income', label: 'Income & contributions', short: 'Coming in', test: t => t.kind === 'income' || (t.kind === 'transfer' && t.subtype === 'contribution') },
+    { value: 'transfer', label: 'Transfers & savings', short: 'Transfers', test: t => t.kind === 'transfer' },
+    { value: 'debt', label: 'Debt payments', short: 'Debts', test: t => t.kind === 'debt_payment' },
+    { value: 'card', label: 'Card payments', short: 'Card bills', test: t => t.kind === 'card_payment' },
+    { value: 'all', label: 'Everything', short: 'Everything', test: () => true },
   ];
   const KIND_BY = Object.fromEntries(KIND_OPTIONS.map(k => [k.value, k]));
   const KIND_PARAM = { spend: 'spend', income: 'income', transfer: 'transfer', debt_payment: 'debt', card_payment: 'card' };
@@ -117,6 +118,18 @@
   function signalBadge(signal) {
     const s = SIGNALS[signal] || [humanize(signal), 'neutral'];
     return c.badge(s[0], s[1]);
+  }
+
+  /** Chart legend; each key stays on the same line as its label when the legend wraps. */
+  function chartLegend(items) {
+    return `<p class="legend-line">${items.filter(Boolean).map(([key, label]) => `<span class="sp-legend-item"><span class="key sp-key-${esc(key)}" aria-hidden="true"></span>${esc(label)}</span>`).join(' ')}</p>`;
+  }
+  /**
+   * Column charts fit their card at every width, so every month, the axis and "Show as a table"
+   * stay in view; the stylesheet enlarges the axis text on phones to keep it readable.
+   */
+  function chartBlock(chartHtml) {
+    return `<div class="sp-chart">${chartHtml}</div>`;
   }
 
   function coverageOf(ctx, month) {
@@ -240,6 +253,43 @@
       return rows;
     });
   }
+  /** Account ids the account filter keeps, or null when every account is shown. */
+  function filterAccountIds(ctx, P) {
+    if (!P.acct && !P.scope) return null;
+    return new Set(ctx.dataset.accounts.filter(a => (P.acct ? a.id === P.acct : (a.scope || 'joint') === P.scope)).map(a => a.id));
+  }
+  function filterName(ctx, P) {
+    if (P.acct) { const a = ctx.dataset.accounts.find(x => x.id === P.acct); return a ? a.label : P.acct; }
+    return P.scope === 'personal' ? 'the personal accounts' : 'the joint accounts';
+  }
+  /**
+   * With an account filter on, a month for which none of the kept accounts has any export (and
+   * no rows) has unknown spending: it must read "Unknown", never $0.
+   */
+  function unknownForFilter(ctx, P, month) {
+    const ids = filterAccountIds(ctx, P);
+    if (!ids || !month) return false;
+    if (!ids.size) return true; // e.g. "Personal accounts" when none is in the loaded data
+    return ctx.memo(`sp-unknown:${P.acct}:${P.scope}:${P.basis}:${month}`, () => {
+      const cov = E.ledger.coverage(ctx.dataset, month, { purpose: 'all' });
+      const accts = cov.accounts.filter(a => ids.has(a.accountId));
+      if (!accts.length || accts.some(a => a.coveredDays > 0)) return false;
+      return !scoped(ctx, P).some(t => t.kind === 'spend' && t.date.slice(0, 7) === month);
+    });
+  }
+  function unknownNotice(ctx, P, months, what = 'spending') {
+    if (!months.length) return '';
+    const name = filterName(ctx, P);
+    if (!filterAccountIds(ctx, P).size) {
+      return c.notice({ tone: 'warn', title: `No ${P.scope === 'personal' ? 'personal' : 'joint'} accounts in the loaded data`, body: `None of the imported accounts is a ${P.scope === 'personal' ? 'personal' : 'joint'} account, so what happened in them is unknown, not $0. Choose “All accounts”, or <a href="${esc(ctx.href('data'))}">load those exports</a>.` });
+    }
+    return c.notice({
+      tone: 'warn',
+      title: `${describeMonths(months)}: ${what} unknown for ${name}`,
+      body: `No export from ${esc(name)} covers ${months.length === 1 ? 'this month' : 'these months'}, so ${what === 'spending' ? 'what was spent' : 'what came in or went out'} there is unknown, not $0. ${months.length === 1 ? 'It shows' : 'They show'} as “Unknown” and ${months.length === 1 ? 'is' : 'are'} left out of totals and averages here. Choose “All accounts” or <a href="${esc(ctx.href('data'))}">load that export</a> to fill ${months.length === 1 ? 'it' : 'them'} in.`,
+    });
+  }
+
   function byId(ctx) {
     return ctx.memo('sp-byid', () => new Map(ctx.txns.map(t => [t.id, t])));
   }
@@ -315,17 +365,17 @@
     const monthOpts = [...ctx.months].reverse().map(m => opt(m, fmt.month(m) + (coverageOf(ctx, m).status !== 'full' ? ' (partial)' : ''))).join('');
     const quick = pre.map(p => opt(p.value, p.label)).join('');
     const allOpt = opt('', 'Month by month');
-    const custom = P.period && !found ? `<option value="${esc(P.period)}" selected>${esc('Custom: ' + fmt.period(P.period === 'all' ? '' : P.period))}</option>` : '';
+    const custom = P.period && !found ? `<option value="${esc(P.period)}" selected>${esc(fmt.period(P.period === 'all' ? '' : P.period))}</option>` : '';
     const period = `<div class="sp-f sp-f-period"><label for="sp-period">Period</label>
       <select id="sp-period" name="period" data-action="spending:filter" data-param="period">${allOpt}${custom}<optgroup label="Quick picks">${quick}</optgroup><optgroup label="Single months">${monthOpts}</optgroup></select></div>`;
-    const acct = `<div class="sp-f"><label for="sp-acct">Account</label>
+    const acct = `<div class="sp-f sp-f-acct"><label for="sp-acct">Account</label>
       <select id="sp-acct" name="acct" data-action="spending:filter" data-param="acct"><option value=""${!P.acct && !P.scope ? ' selected' : ''}>All accounts</option>
         <optgroup label="Groups"><option value="scope:joint"${P.scope === 'joint' && !P.acct ? ' selected' : ''}>Joint accounts</option><option value="scope:personal"${P.scope === 'personal' && !P.acct ? ' selected' : ''}>Personal accounts</option></optgroup>
         <optgroup label="Accounts">${ctx.dataset.accounts.map(a => `<option value="${esc(a.id)}"${a.id === P.acct ? ' selected' : ''}>${esc(a.label)}</option>`).join('')}</optgroup></select></div>`;
     const kind = `<div class="sp-f"><label for="sp-kind">Show</label>
-      <select id="sp-kind" name="kind" data-action="spending:filter" data-param="kind">${KIND_OPTIONS.map(k => `<option value="${esc(k.value)}"${k.value === P.kind ? ' selected' : ''}>${esc(k.label)}</option>`).join('')}</select></div>`;
+      <select id="sp-kind" name="kind" data-action="spending:filter" data-param="kind">${KIND_OPTIONS.map(k => `<option value="${esc(k.value)}"${k.value === P.kind ? ' selected' : ''}>${esc(k.short)}</option>`).join('')}</select></div>`;
     const search = `<div class="sp-f sp-f-search"><label for="sp-q">Search</label>
-      <div class="sp-search-row"><input id="sp-q" name="q" type="search" value="${esc(P.q)}" maxlength="200" placeholder="e.g. Kroger or 486.60" autocomplete="off"><button class="btn btn-secondary" type="submit" id="sp-search-go">Search</button></div></div>`;
+      <div class="sp-search-row"><input id="sp-q" name="q" type="search" value="${esc(P.q)}" maxlength="200" placeholder="Merchant or 486.60" autocomplete="off"><button class="btn btn-secondary" type="submit" id="sp-search-go">Search</button></div></div>`;
     const basis = !['spend', 'all'].includes(P.kind) ? '' : `<div class="sp-f sp-f-basis">${c.segmented({ label: 'Categories', name: 'sp-basis', options: [{ value: 'category', label: 'Yours' }, { value: 'bank', label: "Bank's" }], value: P.basis, action: 'spending:basis' })}</div>`;
     const active = P.acct || P.scope || P.q || P.kind !== 'spend' || P.basis !== 'category' || P.show || P.window !== P.defaultWindow;
     const clear = active ? `<div class="sp-f sp-f-clear"><a class="btn btn-ghost btn-small" id="sp-clear" href="${esc(L.href({ acct: '', scope: '', q: '', kind: 'spend', basis: 'category', show: '', window: P.defaultWindow, ...(P.basis === 'bank' ? { cat: '', merchant: '' } : {}), ...(P.q ? { cat: '', merchant: '' } : {}) }))}">Clear filters</a></div>` : '';
@@ -344,7 +394,12 @@
     const lead = ex.length ? `${count(ex.length, 'row')} not counted (${money(cents)})` : `${money(cents)} not counted`;
     const partlyText = partly.length ? `${ex.length ? '; ' : ': '}${count(partly.length, 'charge')} partly paid back` : '';
     return `<div class="sp-excluded-line"><p>${lead}${ex.length ? ': ' + esc(why) : ''}${partlyText}. These rows stay in your data but are not part of the totals.</p>
-      <button type="button" class="btn btn-small btn-secondary" id="sp-show-excluded" data-action="spending:toggle-excluded" aria-pressed="${P.show ? 'true' : 'false'}">${P.show ? 'Hide them' : 'Show them'}</button></div>`;
+      ${excludedToggle(P)}</div>`;
+  }
+
+  /** One toggle for not-counted rows; it keeps its id (and focus) whichever way it is switched. */
+  function excludedToggle(P) {
+    return `<button type="button" class="btn btn-small btn-secondary" id="sp-show-excluded" data-action="spending:toggle-excluded">${P.show ? 'Hide them' : 'Show them'}<span class="sr-only"> (rows not counted)</span></button>`;
   }
 
   /** Card listing the not-counted rows (month, range and category levels when show=excluded). */
@@ -444,19 +499,36 @@
    * category, non-spending kinds, not-counted rows): same columns, but the amount and footer use
    * `amount(t)` so the footer equals the total the table explains.
    */
-  function txnRows(ctx, L, rows, { caption, cat = '', amount, footerLabel = 'counted spending', emptyText = 'No transactions match.', hrefFor, kindColumn = false } = {}) {
+  function txnRows(ctx, L, rows, { caption, cat = '', amount, footerLabel = 'counted spending', emptyText = 'No transactions match.', hrefFor, kindColumn = false, zeroReason } = {}) {
     const ids = byId(ctx);
     const amt = amount || (t => spendOf(t, cat));
     const link = hrefFor || (t => L.href({ txn: t.id }));
     const items = rows.map(t => ({ t, o: ids.get(t.id) || t }));
+    // A non-spending row that adds nothing to this table's total (the second side of a transfer
+    // or card payment, a move between accounts) says so, so the rows visibly add up to the footer.
+    const notCountedHere = r => r.o.kind !== 'spend' && !r.o.excluded && amt(r.t) === 0;
+    const statusHtml = r => {
+      const b = sh().badges(r.o, { compact: true });
+      if (notCountedHere(r)) return c.badge('Not counted here', 'neutral') + (zeroReason ? `<small>${esc(zeroReason(r.o))}</small>` : '') + (b ? ' ' + b : '');
+      return b || '<span class="fine">Counted</span>';
+    };
+    const amountHtml = r => {
+      if (r.o.kind === 'spend') return amountCell(r.t, cat);
+      const shown = `<span>${esc(sh().amountText(r.o))}</span>`;
+      if (r.o.excluded) return shown + '<small>not counted</small>';
+      const counted = amt(r.t);
+      if (counted === 0) return shown + '<small>counts $0.00 here</small>';
+      if (Math.abs(counted) !== Math.abs(r.o.amountCents)) return shown + `<small>${money(counted)} counted</small>`;
+      return shown;
+    };
     const columns = [
       { key: 'date', label: 'Date', html: r => `<span class="nowrap">${esc(fmt.date(r.o.date))}</span>` },
       { key: 'merchant', label: 'Merchant', html: r => `<a href="${esc(link(r.t))}">${esc(merchantOf(r.o))}</a><small>${esc(r.o.description)} · ${esc(r.o.accountLabel || r.o.accountId)}</small>` },
       kindColumn
         ? { key: 'kind', label: 'Kind', html: r => `${esc(sh().kindLabel(r.o))}<small>${esc(r.o.category)}</small>` }
         : { key: 'category', label: 'Category', html: r => `${esc(r.o.parts && r.o.parts.length > 1 ? 'Split: ' + r.o.parts.map(p => p.category).join(', ') : r.o.category)}<small>Bank: ${esc(r.o.sourceCategory || 'none')}</small>` },
-      { key: 'status', label: 'Status', html: r => sh().badges(r.o, { compact: true }) || '<span class="fine">Counted</span>' },
-      { key: 'amount', label: 'Amount', align: 'right', html: r => amountCell(r.t, cat) },
+      { key: 'status', label: 'Status', html: statusHtml },
+      { key: 'amount', label: 'Amount', align: 'right', html: amountHtml },
     ];
     const total = sum(rows, amt);
     const footer = { date: `${rows.length} row${rows.length === 1 ? '' : 's'}`, amount: `${money(total)}<small>${esc(footerLabel)}</small>` };
@@ -473,7 +545,9 @@
       return { crumbs, header, body: c.empty('No transactions are loaded yet. Import your bank exports to see where money went; nothing leaves this device.', c.linkButton('Load data', ctx.href('data'), { variant: 'primary' })) };
     }
     const scope = scoped(ctx, P);
-    const trend = ctx.memo('sp-trend:' + P.basis + ':' + P.acct + ':' + P.scope, () => E.compare.trend(scope, ctx.dataset, { months: ctx.months }));
+    const unknownMonths = ctx.months.filter(m => unknownForFilter(ctx, P, m));
+    const trend = ctx.memo('sp-trend:' + P.basis + ':' + P.acct + ':' + P.scope, () => E.compare.trend(scope, ctx.dataset, { months: ctx.months }))
+      .map(r => (unknownMonths.includes(r.month) ? { ...r, spendCents: null, unknownForFilter: true } : r));
     const counted = scope.filter(t => t.kind === 'spend' && !t.excluded);
     const counts = {};
     for (const t of counted) { const m = t.date.slice(0, 7); counts[m] = (counts[m] || 0) + 1; }
@@ -486,18 +560,20 @@
       items: trend.map(r => ({
         label: r.month, value: r.spendCents, href: L.at({ period: r.month }),
         muted: r.coverage.status !== 'full',
-        note: r.coverage.status === 'full' ? '' : r.coverage.status === 'partial' ? 'Partial month: only what is in the data' : 'No data for this month',
+        note: r.unknownForFilter ? `Unknown: no export from ${filterName(ctx, P)}` : r.coverage.status === 'full' ? '' : r.coverage.status === 'partial' ? 'Partial month: only what is in the data' : 'No data for this month',
       })),
       highlight: ctx.latestComplete,
     });
-    const legend = `<p class="legend-line"><span class="key sp-key-full" aria-hidden="true"></span>Complete month${ctx.latestComplete ? ' <span class="key sp-key-sel" aria-hidden="true"></span>Latest complete month' : ''}${partials.length ? ' <span class="key sp-key-partial" aria-hidden="true"></span>Partial month (only what is in the data)' : ''}</p>`;
+    const legend = chartLegend([['full', 'Complete month'], ctx.latestComplete && ['sel', 'Latest complete month'], partials.length && ['partial', 'Partial month (only what is in the data)']]);
 
     const rows = [...trend].reverse().map(r => {
       const cmp = comparison(ctx, P, r.month);
       return { ...r, cmp, n: counts[r.month] || 0 };
     });
     const vsUsual = r => {
+      if (r.unknownForFilter) return '<span class="muted">Not compared</span><small>unknown for this account</small>';
       if (r.coverage.status !== 'full') return '<span class="muted">Not compared</span><small>partial month</small>';
+      if (r.cmp.baselineMonths.some(m => unknownForFilter(ctx, P, m))) return '<span class="muted">Not known</span><small>no export for this account before</small>';
       if (r.cmp.totals.averageCents === null) return '<span class="muted">No usual yet</span><small>no full months before</small>';
       const d = r.cmp.totals.diffCents, avg = r.cmp.totals.averageCents;
       return `${esc(fmt.diff(d))}<small>vs ${money(avg)}${avg > 0 ? ' · ' + esc(fmt.pct((d * 100) / avg)) : ''}</small>`;
@@ -508,7 +584,7 @@
       caption: 'Spending per month with coverage',
       columns: [
         { key: 'month', label: 'Month', html: r => `<a class="nowrap" href="${esc(L.at({ period: r.month }))}">${esc(fmt.monthLong(r.month))}</a>` },
-        { key: 'spend', label: 'Spending', align: 'right', html: r => (r.spendCents === null ? '<span class="muted">Unknown</span>' : money(r.spendCents)) },
+        { key: 'spend', label: 'Spending', align: 'right', html: r => (r.spendCents === null ? `<span class="muted">Unknown</span><small>${r.unknownForFilter ? 'no export for this account' : 'no data'}</small>` : money(r.spendCents)) },
         { key: 'usual', label: 'vs usual', align: 'right', html: vsUsual },
         { key: 'coverage', label: 'Coverage', html: r => coverageBadge(r.coverage) + (r.coverage.status !== 'full' && r.coverage.note ? `<small>${esc(r.coverage.note)}</small>` : '') },
         { key: 'n', label: 'Records', align: 'right', html: r => (r.n ? `<a href="${esc(L.at({ period: r.month, list: '1' }))}">${count(r.n, 'transaction')}</a>` : '<span class="muted">None</span>') },
@@ -516,7 +592,7 @@
       rows,
       footer: {
         month: `All months<small>${count(rows.length, 'month')}</small>`,
-        spend: `<a href="${esc(L.at({ period: 'all' }))}">${money(total)}</a>`,
+        spend: `<a href="${esc(L.at({ period: 'all' }))}">${money(total)}</a>${unknownMonths.length ? `<small>${count(unknownMonths.length, 'month')} unknown</small>` : ''}`,
         usual: '',
         coverage: partials.length ? `<small>${count(partials.length, 'partial month')}</small>` : '',
         n: `<a href="${esc(L.at({ period: 'all', list: '1' }))}">${count(totalCount, 'transaction')}</a>`,
@@ -527,8 +603,9 @@
 
     const body = `<div class="stack">
       ${chips}
+      ${unknownNotice(ctx, P, unknownMonths)}
       ${partialNote}
-      ${c.card(`<div class="sp-chart-scroll">${chart}</div>` + legend, { title: 'Spending per month', subtitle: 'Select a column or a month to open it. Partial months are greyed out.', id: 'sp-chart' })}
+      ${c.card(chartBlock(chart) + legend, { title: 'Spending per month', subtitle: 'Select a column or a month to open it. Partial months are greyed out.', id: 'sp-chart' })}
       ${c.card(table + `<p class="fine sp-after-table">“vs usual” compares each complete month with the average of the ${P.window} months before it (complete months only). It is history, not a target.</p>`, { title: 'Months', id: 'sp-months', cls: 'sp-months-wrap', actions: windowControl(P) })}
     </div>`;
     return { crumbs, header, body };
@@ -540,7 +617,7 @@
       return `${money(x.basisCents)}<small>${esc(fmt.month(x.seasonal.lastYearMonth))}, last year</small>`;
     }
     if (x.averageCents === null) return '<span class="muted">Not known</span><small>no full months before</small>';
-    if (x.signal === 'irregular' && x.irregular) return `<span class="muted">${money(x.averageCents)}</span><small>avg of one payment (${esc(fmt.month(x.irregular.month))})</small>`;
+    if (x.signal === 'irregular' && x.irregular) return `<span class="muted">${money(x.averageCents)}</span><small>only ${esc(fmt.month(x.irregular.month))}: ${money(x.irregular.cents)}</small>`;
     return `${money(x.averageCents)}<small>${cmp.usableCount}-month average</small>`;
   }
   function diffCell(x, partial) {
@@ -613,31 +690,46 @@
     const total = sum(rows, t => spendOf(t));
     const s = E.ledger.summarize(rows);
     const listHref = L.at({ period: month, list: '1' });
+    const unknown = unknownForFilter(ctx, P, month);
     const prev = E.months.add(month, -1), next = E.months.add(month, 1);
     const navBtn = (m, dir) => `<a class="btn btn-small btn-secondary" href="${esc(L.at({ period: m }))}" id="sp-${dir}">${dir === 'prev' ? '<span aria-hidden="true">‹</span> ' : ''}${esc(fmt.month(m))}<span class="sr-only">${dir === 'prev' ? ' (previous month)' : ' (next month)'}</span>${dir === 'next' ? ' <span aria-hidden="true">›</span>' : ''}</a>`;
     const actions = `<nav class="sp-monthnav" aria-label="Other months">${ctx.months.includes(prev) ? navBtn(prev, 'prev') : ''}${ctx.months.includes(next) ? navBtn(next, 'next') : ''}</nav>`;
     const header = {
       eyebrow: 'Spending',
       title: `${fmt.monthLong(month)} spending`,
-      subtitle: `${partial ? '<strong class="tone-warn">Partial month.</strong> ' : ''}<strong>${money(total)}</strong> counted spending in <a href="${esc(listHref)}">${count(rows.length, 'transaction')}</a>${s.refundsCents ? `, after ${money(s.refundsCents)} of refunds` : ''}.`,
+      subtitle: unknown
+        ? `<strong class="tone-warn">Spending unknown.</strong> No export from ${esc(filterName(ctx, P))} covers this month.`
+        : `${partial ? '<strong class="tone-warn">Partial month.</strong> ' : ''}<strong>${money(total)}</strong> counted spending in <a href="${esc(listHref)}">${count(rows.length, 'transaction')}</a>${s.refundsCents ? `, after ${money(s.refundsCents)} of refunds` : ''}.`,
       actions,
     };
     const crumbs = [{ label: 'All months', href: L.at({ period: '' }) }, { label: fmt.month(month) }];
 
-    const partialNotice = partial ? c.notice({
+    const partialNotice = partial && !unknown ? c.notice({
       tone: 'warn',
       title: cov.status === 'none' ? `No data covers ${fmt.monthLong(month)}` : `${fmt.monthLong(month)} is a partial month`,
       body: `${esc(cov.note || '')} The amounts are only what is in the data, so the real total was probably higher. Nothing is compared with usual or marked higher or lower for this month.`,
     }) : '';
-    const usualTot = cmp.totals.averageCents;
+    // With an account filter, baseline months the filtered accounts have no export for would
+    // count as $0: the usual amount is then not known for this filter.
+    const baseUnknown = unknown ? [] : cmp.baselineMonths.filter(m => unknownForFilter(ctx, P, m));
+    const usualKnown = !unknown && !baseUnknown.length;
+    const usualTot = usualKnown ? cmp.totals.averageCents : null;
+    const usualWhy = unknown ? `This month is unknown for ${esc(filterName(ctx, P))}` : `${esc(describeMonths(baseUnknown))}: no export from ${esc(filterName(ctx, P))}`;
     const metrics = `<div class="metrics sp-metrics">
-      ${c.metric({ label: `Spent in ${fmt.month(month)}`, value: fmt.money(total), sub: `<a href="${esc(listHref)}">${count(rows.length, 'transaction')}</a>${s.refundsCents ? ` · after ${money(s.refundsCents)} refunds` : ''}`, status: partial ? c.badge('Partial month', 'warn') : '' })}
-      ${c.metric({ label: cmp.usableCount ? `Usual · ${cmp.usableCount}-month average` : 'Usual', value: usualTot === null ? 'Not known yet' : fmt.money(usualTot), sub: usualTot === null ? 'No complete months before this one. Loading earlier exports would give one.' : `History (${esc(describeMonths(cmp.baselineMonths))}), not a target` })}
-      ${c.metric({ label: 'Difference from usual', value: partial ? 'Not compared' : cmp.totals.diffCents === null ? '—' : fmt.diff(cmp.totals.diffCents), sub: partial ? 'Partial month' : cmp.totals.diffCents === null || !usualTot ? 'Needs a usual amount' : esc(fmt.pct((cmp.totals.diffCents * 100) / usualTot)) + ' vs usual', tone: '' })}
+      ${unknown
+    ? c.metric({ label: `Spent in ${fmt.month(month)}`, value: 'Unknown', sub: `No export from ${esc(filterName(ctx, P))} for this month`, status: c.badge('No data', 'neutral') })
+    : c.metric({ label: `Spent in ${fmt.month(month)}`, value: fmt.money(total), sub: `<a href="${esc(listHref)}">${count(rows.length, 'transaction')}</a>${s.refundsCents ? ` · after ${money(s.refundsCents)} refunds` : ''}`, status: partial ? c.badge('Partial month', 'warn') : '' })}
+      ${!usualKnown
+    ? c.metric({ label: 'Usual', value: 'Not known', sub: usualWhy })
+    : c.metric({ label: cmp.usableCount ? `Usual · ${cmp.usableCount}-month average` : 'Usual', value: usualTot === null ? 'Not known yet' : fmt.money(usualTot), sub: usualTot === null ? 'No complete months before this one. Loading earlier exports would give one.' : `History (${esc(describeMonths(cmp.baselineMonths))}), not a target` })}
+      ${c.metric({ label: 'Difference from usual', value: partial || !usualKnown ? 'Not compared' : cmp.totals.diffCents === null ? '—' : fmt.diff(cmp.totals.diffCents), sub: partial ? 'Partial month' : !usualKnown ? 'Needs a known usual amount' : cmp.totals.diffCents === null || !usualTot ? 'Needs a usual amount' : esc(fmt.pct((cmp.totals.diffCents * 100) / usualTot)) + ' vs usual', tone: '' })}
     </div>`;
     const flagged = cmp.categories.filter(x => ['higher', 'seasonal_higher'].includes(x.signal));
-    const table = comparisonTable(ctx, P, L, cmp, month, total, rows.length);
+    const table = unknown
+      ? c.empty(`No export from ${esc(filterName(ctx, P))} covers ${esc(fmt.monthLong(month))}, so its spending by category is unknown.`, c.linkButton('Show all accounts', L.href({ acct: '', scope: '' }), { variant: 'secondary' }))
+      : comparisonTable(ctx, P, L, cmp, month, total, rows.length);
     const cardBody = `<p class="fine sp-basis-line" id="sp-baseline">${baselineText(cmp)}</p>
+      ${baseUnknown.length ? c.notice({ tone: 'warn', title: 'Usual amounts are not reliable for this account', body: `${esc(filterName(ctx, P))} has no export for ${esc(describeMonths(baseUnknown))}, so those months count as $0 in the usual amounts below. Treat higher/lower marks with care, or choose “All accounts”.` }) : ''}
       ${table}
       <p class="fine sp-after-table">A category is marked higher or lower only when it differs from usual by at least ${money(cmp.rule.minDiffCents, { whole: true })} <em>and</em> ${esc(cmp.rule.minPct)}%, with at least ${esc(cmp.rule.minMonths)} complete months of history. Heating and electricity are compared with the same month last year. ${flagged.length && !partial ? `${count(flagged.length, 'category is', 'categories are')} marked higher this month.` : ''} Select “Why” for the reasoning behind each row.</p>`;
     const reconcile = `<p class="fine">Checking against a statement? <a href="${esc(ctx.href('review', { queue: 'reconcile', start: E.months.start(month), end: E.months.end(month) }))}">Reconcile this total</a>.</p>`;
@@ -659,8 +751,10 @@
     const rows = spendRows(ctx, P, per);
     const total = sum(rows, t => spendOf(t));
     const cats = categoryTotals(rows);
-    const n = per.months.length || 1;
-    const partials = per.months.filter(m => coverageOf(ctx, m).status !== 'full');
+    // Months whose spending is unknown for the account filter are left out of the average.
+    const unknownMonths = per.months.filter(m => unknownForFilter(ctx, P, m));
+    const n = per.months.length - unknownMonths.length;
+    const partials = per.months.filter(m => coverageOf(ctx, m).status !== 'full' && !unknownMonths.includes(m));
     const pv = P.period;
     const header = {
       eyebrow: 'Spending',
@@ -668,7 +762,7 @@
       subtitle: `<strong>${money(total)}</strong> counted spending in <a href="${esc(L.at({ period: pv, list: '1' }))}">${count(rows.length, 'transaction')}</a> over ${count(per.months.length, 'month')}.`,
     };
     const crumbs = [{ label: 'All months', href: L.at({ period: '' }) }, { label: per.all ? 'All months, one total' : per.short }];
-    const perMonth = cents => E.money.divide(cents, n);
+    const perMonth = cents => (n > 0 ? E.money.divide(cents, n) : null);
     const table = c.table({
       caption: `Spending by category, ${per.label}`,
       columns: [
@@ -687,22 +781,25 @@
       emptyText: `No counted spending in ${per.label}.`,
       cls: 'sp-stack'
     });
-    const notes = `<p class="fine sp-after-table">Per month = total ÷ ${count(n, 'month')}.${partials.length ? ` ${esc(describeMonths(partials))} ${partials.length === 1 ? 'is' : 'are'} partial, so per-month figures understate ${partials.length === 1 ? 'that month' : 'those months'}.` : ''} Periods are not compared with usual: pick a single month to compare it with the months before it.</p>`;
+    const notes = `<p class="fine sp-after-table">Per month = total ÷ ${count(n, 'month')}${unknownMonths.length ? ` with data (${esc(describeMonths(unknownMonths))} unknown for ${esc(filterName(ctx, P))})` : ''}.${partials.length ? ` ${esc(describeMonths(partials))} ${partials.length === 1 ? 'is' : 'are'} partial, so per-month figures understate ${partials.length === 1 ? 'that month' : 'those months'}.` : ''} Periods are not compared with usual: pick a single month to compare it with the months before it.</p>`;
     let chart = '';
     if (per.months.length > 1) {
       const trend = E.compare.trend(scoped(ctx, P), ctx.dataset, { months: per.months });
-      chart = c.card('<div class="sp-chart-scroll">' + c.columnChart({
+      chart = c.card(chartBlock(c.columnChart({
         title: 'Spending per month',
-        items: trend.map(r => ({ label: r.month, value: r.spendCents, href: L.at({ period: r.month }), muted: r.coverage.status !== 'full', note: r.coverage.status === 'full' ? '' : 'Partial month: only what is in the data' })),
-      }) + `</div><p class="legend-line"><span class="key sp-key-full" aria-hidden="true"></span>Complete month${partials.length ? ' <span class="key sp-key-partial" aria-hidden="true"></span>Partial month (only what is in the data)' : ''}</p>`, { title: 'Month by month', id: 'sp-range-chart' });
+        items: trend.map(r => (unknownMonths.includes(r.month)
+          ? { label: r.month, value: null, note: `Unknown: no export from ${filterName(ctx, P)}` }
+          : { label: r.month, value: r.spendCents, href: L.at({ period: r.month }), muted: r.coverage.status !== 'full', note: r.coverage.status === 'full' ? '' : 'Partial month: only what is in the data' })),
+      })) + chartLegend([['full', 'Complete month'], partials.length && ['partial', 'Partial month (only what is in the data)']]), { title: 'Month by month', id: 'sp-range-chart' });
     }
     const reconcile = per.start ? `<p class="fine">Checking against a statement or an earlier total? <a id="sp-reconcile" href="${esc(ctx.href('review', { queue: 'reconcile', start: E.months.start(per.start), end: E.months.end(per.end) }))}">Reconcile this total</a> (${esc(fmt.date(E.months.start(per.start)))} – ${esc(fmt.date(E.months.end(per.end)))}).</p>` : '';
     const metrics = `<div class="metrics sp-metrics">
       ${c.metric({ label: 'Total spending', value: fmt.money(total), sub: `<a href="${esc(L.at({ period: pv, list: '1' }))}">${count(rows.length, 'transaction')}</a>` })}
-      ${c.metric({ label: 'Per month', value: fmt.money(perMonth(total)), sub: `Total ÷ ${count(n, 'month')}` })}
-      ${c.metric({ label: 'Months', value: String(per.months.length), sub: partials.length ? `${count(partials.length, 'partial month')}` : 'All complete', status: partials.length ? c.badge('Includes partial months', 'warn') : '' })}
+      ${c.metric({ label: 'Per month', value: fmt.money(perMonth(total)), sub: n > 0 ? `Total ÷ ${count(n, 'month')}${unknownMonths.length ? ' with data' : ''}` : `No month with data for ${esc(filterName(ctx, P))}` })}
+      ${c.metric({ label: 'Months', value: String(per.months.length), sub: [partials.length ? count(partials.length, 'partial month') : '', unknownMonths.length ? count(unknownMonths.length, 'unknown month') : ''].filter(Boolean).join(' · ') || 'All complete', status: partials.length || unknownMonths.length ? c.badge(unknownMonths.length ? 'Includes unknown months' : 'Includes partial months', 'warn') : '' })}
     </div>`;
     const body = `<div class="stack">
+      ${unknownNotice(ctx, P, unknownMonths)}
       ${metrics}
       ${c.card(table + notes, { title: 'By category', subtitle: `${esc(per.all ? 'All months' : per.label)} · totals and the monthly average`, id: 'sp-range-cats', cls: 'sp-stack-wrap' })}
       ${chart}
@@ -723,13 +820,52 @@
   }
   function catLabel(P, cat) { return P.basis === 'bank' ? `${cat} (bank)` : cat; }
 
+  const validCents = v => Number.isInteger(v) && v >= 0;
+  /**
+   * What the budget plans for a category in a month: its target plus any bill filed under it
+   * (a mortgage or phone bill is planned as a bill, not a target). Bills still being considered
+   * ("planned") and bills outside their start/end months are left out, as in planVsActual.
+   * An entered-but-unknown amount makes the plan Unknown, never a smaller number.
+   */
+  function planFor(ctx, cat, month) {
+    const plan = ctx.state.plan || {};
+    const sources = [];
+    const targets = plan.targets || {};
+    if (Object.prototype.hasOwnProperty.call(targets, cat) && targets[cat] !== null && targets[cat] !== undefined) {
+      sources.push({ kind: 'target', label: 'Target', cents: validCents(targets[cat]) ? targets[cat] : null });
+    }
+    for (const b of plan.bills || []) {
+      if (!b || b.category !== cat || b.status === 'planned' || !E.plan.activeIn(b, month)) continue;
+      const who = b.fundedFrom === 'joint' ? '' : b.fundedFrom === 'unknown' ? ' (payer not confirmed)' : ` (paid by ${ctx.person(b.fundedFrom)})`;
+      sources.push({ kind: 'bill', label: `${b.label} bill${who}`, cents: validCents(b.monthlyCents) ? b.monthlyCents : null });
+    }
+    const known = sources.every(s => s.cents !== null);
+    return { sources, cents: sources.length && known ? sources.reduce((s, x) => s + x.cents, 0) : null, known };
+  }
+
+  function planTile(ctx, cat, month) {
+    const p = planFor(ctx, cat, month);
+    const bills = p.sources.some(s => s.kind === 'bill');
+    const section = bills ? 'bills' : 'targets';
+    const link = text => `<a href="${esc(ctx.href('budget', { section }))}">${esc(text)}</a>`;
+    if (!p.sources.length) {
+      return `<div class="sp-tile sp-tile-target" id="sp-plan-tile"><span class="sp-tile-tag">Your target · plan</span>
+        <span class="sp-tile-value">Not set</span><small><a href="${esc(ctx.href('budget', { section: 'targets' }))}">Set a target in Budget</a></small></div>`;
+    }
+    const parts = p.sources.map(s => `${s.label} ${s.cents === null ? 'unknown' : fmt.money(s.cents)}`).join(' + ');
+    return `<div class="sp-tile sp-tile-target" id="sp-plan-tile"><span class="sp-tile-tag">${bills ? 'Your plan · budget' : 'Your target · plan'}</span>
+      <span class="sp-tile-value">${p.cents === null ? 'Unknown' : money(p.cents)}</span>
+      <small>${p.cents === null ? `${esc(parts)}. ${link('Enter the amount in Budget')}` : bills ? `a month: ${esc(parts)}. ${link('Edit in Budget')}` : `a month, from your budget. ${link('Edit in Budget')}`}</small></div>`;
+  }
+
   function compareTiles(ctx, P, L, x, month, cat) {
-    const target = P.basis === 'bank' ? undefined : (ctx.state.plan.targets || {})[cat];
-    const targetTile = P.basis === 'bank' ? '' : `<div class="sp-tile sp-tile-target"><span class="sp-tile-tag">Your target · plan</span>
-      <span class="sp-tile-value">${typeof target === 'number' ? money(target) : 'Not set'}</span>
-      <small>${typeof target === 'number' ? 'a month, from your budget' : `<a href="${esc(ctx.href('budget', { section: 'targets' }))}">Set a target in Budget</a>`}</small></div>`;
+    const targetTile = P.basis === 'bank' ? '' : planTile(ctx, cat, month);
     const usualValue = x ? (x.basis === 'last_year' && x.seasonal ? x.basisCents : x.averageCents) : null;
-    const usualSub = !x ? 'No history for this category' : x.basis === 'last_year' && x.seasonal ? `${esc(fmt.month(x.seasonal.lastYearMonth))}, same month last year` : x.averageCents === null ? 'No complete months before' : 'average of complete months before';
+    const usualSub = !x ? 'No history for this category'
+      : x.basis === 'last_year' && x.seasonal ? `${esc(fmt.month(x.seasonal.lastYearMonth))}, same month last year`
+        : x.averageCents === null ? 'No complete months before'
+          : x.signal === 'irregular' && x.irregular ? `average; only ${esc(fmt.month(x.irregular.month))} had any (${money(x.irregular.cents)})`
+            : 'average of complete months before';
     return `<div class="sp-tiles">
       <div class="sp-tile"><span class="sp-tile-tag">${esc(fmt.month(month))}</span><span class="sp-tile-value">${money(x ? x.actualCents : 0)}</span><small>${x ? signalBadge(x.signal) : 'No spending'}</small></div>
       <div class="sp-tile sp-tile-usual"><span class="sp-tile-tag">Usual · history</span><span class="sp-tile-value">${usualValue === null || usualValue === undefined ? 'Not known' : money(usualValue)}</span><small>${usualSub}</small></div>
@@ -768,30 +904,40 @@
 
     let compareCard = '';
     let cmpForNote = null;
-    if (per.type === 'month') {
+    // No comparison for a month the account filter has no data for (the page notice says why).
+    if (per.type === 'month' && !unknownForFilter(ctx, P, per.month)) {
       const cmp = comparison(ctx, P, per.month);
       cmpForNote = { categories: cmp.categories.filter(r => r.category === cat) };
       const x = cmp.categories.find(r => r.category === cat) || null;
-      compareCard = c.card(compareTiles(ctx, P, L, x, per.month, cat) + `<p class="fine">Usual uses ${esc(describeMonths(cmp.baselineMonths.length ? cmp.baselineMonths : cmp.trailingMonths))}${cmp.usableCount ? ` (${count(cmp.usableCount, 'complete month')})` : ' (none complete)'}.</p>`,
+      const avgText = cmp.usableCount
+        ? `${describeMonths(cmp.baselineMonths)} (${fmt.count(cmp.usableCount, 'complete month')})`
+        : `${describeMonths(cmp.trailingMonths)} (none complete)`;
+      const usedNote = x && x.basis === 'last_year' && x.seasonal
+        ? `Compared with ${esc(fmt.monthLong(x.seasonal.lastYearMonth))}, the same month last year. For reference, the average of ${esc(avgText)} was ${x.averageCents === null ? 'not known' : money(x.averageCents)}.`
+        : `Usual uses ${esc(avgText)}.`;
+      compareCard = c.card(compareTiles(ctx, P, L, x, per.month, cat) + `<p class="fine" id="sp-cat-basis">${usedNote}</p>`,
         { title: 'Compared with usual', id: 'sp-cat-compare', actions: windowControl(P) });
     }
 
-    // Trend: the 12 months up to the selected month (or the period's end).
+    // Trend: the 12 months up to the selected month (or the period's end). A seasonal category
+    // compared with last year gets a 13th month so the month it is compared with is in view.
     const end = per.type === 'month' ? per.month : per.end || ctx.months[ctx.months.length - 1];
     let trendCard = '';
     if (end) {
+      const seasonal = P.basis !== 'bank' && E.categories.isSeasonal(cat);
       const first = ctx.months[0];
-      let start = E.months.add(end, -11);
+      let start = E.months.add(end, seasonal && per.type === 'month' ? -12 : -11);
       if (first && start < first) start = first;
       const months = E.months.range(start, end);
       const trend = E.compare.trend(scoped(ctx, P), ctx.dataset, { category: cat, months });
-      const seasonal = P.basis !== 'bank' && E.categories.isSeasonal(cat);
       const partialMs = trend.filter(r => r.coverage.status !== 'full').map(r => r.month);
-      trendCard = c.card('<div class="sp-chart-scroll">' + c.columnChart({
+      trendCard = c.card(chartBlock(c.columnChart({
         title: `${cat} per month`,
-        items: trend.map(r => ({ label: r.month, value: r.spendCents, href: L.at({ period: r.month, cat }), muted: r.coverage.status !== 'full', note: r.coverage.status === 'full' ? '' : 'Partial month: only what is in the data' })),
+        items: trend.map(r => (unknownForFilter(ctx, P, r.month)
+          ? { label: r.month, value: null, note: `Unknown: no export from ${filterName(ctx, P)}` }
+          : { label: r.month, value: r.spendCents, href: L.at({ period: r.month, cat }), muted: r.coverage.status !== 'full', note: r.coverage.status === 'full' ? '' : 'Partial month: only what is in the data' })),
         highlight: per.type === 'month' ? per.month : undefined,
-      }) + `</div><p class="legend-line"><span class="key sp-key-full" aria-hidden="true"></span>Complete month${per.type === 'month' ? ' <span class="key sp-key-sel" aria-hidden="true"></span>Selected month' : ''}${partialMs.length ? ' <span class="key sp-key-partial" aria-hidden="true"></span>Partial month' : ''}</p>`
+      })) + chartLegend([['full', 'Complete month'], per.type === 'month' && ['sel', 'Selected month'], partialMs.length && ['partial', 'Partial month']])
         + (seasonal ? `<p class="fine">${esc(cat)} follows the seasons, so a month is compared with the same month last year instead of the recent average.</p>` : ''),
       { title: `${cat}, last ${months.length} months`, subtitle: partialMs.length ? `${esc(describeMonths(partialMs))}: partial coverage, amounts are only what is in the data.` : 'Every month shown is complete.', id: 'sp-cat-trend' });
     }
@@ -866,15 +1012,19 @@
     { id: 'income', title: 'Other income', test: t => t.kind === 'income' && t.subtype !== 'payroll', measure: t => E.ledger.measure(t).incomeCents, label: 'counted as income',
       why: 'Interest, reimbursements and other deposits. A deposit that pays back a charge leaves income once you confirm the match in Data review.' },
     { id: 'saved', title: 'Saved', test: t => t.kind === 'transfer' && (t.subtype === 'savings' || t.subtype === 'investment'), measure: t => E.ledger.measure(t).savedCents, label: 'counted as saved',
-      why: 'Money moved into savings. Saving is not spending. A transfer shows on both accounts but is counted once, on the side money leaves.' },
+      why: 'Money moved into savings. Saving is not spending. A transfer shows on both accounts but is counted once, on the side money leaves.',
+      zero: t => (t.accountType === 'savings' ? 'Arrival side; counted on the account it left' : 'Counted on the other side') },
     { id: 'contribution', title: 'Contributions in', test: t => t.kind === 'transfer' && t.subtype === 'contribution', measure: t => E.ledger.measure(t).contributionCents, label: 'counted as money coming in',
-      why: 'Money a partner moved in from a personal account outside this data. It is counted as coming in, but not as income a second time.' },
+      why: 'Money a partner moved in from a personal account outside this data. It is counted as coming in, but not as income a second time.',
+      zero: () => 'On a personal account, so not money coming in to the household' },
     { id: 'internal', title: 'Between your accounts', test: t => t.kind === 'transfer' && !['savings', 'investment', 'contribution'].includes(t.subtype), measure: () => 0, label: 'not counted',
-      why: 'Money moving between your own accounts. It is not income, spending or saving, so it is not counted.' },
+      why: 'Money moving between your own accounts. It is not income, spending or saving, so it is not counted.',
+      zero: () => 'Moves money between your own accounts' },
     { id: 'debt', title: 'Debt payments', test: t => t.kind === 'debt_payment', measure: t => E.ledger.measure(t).debtCents, label: 'counted as debt payments',
       why: 'Loan and financing payments whose original purchase is not in the data. They are shown apart from category spending.' },
     { id: 'card', title: 'Card payments', test: t => t.kind === 'card_payment', measure: t => (t.excluded || t.accountType === 'credit_card' ? 0 : -t.amountCents), label: 'paid toward cards, not spending',
-      why: "Paying a card bill only moves money: the card's purchases are already counted as spending. Each payment shows on the bank and on the card; the total counts the bank side once." },
+      why: "Paying a card bill only moves money: the card's purchases are already counted as spending. Each payment shows on the bank and on the card; the total counts the bank side once.",
+      zero: t => (t.accountType === 'credit_card' ? 'Card side; the bank side is counted' : 'Counted on the other side') },
   ];
 
   function sectionsFor(rows) {
@@ -893,6 +1043,7 @@
         footerLabel: s.label,
         kindColumn: s.id !== 'spend',
         hrefFor: t => L.href({ txn: t.id }),
+        zeroReason: s.zero,
       });
       return c.card(`<p class="fine">${esc(s.why)}</p>${table}`, { title: s.title, subtitle: `${money(total)} ${esc(s.label)} · ${count(counted.length, 'row')}`, id: 'sp-sec-' + s.id, cls: 'sp-txnlist' });
     }).join('');
@@ -915,14 +1066,15 @@
     };
     const tips = [];
     if (others > 0) tips.push(`${count(others, 'more match', 'more matches')} in other kinds (income, transfers or payments). <a href="${esc(L.href({ kind: 'all' }))}">Show every kind</a>.`);
-    if (hidden > 0 && !P.show) tips.push(`${count(hidden, 'matching row is', 'matching rows are')} not counted (duplicates, reimbursed or business). <button type="button" class="btn btn-small btn-secondary" id="sp-show-excluded" data-action="spending:toggle-excluded" aria-pressed="false">Show them</button>`);
+    if (hidden > 0) tips.push(`${count(hidden, 'matching row is', 'matching rows are')} not counted (duplicates, reimbursed or business)${P.show ? '; they are shown struck through' : ''}. ${excludedToggle(P)}`);
     if (P.period && !per.all) tips.push(`Searching ${esc(per.label)} only. <a href="${esc(L.href({ period: 'all' }))}">Search all months</a>.`);
     const tipHtml = tips.length ? `<ul class="sp-tips">${tips.map(x => `<li>${x}</li>`).join('')}</ul>` : '';
+    const unknownMonths = per.months.filter(m => unknownForFilter(ctx, P, m));
     const hint = /^\$?\d/.test(P.q) ? '' : '<p class="fine">Search matches merchant, bank description, category, bank category, note or account. Type an amount such as 486.60 to find that exact amount.</p>';
     const results = P.kind === 'spend'
       ? c.card(txnRows(ctx, L, shown, { caption: `Spending matching ${P.q}`, hrefFor: t => L.href({ txn: t.id }), emptyText: `No spending matches “${P.q}” in ${per.label}.` }), { title: 'Matching spending', id: 'sp-results', cls: 'sp-txnlist' })
       : listingCards(ctx, P, L, shown, per);
-    return { crumbs, header, body: `<div class="stack">${tipHtml}${hint}${results}</div>` };
+    return { crumbs, header, body: `<div class="stack">${unknownNotice(ctx, P, unknownMonths, P.kind === 'spend' ? 'spending' : 'activity')}${tipHtml}${hint}${results}</div>` };
   }
 
   function levelKind(ctx, P, per, L) {
@@ -932,9 +1084,11 @@
     const shown = (P.show ? rows : rows.filter(t => !t.excluded)).sort(byDate);
     const hidden = rows.filter(t => t.excluded).length;
     const s = E.ledger.summarize(rows);
+    const unknownMonths = per.months.filter(m => unknownForFilter(ctx, P, m));
+    const allUnknown = unknownMonths.length > 0 && unknownMonths.length === per.months.length;
     const crumbs = [...periodCrumbs(P, per, L), { label: k.label }];
     const header = {
-      eyebrow: `Not spending · ${per.type === 'none' ? 'All months' : per.short}`,
+      eyebrow: `${P.kind === 'all' ? 'Every kind' : 'Not spending'} · ${per.type === 'none' ? 'All months' : per.short}`,
       title: `${k.label}${per.type === 'none' ? '' : ', ' + (per.type === 'month' ? per.label : per.short)}`,
       subtitle: P.kind === 'all' ? 'Every row of every kind, grouped by how it is counted.' : 'These rows are listed so every figure can be traced. Why each kind is or is not counted as spending is explained with it.',
     };
@@ -945,10 +1099,11 @@
     if (['debt', 'all'].includes(P.kind)) metricsList.push(c.metric({ label: 'Debt payments', value: fmt.money(s.debtPaymentsCents), sub: 'Not category spending' }));
     if (['card', 'all'].includes(P.kind)) metricsList.push(c.metric({ label: 'Paid toward cards', value: fmt.money(s.cardPaymentsCents), sub: 'Moves money; not spending' }));
     if (P.kind === 'all') metricsList.unshift(c.metric({ label: 'Spending', value: fmt.money(s.spendingCents), sub: `<a href="${esc(L.at({ period: P.period, kind: 'spend' }))}">By category</a>` }));
-    const hiddenLine = hidden && !P.show ? `<div class="sp-excluded-line"><p>${count(hidden, 'row')} not counted (confirmed reimbursements, duplicates or business).</p><button type="button" class="btn btn-small btn-secondary" id="sp-show-excluded" data-action="spending:toggle-excluded" aria-pressed="false">Show them</button></div>` : '';
+    const hiddenLine = hidden ? `<div class="sp-excluded-line"><p>${count(hidden, 'row')} not counted (confirmed reimbursements, duplicates or business)${P.show ? '; shown struck through above' : ''}.</p>${excludedToggle(P)}</div>` : '';
     const body = `<div class="stack">
-      <div class="metrics sp-metrics">${metricsList.join('')}</div>
-      ${listingCards(ctx, P, L, shown, per)}
+      ${unknownNotice(ctx, P, unknownMonths, P.kind === 'all' ? 'activity' : 'money moved')}
+      ${allUnknown ? '' : `<div class="metrics sp-metrics">${metricsList.join('')}</div>`}
+      ${allUnknown && !shown.length ? '' : listingCards(ctx, P, L, shown, per)}
       ${hiddenLine}
     </div>`;
     return { crumbs, header, body };
@@ -1118,7 +1273,9 @@
     const header = {
       eyebrow: 'Transaction',
       title: merchantOf(t),
-      subtitle: `${esc(fmt.date(t.date))} · ${esc(t.accountLabel || t.accountId)} · <strong>${esc(sh().amountText(t))}</strong> ${sh().badges(t)}`,
+      subtitle: `${esc(fmt.date(t.date))} · ${esc(t.accountLabel || t.accountId)} · <strong>${esc(sh().amountText(t))}</strong> ${sh().badges(t)}`
+        // Where the details and actions stack (phones, tablets) the actions are far down the page.
+        + `<button type="button" class="btn btn-small btn-secondary sp-jump" id="sp-jump-actions" data-action="spending:jump" data-target="sp-txn-actions-h">${isSpend ? 'Change category or decide' : 'Correct or decide'} <span aria-hidden="true">↓</span></button>`,
     };
     const body = `<div class="stack">
       <div class="sp-txn-grid">
@@ -1153,14 +1310,27 @@
       const a = ctx.dataset.accounts.find(x => x.id === P.acct);
       notes.push(c.notice({ tone: 'info', title: `Only ${a ? a.label : P.acct}`, body: 'Totals and usual amounts use this account alone. Whether a month is complete still depends on every spending account.' }));
     }
+    if (per.type === 'month' && ['category', 'merchant', 'list'].includes(level) && unknownForFilter(ctx, P, per.month)) {
+      notes.push(unknownNotice(ctx, P, [per.month]));
+    } else if (level === 'month' && unknownForFilter(ctx, P, per.month)) {
+      notes.push(unknownNotice(ctx, P, [per.month]));
+    }
     const banner = whatIfBanner(ctx);
-    return `<div class="sp sp-level-${esc(level)}">
+    // data-route / data-rev say which URL and which saved state this markup was drawn for, so
+    // tests (and anyone debugging) can wait for the page to catch up with a navigation or a change.
+    return `<div class="sp sp-level-${esc(level)}" data-route="${esc(routeKey(ctx.route && ctx.route.params))}" data-rev="${esc((ctx.state.meta && ctx.state.meta.updatedAt) || '')}">
       ${c.breadcrumbs(out.crumbs)}
       ${c.pageHeader(out.header)}
       ${filtersBar(ctx, P, L)}
       ${banner || notes.length ? `<div class="stack-sm sp-notes">${banner}${notes.join('')}</div>` : ''}
       ${out.body}
     </div>`;
+  }
+
+  /** Route params as one canonical string (sorted keys), independent of their order in the URL. */
+  function routeKey(params) {
+    const p = params || {};
+    return Object.keys(p).sort().map(k => k + '=' + p[k]).join('&');
   }
 
   // ------------------------------------------------------------------ actions
@@ -1195,6 +1365,14 @@
     },
     'spending:window': (ctx, el) => go(ctx, { window: el.dataset.value || el.value }),
     'spending:basis': (ctx, el) => go(ctx, { basis: el.dataset.value || el.value, cat: '', merchant: '' }),
+    /** Move to a section further down the page (in-page #anchors would change the route). */
+    'spending:jump': (ctx, el) => {
+      const target = document.getElementById(el.dataset.target);
+      if (!target) return;
+      if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+      target.scrollIntoView({ block: 'start' });
+      target.focus({ preventScroll: true });
+    },
     'spending:toggle-excluded': ctx => {
       const P = readParams(ctx);
       go(ctx, { show: P.show ? '' : 'excluded' });

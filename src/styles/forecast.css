@@ -7,6 +7,10 @@
 .fc-start input { min-height: 38px; padding: 6px 8px; }
 .fc-rule { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0; font-size: .9rem; color: var(--text-2); }
 .fc-range { margin: 0; }
+/* Names come from the household and may be one long word: wrap instead of widening the page. */
+.fc-page h2, .fc-page h3, .fc-page h4, .fc-page .card-sub, .fc-page .fine, .fc-page .notice-body,
+.fc-assume-list li, .fc-key-assumptions li, .fc-unknown-list li, .fc-help-list li, .fc-warn-list li, .fc-months-notes li, .fc-ev-meta { overflow-wrap: anywhere; }
+.fc-page .card-head > div { min-width: 0; }
 .fc-page > .notice { margin: 0; }
 
 /* ------------------------------------------------------------- scenario bar */
@@ -39,6 +43,7 @@
 
 /* ------------------------------------------------------------- comparison */
 .fc-compare .chart { margin-bottom: var(--space-3); }
+.fc-compare .chart-legend li { max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
 .fc-compare > .notice { margin-bottom: var(--space-4); }
 .fc-unknown-list { margin: 0 0 var(--space-3); padding-left: 1.1rem; font-size: .86rem; color: var(--text-2); }
 .fc-unknown-list li { margin-bottom: 6px; }
@@ -50,25 +55,29 @@
 .fc-cmp-table tbody th strong { color: var(--text); }
 .fc-cmp-table td.num { white-space: normal; min-width: 6.5rem; }
 .fc-cmp-table thead th.num { white-space: normal; }
+.fc-cmp-table th, .fc-cmp-table td { overflow-wrap: anywhere; }
 @media (max-width: 599px) {
   .fc-cmp-table th, .fc-cmp-table td { padding: 8px 6px; }
   .fc-cmp-table tbody th { min-width: 6.5rem; font-size: .84rem; }
   .fc-cmp-table td.num { min-width: 5.5rem; }
-  /* The shared line chart scales its text down with its width; keep it readable on phones by
-     letting the drawing scroll sideways inside its box (the legend and table stay put). */
-  .fc-compare .chart { overflow-x: auto; }
-  .fc-compare .chart svg { min-width: 600px; }
 }
 .fc-cmp-table small { color: var(--text-3); }
 .fc-v { font-weight: 700; font-variant-numeric: tabular-nums; }
 .fc-delta { font-weight: 650; }
 .fc-unknown { font-weight: 650; color: var(--warn); }
+.fc-cause { display: block; font-size: .82rem; color: var(--text-3); overflow-wrap: anywhere; }
+.fc-known-only { font-style: italic; }
+.fc-plus-missing { display: block; font-size: .72rem; font-weight: 650; color: var(--warn); white-space: nowrap; }
+.fc-dim { color: var(--text-3); font-weight: 500; font-size: .8rem; }
+small.fc-dim { display: block; font-size: .72rem; }
+.fc-linkbtn { border: 0; background: none; padding: 0; font: inherit; font-weight: 600; color: var(--brand); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.fc-linkbtn:hover { color: var(--brand-strong); }
 .fc-settings-text { font-weight: 500; }
 
 /* ------------------------------------------------------------- selected scenario layout */
 .fc-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: var(--space-5); align-items: start; }
 @media (max-width: 1199px) { .fc-grid { grid-template-columns: minmax(0, 1fr); } }
-.fc-editor h2:focus { outline: none; }
+.fc-editor h2:focus, .fc-bar h2:focus, .fc-missing h2:focus { outline: none; }
 .fc-editor .eyebrow { margin-bottom: 2px; }
 .fc-editor { container-type: inline-size; }
 .fc-result { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); margin-bottom: var(--space-4); }
@@ -165,6 +174,8 @@
 .fc-goal-fix { display: flex; justify-content: flex-end; }
 
 /* ------------------------------------------------------------- month by month */
+.fc-months-notes { margin: 0 0 var(--space-3); padding-left: 1.1rem; font-size: .84rem; color: var(--text-2); display: flex; flex-direction: column; gap: 4px; }
+.fc-months-notes .fc-plus-missing { display: inline; }
 .fc-months { container-type: inline-size; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; margin-bottom: var(--space-3); }
 .fc-month-list { list-style: none; margin: 0; padding: 0; }
 .fc-month-list > li { border-top: 1px solid var(--border); }

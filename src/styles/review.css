@@ -17,7 +17,7 @@
 .rv > .card:last-child { margin-bottom: 0; }
 .rv-intro { max-width: 78ch; color: var(--text-2); margin: 0 0 var(--space-4); }
 .rv-subhead { font-size: .95rem; margin: var(--space-4) 0 var(--space-2); }
-.rv-aside { margin: var(--space-2) 0 0; padding: var(--space-2) var(--space-3); border-left: 3px solid var(--info); background: var(--info-soft); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; font-size: .88rem; }
+.rv-aside { margin: var(--space-2) 0 var(--space-3); padding: var(--space-2) var(--space-3); border-left: 3px solid var(--info); background: var(--info-soft); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; font-size: .88rem; }
 
 /* ------------------------------------------------------------- index */
 .rv-metrics { margin-bottom: 0; }
@@ -51,10 +51,16 @@
 .rv-item { padding: var(--space-4) 0; border-top: 1px solid var(--border); min-width: 0; }
 .rv-item:first-child { border-top: 0; padding-top: 0; }
 .rv-item:last-child { padding-bottom: 0; }
-.rv-item.is-target { margin: 0 calc(-1 * var(--space-3)); padding-left: var(--space-3); padding-right: var(--space-3); background: var(--brand-soft); border-radius: var(--radius-sm); }
+.rv-item.is-target { margin: 0 calc(-1 * var(--space-3)); padding-left: var(--space-3); padding-right: var(--space-3); padding-bottom: var(--space-3); background: var(--brand-soft); border-radius: var(--radius-sm); }
 .rv-item.is-target + .rv-item { border-top-color: transparent; }
 .rv-item.is-decided .rv-item-head h3 { color: var(--text-2); }
 .rv-target-note { margin: 0 0 var(--space-2); padding-top: var(--space-2); font-size: .74rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--brand); }
+/* The row a link opened (txn param) inside a table: tinted, outlined and labelled in text. */
+.rv .table tr.is-target > th, .rv .table tr.is-target > td { background: var(--brand-soft); }
+.rv .table tr.is-target { outline: 2px solid var(--brand); outline-offset: -2px; }
+.rv .table tr.is-target:focus { outline: 3px solid var(--focus); outline-offset: -3px; }
+.rv-target-tag { display: block; margin-top: 2px; font-size: .72rem !important; font-weight: 700 !important; text-transform: uppercase; letter-spacing: .04em; color: var(--brand) !important; }
+.rv-skipped { margin: var(--space-3) 0 0; }
 .rv-item h3:focus, .rv-txn-title:focus { outline: none; }
 .rv-item h3:focus-visible, .rv-txn-title:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .rv-item-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin-bottom: var(--space-2); }
@@ -199,6 +205,10 @@
 .rv-biz-table td.rv-sel { width: 40px; }
 .rv-biz-table td.rv-sel input { width: 18px; height: 18px; margin: 2px 0 0; }
 .rv-biz-table th label { cursor: pointer; }
+.rv-biz-metrics .metric-link { color: var(--text); }
+.rv-biz-metrics .metric-link[aria-current] { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand); }
+.rv-biz-metrics .metric-link[aria-current] .metric-label { color: var(--brand); }
+.rv-biz-table tfoot th, .rv-biz-table tfoot td { font-weight: 700; }
 .rv-biz-decide { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 
 /* ------------------------------------------------------------- spikes */
@@ -213,6 +223,7 @@
 .rv-tile small { font-size: .78rem; }
 .rv-target-line { margin: var(--space-3) 0 0; padding-top: var(--space-2); border-top: 1px solid var(--border); font-size: .86rem; }
 .rv-quick { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; font-size: .88rem; color: var(--text-2); }
+.rv-quick > span:first-child { flex-basis: 100%; }
 .rv-quick a[aria-current] { border-color: var(--brand); background: var(--brand-soft); color: var(--brand); }
 
 /* ------------------------------------------------------------- coverage */
@@ -237,6 +248,12 @@
 .rv-rec-total th, .rv-rec-total td { font-weight: 750; background: var(--surface-2); }
 .rv-ml { display: none; }
 .rv-rec-table tr.rv-zero td { color: var(--text-3); }
+.rv-rows { margin-top: 4px; font-weight: 400; }
+.rv-rows > summary { cursor: pointer; color: var(--brand); font-size: .8rem; font-weight: 600; }
+.rv-rows ul { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: .82rem; }
+.rv-rows li { display: flex; justify-content: space-between; gap: var(--space-3); max-width: 520px; }
+.rv-rows li a { font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+.rv-rows .num { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .rv-explain { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: var(--space-3); font-size: .92rem; }
 .rv-explain strong { font-variant-numeric: tabular-nums; }
 @media (max-width: 599px) {
@@ -280,6 +297,10 @@
   .rv-biz-table td:nth-child(3) { grid-area: c; font-size: .84rem; }
   .rv-biz-table td:nth-child(4) { grid-area: s; justify-self: end; }
   .rv-biz-table td.num { grid-area: a; font-weight: 700; }
+  .rv-biz-table tfoot { display: block; }
+  .rv-biz-table tfoot tr { grid-template-areas: "sel m a"; border-top: 2px solid var(--border-strong); border-bottom: 0; background: var(--surface-2); }
+  .rv-biz-table tfoot th { grid-area: m; }
+  .rv-biz-table tfoot th, .rv-biz-table tfoot td { border-top: 0; background: transparent; }
 
   /* Headline tiles become compact rows. */
   .rv-metrics .metric { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--space-3); align-items: baseline; }
@@ -287,7 +308,7 @@
   .rv-metrics .metric-value { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
   .rv-metrics .metric-sub { grid-column: 1; grid-row: 2; }
   .rv-txn { flex-direction: column; gap: var(--space-1); }
-  .rv-txn-side { flex-direction: row; align-items: baseline; justify-content: space-between; width: 100%; text-align: left; }
+  .rv-txn-side { flex-direction: row; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px var(--space-3); width: 100%; text-align: left; }
   .rv-qrow { flex-direction: column; gap: var(--space-2); padding: var(--space-3); }
   .rv-missing li { flex-direction: column; gap: var(--space-2); }
   .rv-tiles { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-2); }

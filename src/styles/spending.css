@@ -1,5 +1,12 @@
 /* Spending view. Every class is prefixed sp- and uses base.css tokens only. */
 
+/* Long unbroken text (bank descriptions, user-made category names) wraps instead of widening
+   the page. Desktop tables keep whole words and scroll inside .table-wrap instead. */
+.sp { overflow-wrap: break-word; }
+.sp .breadcrumbs li, .sp h1, .sp h2, .sp h3, .sp .page-subtitle, .sp .notice-body, .sp .metric,
+.sp .sp-tile, .sp .card-sub, .sp .legend-line, .sp-excluded-line p, .sp-tips, .sp-explain, .sp .fine, .sp-linked li { overflow-wrap: anywhere; }
+@media (max-width: 599px) { .sp .table th, .sp .table td { overflow-wrap: anywhere; } }
+
 /* ------------------------------------------------------------- filters bar */
 .sp-filters {
   display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-3);
@@ -12,8 +19,9 @@
   width: 100%; min-height: 38px; padding: 6px 8px; border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font: inherit; font-size: .9rem;
 }
-.sp-f-period { flex-basis: 180px; }
-.sp-f-search { flex: 2 1 250px; }
+.sp-f-period { flex-basis: 170px; }
+.sp-f-acct { flex-basis: 160px; }
+.sp-f-search { flex: 2 1 220px; }
 .sp-search-row { display: flex; gap: var(--space-2); }
 .sp-search-row input { flex: 1 1 auto; min-width: 0; }
 .sp-search-row .btn { min-height: 38px; flex: 0 0 auto; }
@@ -24,11 +32,14 @@
 .sp-f-clear .btn { min-height: 38px; }
 
 @media (max-width: 599px) {
+  /* 16px text: iOS Safari zooms the whole page into any smaller form control on focus. */
+  .sp-f select, .sp-f input[type="search"] { font-size: 16px; }
   .sp-filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding: var(--space-3); gap: var(--space-3) var(--space-2); }
   .sp-f-period { grid-column: 1 / -1; }
   .sp-f-search { grid-column: 1 / -1; }
-  .sp-f-basis, .sp-f-clear { grid-column: auto; }
-  .sp-f-clear { align-self: end; justify-self: end; }
+  .sp-f-basis { grid-column: 1; }
+  /* Always the right-hand column, whether or not the Categories toggle is shown. */
+  .sp-f-clear { grid-column: 2; align-self: end; justify-self: end; }
 }
 
 .sp-notes { margin-bottom: var(--space-5); }
@@ -54,10 +65,13 @@
   .sp-metrics .metric-value { font-size: 1.2rem; }
 }
 
-/* Charts keep a readable label size on phones: they scroll sideways inside their card. */
-.sp-chart-scroll { overflow-x: auto; }
+/* Charts fit their card, so every month, the axis and "Show as a table" stay in view. On phones
+   the drawing is scaled down, so its axis text is drawn larger (SVG units) to stay readable. */
+.sp-legend-item { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 @media (max-width: 599px) {
-  .sp-chart-scroll .chart svg { min-width: 560px; }
+  .sp-chart .chart .axis { font-size: 12px; }
+  .sp-metrics .metric:last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .sp .segmented label { padding: 6px 9px; font-size: .84rem; }
 }
 
 .sp-after-table { margin: var(--space-3) 0 0; }
@@ -180,6 +194,10 @@
 .sp-plan-row .field { flex: 1 1 200px; }
 .sp-plan-row .field input { min-height: 40px; }
 .sp-history td, .sp-history th { font-size: .86rem; }
+/* Where details and actions stack (phones, tablets), a shortcut from the header to the actions. */
+.sp-jump { display: none; margin-top: var(--space-3); }
+.sp #sp-txn-actions-h { scroll-margin-top: calc(var(--topbar-h) + var(--space-5)); }
+@media (max-width: 1099px) { .sp-jump { display: flex; width: fit-content; } }
 
 /* ------------------------------------------------------------- phone: stacked tables */
 @media (max-width: 599px) {
@@ -214,7 +232,6 @@
   .sp-months-table tr > :nth-child(3) { grid-column: 2; grid-row: 2 / span 2; text-align: right; font-size: .84rem; }
   .sp-months-table tr > :nth-child(4) { grid-column: 1; grid-row: 2; text-align: left; }
   .sp-months-table tr > :nth-child(5) { grid-column: 1; grid-row: 3; font-size: .84rem; text-align: left; }
-  .sp-months-table tfoot tr > :nth-child(5) { grid-row: 2; }
 
   .sp-history tr { grid-template-columns: minmax(0, 1fr); }
   .sp-history tr > :nth-child(1) { font-size: .78rem; color: var(--text-2); }
