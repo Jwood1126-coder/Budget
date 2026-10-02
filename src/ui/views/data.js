@@ -6,12 +6,16 @@
  *
  * Routes (every step is its own URL, so Back works):
  *   #/data                          hub: what is loaded, load files, save/back up, privacy, reset
- *   #/data?load=csv                 bank exports: files, their accounts and columns
- *   #/data?load=csv&step=report     import report — nothing changes until "Use this data"
+ *   #/data?load=csv                 bank exports (and balances files): files, their accounts and columns, and
+ *                                   whether they are added to the data in use (the default for a
+ *                                   household's own data) or replace it (the default for the sample)
+ *   #/data?load=csv&step=report     adding: what will be added (new / already present / coverage /
+ *                                   balances) — nothing changes until "Add to my data"; replacing: the
+ *                                   import report — nothing changes until "Use this data"
  *   #/data?load=dataset             a prepared data file (.json): summary, then use
  *   #/data?load=profile             a household profile (.json): summary, then use
  *   #/data?load=workbook            a workbook or earlier saved budget: what changes, then replace
- *   #/data?loaded=csv|dataset|profile and #/data?forgot=1   one-line confirmations after a reload
+ *   #/data?loaded=csv|merge|dataset|profile and #/data?forgot=1   one-line confirmations after a reload
  *
  * Files chosen here are held only in this module's memory until the person chooses to use them.
  * Nothing is sent anywhere: the page's Content-Security-Policy blocks every network request, and
@@ -44,12 +48,14 @@
     fee: ['is a bank or card fee', 'are bank or card fees'],
   };
   const RESERVED_IDS = ['sample', 'no-data'];
+  /** Where a posted balance (dataset.balances) came from. */
+  const SOURCE_LABEL = { statement: 'statement', bank: 'export’s running balance' };
   const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,59}$/;
   const EPOCH = '1970-01-01T00:00:00.000Z';
 
   // ------------------------------------------------------------------ session (memory only)
   function freshCsv() {
-    return { files: [], newAccounts: [], rules: null, rulesName: '', rulesInfo: '', rulesError: null, pickError: null, datasetId: null, result: null, error: null, useError: null };
+    return { files: [], balanceFiles: [], mode: null, newAccounts: [], rules: null, rulesName: '', rulesInfo: '', rulesError: null, pickError: null, datasetId: null, result: null, error: null, useError: null };
   }
   const S = { csv: freshCsv(), dataset: null, profile: null, workbook: null };
   let seq = 0;
@@ -98,7 +104,7 @@
     return `<details class="disclosure ${esc(cls)}" id="${esc(id)}"${open ? ' open' : ''}><summary id="${esc(id)}-sum">${summary}</summary><div class="disclosure-body">${body}</div></details>`;
   }
   function uniqueName(name) {
-    const taken = new Set(S.csv.files.map(f => f.name));
+    const taken = new Set(S.csv.files.concat(S.csv.balanceFiles).map(f => f.name));
     if (!taken.has(name)) return name;
     const dot = name.lastIndexOf('.');
     const stem = dot > 0 ? name.slice(0, dot) : name, ext = dot > 0 ? name.slice(dot) : '';
@@ -147,6 +153,23 @@
   function defaultDatasetId(ctx) {
     const id = ctx.dataset.datasetId;
     return !ctx.dataset.isSynthetic && id && !RESERVED_IDS.includes(id) ? id : 'household';
+  }
+
+  /**
+   * Whether chosen exports are added to the data this page uses ('add') or replace it ('replace').
+   * A household's own data grows by adding newer exports; the fictional sample is replaced by
+   * default (adding to it stays possible). Without transactions there is nothing to add to.
+   */
+  function csvMode(ctx) {
+    if (!ctx.dataset.transactions.length) return 'replace';
+    if (S.csv.mode === 'add' || S.csv.mode === 'replace') return S.csv.mode;
+    return ctx.dataset.isSynthetic ? 'replace' : 'add';
+  }
+
+  /** The data set name a replacement made from the "add" page uses: the current one unless reserved. */
+  function replacementId(ctx) {
+    if (!datasetIdProblem(ctx.dataset.datasetId)) return ctx.dataset.datasetId;
+    return S.csv.datasetId && !datasetIdProblem(S.csv.datasetId) ? S.csv.datasetId : defaultDatasetId(ctx);
   }
 
   /** Plain sentence about which budget will be used with a data set name. */
@@ -336,6 +359,46 @@
     return Object.entries(by).map(([k, n]) => reasonCount(k, n)).join(', ');
   }
 
+  // ------------------------------------------------------------------ balances files (account, date, balance)
+  function isBalancesText(text) {
+    const recs = firstRecords(text);
+    return !!(recs.length && E.importer.detectBalancesHeader(recs[0].fields));
+  }
+
+  /** Read a balances file against the given accounts: { ok, balances, skipped, rows, error? }. */
+  function readBalances(f, accounts) {
+    try { return { ok: true, ...E.importer.parseBalancesCSV(f.text, accounts, { name: f.name }) }; } catch (err) {
+      if (!err || err.name !== 'ValidationError') throw err;
+      return { ok: false, error: err.message, balances: [], skipped: [], rows: 0 };
+    }
+  }
+
+  const balanceLine = (b, labelFor) => `${esc(labelFor(b.accountId))}: <strong>${esc(fmt.money(b.cents))}</strong> at the end of <span class="nowrap">${esc(fmt.date(b.date))}</span>`;
+
+  function balanceBlock(ctx, f) {
+    const b = 'dp-b-' + f.key;
+    const accounts = accountOptions(ctx);
+    const labelFor = id => (accounts.find(a => a.id === id) || {}).label || id;
+    const r = readBalances(f, accounts);
+    let status;
+    if (!r.ok) status = c.notice({ tone: 'warn', title: 'This file cannot be read', body: esc(r.error) });
+    else if (!r.balances.length) {
+      status = c.notice({ tone: 'warn', title: 'No balance could be read', body: esc((r.skipped.length ? `Every row is skipped (${reasonsText(r.skipped)}).` : 'It has column names but no rows.') +
+        ' Each row needs an account (its name or id, as in the account lists above), a date and the balance at the end of that date.') });
+    } else {
+      status = `<p class="dp-fstatus">${c.badge('Read', 'good')} <strong>${esc(count(r.balances.length, 'balance'))}</strong>${r.skipped.length ? `<span>${esc(count(r.skipped.length, 'row'))} will be skipped (${esc(reasonsText(r.skipped))})</span>` : ''}</p>
+        <ul class="dp-notes dp-ballist">${r.balances.slice(0, 6).map(x => `<li>${balanceLine(x, labelFor)}</li>`).join('')}${r.balances.length > 6 ? `<li>…and ${esc(fmt.number(r.balances.length - 6))} more</li>` : ''}</ul>`;
+    }
+    return `<li class="dp-balblock" id="${b}">
+      <div class="dp-fhead">
+        <div class="dp-fname"><h3 id="${b}-h" tabindex="-1">${esc(f.name)}</h3><p class="fine">${esc(sizeText(f.size))} · Balances file (account, date, balance)</p></div>
+        ${c.button('Remove', { action: 'dp:csv-remove', data: { file: f.key }, variant: 'ghost', cls: 'btn-small', id: b + '-remove', ariaLabel: 'Remove ' + f.name })}
+      </div>
+      ${status}
+      <p class="fine dp-fdetail">Statement balances: each is the account’s balance at the end of its date. They are kept with the data and used where your balances are shown.</p>
+    </li>`;
+  }
+
   // ------------------------------------------------------------------ files: prepare previews
   function firstRecords(text) {
     try { return E.importer.parseCSVRecords(String(text).slice(0, 65536)).slice(0, 32); } catch { return []; }
@@ -426,7 +489,9 @@
     if (ctx.app.dataSource === 'browser') {
       const d = meta.dataset;
       const when = d && d.loadedAt && dayOf(d.loadedAt) ? ' on ' + fmt.date(dayOf(d.loadedAt)) : '';
-      const from = d && d.source === 'csv' ? ' from ' + count(Array.isArray(d.files) ? d.files.length : 0, 'CSV file')
+      // Exports added to other data say what they were added to.
+      const base = !d ? '' : d.basedOn === 'build' ? builtInName(ctx) + ' plus ' : isObj(d.basedOn) && typeof d.basedOn.file === 'string' ? '“' + d.basedOn.file + '” plus ' : '';
+      const from = d && d.source === 'csv' ? ' from ' + base + count(Array.isArray(d.files) ? d.files.length : 0, 'CSV file')
         : d && d.source === 'json' ? ' from ' + (d.file ? '“' + d.file + '”' : 'a prepared data file') : '';
       if (ctx.app.datasetError) return { title: 'Files loaded in this browser could not be read', detail: `Loaded${when}${from}. No transactions are shown until you forget them or load the files again.`, badge: c.badge('Not in use', 'bad') };
       return { title: 'Files loaded in this browser', detail: `Loaded${when}${from}. Used instead of ${builtInName(ctx)} until you choose Forget.`, badge };
@@ -468,7 +533,8 @@
   }
 
   /** Files read for a data set (import log) or an import report: one row per file. */
-  function fileTable(ctx, files, labelFor, caption, { showSigns = true } = {}) {
+  function fileTable(ctx, files, labelFor, caption, { showSigns = true, adding = false } = {}) {
+    const words = adding ? { imported: 'Added', dupes: 'Already there', inLine: 'added', dupLine: 'already there or repeated' } : { imported: 'Imported', dupes: 'Duplicates', inLine: 'imported', dupLine: 'duplicates removed' };
     const skippedOf = f => (f.skippedReasons && Object.keys(f.skippedReasons).length ? `<small>${esc(Object.entries(f.skippedReasons).map(([k, n]) => reasonCount(k, n)).join(', '))}</small>` : '');
     return c.table({
       caption,
@@ -477,13 +543,13 @@
         {
           key: 'file', label: 'File', cls: 'dp-col-file', html: f => `<span class="dp-fn">${esc(f.name)}</span><small>${esc(labelFor(f.accountId))} · ${esc(dateRange(f.start, f.end))}</small>` +
             // Phones show the counts here instead of in the narrow number columns.
-            `<span class="dp-fstats">Read ${esc(fmt.number(f.rows))} · imported ${esc(fmt.number(f.imported))} · <strong>${esc(fmt.number(f.duplicatesRemoved || 0))} duplicates removed</strong> · skipped ${esc(fmt.number(f.skipped || 0))}</span>` +
+            `<span class="dp-fstats">Read ${esc(fmt.number(f.rows))} · ${words.inLine} ${esc(fmt.number(f.imported))} · <strong>${esc(fmt.number(f.duplicatesRemoved || 0))} ${words.dupLine}</strong> · skipped ${esc(fmt.number(f.skipped || 0))}</span>` +
             (f.coverageStart && f.coverageEnd && (f.coverageStart !== f.start || f.coverageEnd !== f.end) ? `<small>Counted as covering ${esc(dateRange(f.coverageStart, f.coverageEnd))}</small>` : '') +
             (showSigns && f.signConvention ? `<small>Amounts: ${esc(f.signConvention)}</small>` : ''),
         },
         { key: 'rows', label: 'Read', align: 'right', html: f => esc(fmt.number(f.rows)) },
-        { key: 'imported', label: 'Imported', align: 'right', html: f => esc(fmt.number(f.imported)) },
-        { key: 'dupes', label: 'Duplicates', align: 'right', html: f => esc(fmt.number(f.duplicatesRemoved || 0)) },
+        { key: 'imported', label: words.imported, align: 'right', html: f => esc(fmt.number(f.imported)) },
+        { key: 'dupes', label: words.dupes, align: 'right', html: f => esc(fmt.number(f.duplicatesRemoved || 0)) },
         { key: 'skipped', label: 'Skipped', align: 'right', html: f => esc(fmt.number(f.skipped || 0)) + skippedOf(f) },
       ],
       rows: files,
@@ -519,11 +585,18 @@
     for (const t of ds.transactions) counts.set(t.accountId, (counts.get(t.accountId) || 0) + 1);
     const n = ds.transactions.length;
     const notCounted = ctx.txns.filter(t => t.excluded).length;
+    const acctLabel = id => { const a = ds.accounts.find(x => x.id === id); return a ? a.label : id; };
+    const balances = Array.isArray(ds.balances) ? ds.balances : [];
+    const latest = new Map();
+    for (const b of balances) if (!latest.has(b.accountId) || b.date > latest.get(b.accountId).date) latest.set(b.accountId, b);
     const facts = [
       ['Transactions', `<strong>${esc(src.title)}</strong> ${src.badge}${src.detail ? `<span class="dp-fact-sub">${esc(src.detail)}</span>` : ''}`],
       ['Data set name', `<code class="dp-code">${esc(ds.datasetId)}</code><span class="dp-fact-sub">${ctx.app.storageOk ? 'Your budget is saved in this browser under this name.' : 'Your budget would be saved in this browser under this name, but nothing can be saved right now.'}</span>`],
       ['Dates', months.length ? `${esc(fmt.month(months[0]))} – ${esc(fmt.month(months[months.length - 1]))}${ds.generatedAt ? `<span class="dp-fact-sub">Prepared ${esc(fmt.date(ds.generatedAt))}</span>` : ''}` : 'No transactions yet'],
       ['Records', n ? `<a href="${esc(ctx.href('spending', { period: 'all', list: '1', kind: 'all', show: 'excluded' }))}">${esc(count(n, 'transaction'))}</a> in ${esc(count(ds.accounts.length, 'account'))}${notCounted ? `<span class="dp-fact-sub">${esc(fmt.number(notCounted))} of them ${notCounted === 1 ? 'is' : 'are'} not counted in totals (marked as a duplicate, reimbursed or business, or left out by a what-if setting). The list shows them struck through.</span>` : ''}` : `0 transactions${ds.accounts.length ? ' in ' + esc(count(ds.accounts.length, 'account')) : ''}`],
+      ['Posted balances', balances.length
+        ? `<span id="dp-balances-fact">${[...latest.values()].map(b => `${balanceLine(b, acctLabel)} <span class="fine">(${esc(SOURCE_LABEL[b.source] || b.source)})</span>`).join('<br>')}</span><span class="dp-fact-sub">${esc(count(balances.length, 'balance'))} supplied with the data; the latest per account is shown.</span>`
+        : `None supplied with the data<span class="dp-fact-sub">A balances file (account, date, balance) loaded with your exports adds statement balances; exports with a Balance column add the bank’s figure.</span>`],
       ['Complete months', months.length ? `${months.length - partial.length} of ${months.length}${partial.length ? `<span class="dp-fact-sub">Incomplete: ${esc(monthList(partial))}. They are left out of usual-spending averages. <a href="${esc(ctx.href('review', { queue: 'coverage' }))}">See which accounts are missing days</a>.</span>` : '<span class="dp-fact-sub">Every month has every spending account covered.</span>'}` : '—'],
       ['Household profile', profileFact(ctx, meta)],
       ['Your budget', budgetFact(ctx)],
@@ -538,6 +611,16 @@
       ? details('dp-importlog', `How the files were imported (${count(ds.importLog.length, 'file')})`,
         fileTable(ctx, ds.importLog.map(f => ({ ...f, name: f.file })), labelFor, 'Files read for this data, with rows imported, duplicates removed and rows skipped'))
       : '';
+    const balanceList = balances.length ? details('dp-balances', `Posted balances supplied with the data (${fmt.number(balances.length)})`, c.table({
+      caption: 'Balances supplied with the data: each is the balance at the end of its date',
+      cls: 'dp-baltable',
+      columns: [
+        { key: 'a', label: 'Account', html: b => `${esc(acctLabel(b.accountId))}<small>From the ${esc(SOURCE_LABEL[b.source] || b.source)}</small>${b.note ? `<small class="dp-break">${esc(b.note)}</small>` : ''}` },
+        { key: 'd', label: 'Date', html: b => `<span class="nowrap">${esc(fmt.date(b.date))}</span>` },
+        { key: 'c', label: 'Balance', align: 'right', html: b => esc(fmt.money(b.cents)) },
+      ],
+      rows: balances,
+    })) : '';
     const notes = Array.isArray(ds.notes) && ds.notes.length
       ? details('dp-dsnotes', `Notes saved with the data (${ds.notes.length})`, `<ul class="dp-notes">${ds.notes.map(x => `<li>${esc(x)}</li>`).join('')}</ul>`) : '';
     // Upgrade notes have their own card: list only the other notes from opening the page.
@@ -550,7 +633,7 @@
       body: esc(ctx.app.datasetError) + '<br>The page is showing no transactions instead. Forget the loaded files to go back to the built-in data, or load the files again.',
       actions: ctx.app.dataSource === 'browser' ? c.button('Forget files loaded in this browser…', { action: 'dp:forget', variant: 'danger', cls: 'btn-small', id: 'dp-forget-error' }) : '',
     }) : '';
-    return c.card(`${err ? `<div class="dp-using-error">${err}</div>` : ''}<div class="dp-using-grid"><div>${factList}</div><div>${accounts}<div class="dp-more">${log}${notes}${loadNotes}</div></div></div>`, {
+    return c.card(`${err ? `<div class="dp-using-error">${err}</div>` : ''}<div class="dp-using-grid"><div>${factList}</div><div>${accounts}<div class="dp-more">${balanceList}${log}${notes}${loadNotes}</div></div></div>`, {
       title: 'What this page is using', id: 'dp-using',
       subtitle: 'The transactions, profile and saved budget behind every number in this app.',
     });
@@ -566,7 +649,7 @@
         <div class="dp-loader-action">${picker}</div>
       </li>`;
     const loaders = `<ul class="dp-loaders">
-      ${loader('dp-load-csv', 'Bank and card exports (CSV)', 'Download CSV files from your bank and card websites: one or more per account. You choose the account for each file and check an import report before anything changes.',
+      ${loader('dp-load-csv', 'Bank and card exports (CSV)', 'Download CSV files from your bank and card websites: one or more per account. Once your own data is loaded, newer exports are added to it (rows already there are counted once), and a balances file (account, date, balance) adds statement balances. You check what was read before anything changes.',
         filePicker({ id: 'dp-pick-csv', kind: 'csv', label: 'Choose CSV files…', accept: ACCEPT.csv, multiple: true, variant: 'primary', describedBy: 'dp-load-csv-help' }))}
       ${loader('dp-load-dataset', 'Prepared data file (JSON)', 'Made by the command-line import (<code>budget-data.json</code>), or the data file of the earlier version.',
         filePicker({ id: 'dp-pick-dataset', kind: 'dataset', label: 'Choose a data file…', accept: ACCEPT.json, describedBy: 'dp-load-dataset-help' }))}
@@ -625,6 +708,11 @@
         <h3>Import a workbook</h3>
         <p id="dp-import-help">A workbook from the other device, a budget saved by the earlier version, or a page downloaded from the earlier version (.html). You see what will change before anything is replaced.</p>
         <div class="dp-actions">${filePicker({ id: 'dp-pick-workbook', kind: 'workbook', label: 'Choose a workbook…', accept: ACCEPT.workbook, describedBy: 'dp-import-help' })}</div>
+      </div>
+      <div class="dp-task">
+        <h3>Data file (JSON)</h3>
+        <p id="dp-data-out-help">The transactions, accounts, coverage and posted balances this page uses, including every export added in this browser, as one file. Load it on the other device with “Choose a data file”: transactions keep their ids, so a workbook’s corrections find them again.</p>
+        <div class="dp-actions">${c.button('Download data file (JSON)', { action: 'dp:export-data', id: 'dp-export-data', disabled: !hasTxns })}${hasTxns ? '' : '<span class="fine">No transactions are loaded.</span>'}</div>
       </div>
       <div class="dp-task">
         <h3>Corrected transactions (CSV)</h3>
@@ -696,6 +784,11 @@
       flash.push(ctx.app.dataSource === 'browser' && !ctx.app.datasetError
         ? c.notice({ tone: 'good', title: 'Your data is loaded.', body: `This page now uses ${esc(count(ctx.dataset.transactions.length, 'transaction'))} from data set “${esc(ctx.dataset.datasetId)}”. It is kept in this browser only. <a href="${esc(ctx.href('review'))}">Check the items that need a look in Review</a>.` })
         : c.notice({ tone: 'warn', title: 'The loaded data is not in use.', body: 'It may have been forgotten, or this browser did not keep it. Load the files again below.' }));
+    } else if (p.loaded === 'merge') {
+      const m = loadedMeta(ctx.app).dataset;
+      flash.push(ctx.app.dataSource === 'browser' && !ctx.app.datasetError
+        ? c.notice({ tone: 'good', title: 'Your exports were added.', body: `${m && isObj(m.lastMerge) ? `<span id="dp-merged-line">${esc(mergeLine(m.lastMerge))}</span> ` : ''}This page now uses ${esc(count(ctx.dataset.transactions.length, 'transaction'))} from data set “${esc(ctx.dataset.datasetId)}”, kept in this browser only. <a href="${esc(ctx.href('review'))}">Check the items that need a look in Review</a>.` })
+        : c.notice({ tone: 'warn', title: 'The added data is not in use.', body: 'This browser did not keep it. Load the files again below.' }));
     } else if (p.loaded === 'profile') {
       flash.push(ctx.app.profileSource === 'browser'
         ? c.notice({ tone: 'good', title: 'Your household profile is loaded.', body: `“${esc(profileName(ctx.profile) || 'Unnamed household')}” is kept in this browser only. Reset (below) starts the budget from it at any time.` })
@@ -855,37 +948,178 @@
   function csvPage(ctx) {
     const st = S.csv;
     if (st.datasetId === null) st.datasetId = defaultDatasetId(ctx);
-    const replaces = ctx.dataset.transactions.length
-      ? `These files replace the ${esc(count(ctx.dataset.transactions.length, 'transaction'))} this page uses now (${esc(builtInName(ctx))}); they are not added to them. Include every export you want, for every account.`
-      : 'Include every export you want, for every account.';
+    const mode = csvMode(ctx);
+    const n = ctx.dataset.transactions.length;
+    const edits = Object.keys(ctx.state.ledgerEdits || {}).length;
+    const intro = mode === 'add'
+      ? `These files are added to the ${esc(count(n, 'transaction'))} this page uses (data set “${esc(ctx.dataset.datasetId)}”). Rows it already has are recognised and counted once, so overlapping exports, or an export loaded again, are fine.`
+      : n
+        ? `These files replace the ${esc(count(n, 'transaction'))} this page uses now (${esc(ctx.app.dataSource === 'browser' ? 'loaded in this browser' : builtInName(ctx))}); they are not added to them. Include every export you want, for every account. Overlapping exports of the same account are fine: identical rows are counted once.`
+        : 'Include every export you want, for every account. Overlapping exports of the same account are fine: identical rows are counted once.';
     const header = crumbs(ctx, [{ label: 'Bank exports' }]) + c.pageHeader({
       eyebrow: 'Data & privacy',
       title: 'Load bank and card exports',
-      subtitle: 'Files are read on this device. Nothing is uploaded, and nothing changes until you have checked the import report and chosen “Use this data”.',
+      subtitle: mode === 'add'
+        ? 'Files are read on this device. Nothing is uploaded, and nothing changes until you have checked what will be added and chosen “Add to my data”.'
+        : 'Files are read on this device. Nothing is uploaded, and nothing changes until you have checked the import report and chosen “Use this data”.',
     });
     const pickErr = st.pickError ? c.notice({ tone: 'warn', title: 'Some files were not added', body: `<ul class="dp-notes">${st.pickError.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` }) : '';
-    const filesBody = `<p class="dp-intro">${replaces} Overlapping exports of the same account are fine: identical rows are counted once.</p>
-      <div class="dp-actions">${filePicker({ id: 'dp-csv-add', kind: 'csv', label: st.files.length ? 'Add more CSV files…' : 'Choose CSV files…', accept: ACCEPT.csv, multiple: true, variant: st.files.length ? 'secondary' : 'primary', describedBy: 'dp-csv-add-help' })}
-        <span class="fine" id="dp-csv-add-help">You can choose several files at once.</span></div>
+    const any = st.files.length + st.balanceFiles.length;
+    const lists = (st.files.length ? `<ol class="dp-filelist">${st.files.map(f => fileBlock(ctx, f)).join('')}</ol>` : '') +
+      (st.balanceFiles.length ? `<ul class="dp-filelist dp-balfiles" aria-label="Balances files">${st.balanceFiles.map(f => balanceBlock(ctx, f)).join('')}</ul>` : '');
+    const filesBody = `<p class="dp-intro">${intro}</p>
+      <div class="dp-actions">${filePicker({ id: 'dp-csv-add', kind: 'csv', label: any ? 'Add more CSV files…' : 'Choose CSV files…', accept: ACCEPT.csv, multiple: true, variant: any ? 'secondary' : 'primary', describedBy: 'dp-csv-add-help' })}
+        <span class="fine" id="dp-csv-add-help">You can choose several files at once. A file with the columns account, date and balance is read as statement balances.</span></div>
       ${pickErr}
-      ${st.files.length ? `<ol class="dp-filelist">${st.files.map(f => fileBlock(ctx, f)).join('')}</ol>` : c.empty('No files chosen yet.')}
+      ${any ? lists : c.empty('No files chosen yet.')}
       ${rulesBlock()}`;
-    const dsidProblem = datasetIdProblem(st.datasetId);
     const err = st.error ? `<div id="dp-csv-error" class="dp-error" tabindex="-1">${c.notice({ tone: 'bad', title: st.error.title, body: `<ul class="dp-notes">${st.error.items.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` })}</div>` : '';
-    const checkBody = `<form id="dp-csv-form" data-action="dp:csv-check" aria-label="Check the files">
-        <div class="field dp-dsid">
+    const choice = n ? `<fieldset class="dp-choice dp-mode" id="dp-csv-mode"><legend>What to do with these files</legend>
+        <label class="check" for="dp-csv-mode-add"><input type="radio" id="dp-csv-mode-add" name="mode" value="add" data-action="dp:csv-mode"${mode === 'add' ? ' checked' : ''}> <span><strong>Add them to the data this page uses</strong> (${esc(count(n, 'transaction'))}${ctx.dataset.isSynthetic ? ', the fictional sample' : ''}). Rows already there are counted once; your budget and corrections stay.</span></label>
+        <label class="check" for="dp-csv-mode-replace"><input type="radio" id="dp-csv-mode-replace" name="mode" value="replace" data-action="dp:csv-mode"${mode === 'replace' ? ' checked' : ''}> <span><strong>Replace the data this page uses</strong> with only these files${ctx.dataset.isSynthetic ? ', to start your own data' : ''}.</span></label>
+      </fieldset>` : '';
+    const dsidProblem = datasetIdProblem(st.datasetId);
+    const target = mode === 'add'
+      ? `<p class="dp-dsid-status" id="dp-csv-dsid-status">${esc(`Added to data set “${ctx.dataset.datasetId}”: your budget${edits ? ` and ${count(edits, 'transaction correction')}` : ''} stay${edits ? '' : 's'} with it, and every transaction keeps its id.`)}</p>`
+      : `<div class="field dp-dsid">
           <label for="dp-csv-dsid">Data set name</label>
           <input id="dp-csv-dsid" name="datasetId" value="${esc(st.datasetId)}" maxlength="60" autocomplete="off" spellcheck="false" aria-describedby="dp-csv-dsid-help dp-csv-dsid-error"${dsidProblem ? ' aria-invalid="true"' : ''}>
           <p class="field-help" id="dp-csv-dsid-help">Your budget is saved in this browser under this name. Use the same name each time you load newer exports, so your plan and corrections stay with them.</p>
           <p class="field-error" id="dp-csv-dsid-error" role="alert"${dsidProblem ? '' : ' hidden'}>${esc(dsidProblem || '')}</p>
         </div>
-        <p class="dp-dsid-status" id="dp-csv-dsid-status">${esc(budgetNameStatus(ctx, st.datasetId))}</p>
+        <p class="dp-dsid-status" id="dp-csv-dsid-status">${esc(budgetNameStatus(ctx, st.datasetId))}</p>`;
+    const checkBody = `<form id="dp-csv-form" data-action="dp:csv-check" aria-label="Check the files">
+        ${choice}
+        ${target}
         ${err}
-        <div class="dp-actions"><button type="submit" class="btn btn-primary" id="dp-csv-check-btn">Check these files</button><span class="fine">Nothing changes yet: you see a report first.</span></div>
+        <div class="dp-actions"><button type="submit" class="btn btn-primary" id="dp-csv-check-btn">${mode === 'add' ? 'Check what will be added' : 'Check these files'}</button><span class="fine">Nothing changes yet: you see ${mode === 'add' ? 'what will be added' : 'a report'} first.</span></div>
       </form>`;
     return `${header}<div class="dp stack">
       ${c.card(filesBody, { title: '1. Your files and their accounts', id: 'dp-csv-files' })}
       ${c.card(checkBody, { title: '2. Check what was read', id: 'dp-csv-check' })}
+    </div>`;
+  }
+
+  // ------------------------------------------------------------------ CSV import: adding to the data in use
+  /** "312 new, 48 already present, coverage now to Oct 31, 2026, 1 balance added." */
+  function mergeLine(m) {
+    const parts = [`${fmt.number(m.added || 0)} new`, `${fmt.number(m.alreadyPresent || 0)} already present`];
+    if (m.coverageEnd) parts.push(`coverage now to ${fmt.date(m.coverageEnd)}`);
+    if (m.balances) parts.push(`${count(m.balances, 'balance')} added`);
+    return parts.join(', ') + '.';
+  }
+
+  function coverChange(a) {
+    const shown = ranges => (ranges.length ? ranges.map(r => rangeHtml(r.start, r.end)).join('<br>') : '<span class="tone-warn">No export covers it</span>');
+    const same = JSON.stringify(a.coverageBefore) === JSON.stringify(a.coverageAfter);
+    return shown(a.coverageAfter) + `<small>${same ? 'Unchanged' : a.coverageBefore.length ? 'Before: ' + a.coverageBefore.map(r => dateRange(r.start, r.end)).map(esc).join('; ') : 'New'}</small>`;
+  }
+
+  function mergePage(ctx) {
+    const st = S.csv;
+    const { dataset, report, summary } = st.result;
+    const header = crumbs(ctx, [{ label: 'Bank exports', href: ctx.href('data', { load: 'csv' }) }, { label: 'What will be added' }]) + c.pageHeader({
+      eyebrow: 'Data & privacy',
+      title: 'Check what will be added',
+      subtitle: 'Nothing has changed yet. New rows are added to the data this page uses; rows it already has are recognised and left as they are.',
+    });
+    const labelFor = id => { const a = dataset.accounts.find(x => x.id === id); return a ? a.label : id; };
+    const balancesChanged = summary.balances.added.length + summary.balances.replaced.length;
+    const line = mergeLine({ added: summary.added, alreadyPresent: summary.alreadyPresent, coverageEnd: summary.coverageEnd, balances: balancesChanged });
+    const coverSub = !summary.coverageEnd ? 'No dates covered' : summary.coverageEnd === summary.coverageEndBefore ? 'Unchanged' : summary.coverageEndBefore ? 'Was ' + fmt.date(summary.coverageEndBefore) : 'New';
+    const metrics = `<p class="dp-merge-line" id="dp-merge-line">${esc(line)}</p>
+      <div class="metrics dp-metrics">
+      ${c.metric({ label: 'New transactions', value: fmt.number(summary.added), sub: esc(`${fmt.number(summary.transactionsBefore)} → ${fmt.number(summary.transactionsAfter)} in your data`) })}
+      ${c.metric({ label: 'Already in your data', value: fmt.number(summary.alreadyPresent), sub: summary.alreadyPresent ? 'Recognised and not added again' : 'No overlap with your data' })}
+      ${c.metric({ label: 'Covered to', value: summary.coverageEnd ? fmt.date(summary.coverageEnd) : '—', sub: esc(coverSub) })}
+      ${c.metric({ label: 'Rows skipped', value: fmt.number(summary.skipped), sub: summary.skipped ? esc(reasonsText(report.skippedRows)) : 'Every row was read' })}
+    </div>`;
+
+    const touched = summary.accounts.filter(a => a.added || a.alreadyPresent || a.isNew || JSON.stringify(a.coverageBefore) !== JSON.stringify(a.coverageAfter));
+    const accounts = c.card(c.table({
+      caption: 'Per account: transactions added, rows already in your data, and the dates covered',
+      cls: 'dp-mergeaccts',
+      columns: [
+        { key: 'a', label: 'Account', html: a => `${esc(a.label)}${a.isNew ? ' ' + c.badge('New', 'info') : ''}<small>${esc(TYPE_LABEL[a.type] || a.type)}</small>` },
+        { key: 'n', label: 'New', align: 'right', html: a => esc(fmt.number(a.added)) },
+        { key: 'p', label: 'Already there', align: 'right', html: a => esc(fmt.number(a.alreadyPresent)) },
+        { key: 'c', label: 'Covered by exports', html: a => coverChange(a) },
+      ],
+      rows: touched.length ? touched : summary.accounts,
+    }), { title: 'By account', id: 'dp-merge-accounts', subtitle: 'Accounts these files add to. The others stay as they are.' });
+
+    const balRows = summary.balances.added.map(b => ({ b, change: 'Added' }))
+      .concat(summary.balances.replaced.map(r => ({ b: r.to, change: `Replaces ${fmt.money(r.from.cents)}${r.from.source !== r.to.source ? ' (' + (SOURCE_LABEL[r.from.source] || r.from.source) + ')' : ''}` })));
+    const balSkipped = st.result.balanceSkipped || [];
+    const balances = balRows.length || balSkipped.length ? c.card(c.table({
+      caption: 'Posted balances added to the data',
+      cls: 'dp-baltable',
+      emptyText: 'No balance is added.',
+      columns: [
+        { key: 'a', label: 'Account', html: r => esc(labelFor(r.b.accountId)) + `<small>${esc(r.change)}, from the ${esc(SOURCE_LABEL[r.b.source] || r.b.source)}</small>` },
+        { key: 'd', label: 'Date', html: r => `<span class="nowrap">${esc(fmt.date(r.b.date))}</span>` },
+        { key: 'c', label: 'Balance', align: 'right', html: r => esc(fmt.money(r.b.cents)) },
+      ],
+      rows: balRows,
+    }) + (balSkipped.length ? details('dp-merge-balskipped', `Balance rows skipped (${fmt.number(balSkipped.length)})`, `<ul class="dp-notes">${balSkipped.map(x => `<li>${esc(x.file)}, line ${esc(x.row)}: ${esc(x.reason)}</li>`).join('')}</ul>`) : ''), {
+      title: 'Posted balances', id: 'dp-merge-balances', subtitle: 'Each is the balance at the end of its date. For the same day, a statement balance wins over the running balance an export prints.',
+    }) : '';
+
+    const files = report.files.length ? c.card(fileTable(ctx, report.files, labelFor, 'Rows read, added, already in your data or repeated, and skipped, per file', { showSigns: false, adding: true }), {
+      title: 'Files', id: 'dp-merge-files', subtitle: 'Added + already in your data (or repeated in another of these files) + skipped = rows read.',
+    }) : '';
+    const renamed = summary.renamedFiles.length ? `<li>${esc(summary.renamedFiles.map(r => `“${r.from}” is already a file name in your data, so its new rows are recorded as from “${r.to}”.`).join(' '))}</li>` : '';
+    const warnings = report.warnings.length || renamed ? c.card(`<ul class="dp-notes">${report.warnings.map(w => `<li>${esc(w)}</li>`).join('')}${renamed}</ul>`, { title: 'Worth knowing', id: 'dp-merge-warnings' }) : '';
+    const flagCounts = report.flagCounts || {};
+    const flags = Object.keys(FLAG_TEXT).filter(k => flagCounts[k] > 0).map(k => [k, flagCounts[k]]);
+    const review = flags.length ? c.card(`<ul class="dp-notes">${flags.map(([k, v]) => `<li><strong>${esc(fmt.number(v))}</strong> ${esc(FLAG_TEXT[k][v === 1 ? 0 : 1])}</li>`).join('')}</ul><p class="fine">Among the new rows. After you add them, Review lists each one.</p>`, {
+      title: 'Worth a look after adding', id: 'dp-merge-flags',
+    }) : '';
+
+    const presentTable = report.alreadyPresent.length ? details('dp-merge-present', `Already in your data (${fmt.number(report.alreadyPresent.length)})`, c.table({
+      caption: 'Rows not added because your data already has them',
+      cls: 'dp-dupes',
+      columns: [
+        { key: 'desc', label: 'Description', html: r => `<span class="dp-break">${esc(r.description)}</span><small><span class="dp-inline">${esc(fmt.date(r.date))} · </span>${esc(labelFor(r.accountId))}</small><small class="dp-inline dp-break">${esc(`${r.file}, line ${r.row}`)}</small>` },
+        { key: 'd', label: 'Date', cls: 'dp-col-wide', html: r => `<span class="nowrap">${esc(fmt.date(r.date))}</span>` },
+        { key: 'amt', label: 'Amount', align: 'right', html: r => esc(fmt.money(r.amountCents)) },
+        { key: 'src', label: 'In this file', cls: 'dp-col-wide', html: r => `<span class="dp-break">${esc(r.file)}, line ${esc(r.row)}</span>` },
+      ],
+      rows: report.alreadyPresent.slice(0, 300),
+    }) + (report.alreadyPresent.length > 300 ? `<p class="fine">Showing the first 300 of ${esc(fmt.number(report.alreadyPresent.length))}.</p>` : '')) : '';
+    const skipTable = report.skippedRows.length ? details('dp-merge-skipped', `Skipped rows (${fmt.number(report.skippedRows.length)})`, c.table({
+      caption: 'Rows that were not read, with the reason',
+      columns: [
+        { key: 'f', label: 'File', html: r => `<span class="dp-break">${esc(r.file)}</span>` },
+        { key: 'row', label: 'Line', align: 'right', html: r => esc(r.row) },
+        { key: 'reason', label: 'Reason', html: r => esc(r.reason) },
+      ],
+      rows: report.skippedRows.slice(0, 300),
+    })) : '';
+    const audit = presentTable || skipTable ? c.card(`<div class="dp-more">${presentTable}${skipTable}</div>`, { title: 'Row by row', id: 'dp-merge-rows', subtitle: 'Every row left out, with its file and line.' }) : '';
+
+    const edits = Object.keys(ctx.state.ledgerEdits || {}).length;
+    const items = [
+      `The page reloads and uses ${esc(count(summary.transactionsAfter, 'transaction'))}: the ${esc(fmt.number(summary.transactionsBefore))} it uses now and ${esc(fmt.number(summary.added))} new${balancesChanged ? `, with ${esc(count(balancesChanged, 'posted balance'))} added` : ''}.`,
+      `Your budget${edits ? ` and ${esc(count(edits, 'transaction correction'))}` : ''} stay${edits ? '' : 's'} with data set “${esc(dataset.datasetId)}”: every transaction keeps its id.`,
+      summary.existingChanged ? `${esc(count(summary.existingChanged, 'transaction'))} already in your data ${summary.existingChanged === 1 ? 'is' : 'are'} now matched with a new row (for example a card payment with the payment received on the card).` : '',
+      'Kept in this browser’s storage on this device only, until you choose Forget on the Data & privacy page.',
+    ].filter(Boolean);
+    const decision = c.card(`<ul class="dp-points">${items.map(x => `<li>${x}</li>`).join('')}</ul>
+      ${st.useError ? `<div id="dp-merge-apply-error" class="dp-error" tabindex="-1">${c.notice({ tone: 'bad', title: 'This data could not be kept in this browser', body: `${esc(st.useError)}<p class="dp-gap">The steps, in this app’s folder on a computer: run <code>node tools/import.cjs</code>, then <code>node tools/build.cjs</code>. That makes a private copy of the page with the data inside the file itself.</p>` })}</div>` : ''}
+      <div class="dp-actions">
+        ${c.button('Add to my data', { action: 'dp:merge-apply', variant: 'primary', id: 'dp-merge-apply' })}
+        ${c.linkButton('Back to the files', ctx.href('data', { load: 'csv' }))}
+        ${c.button('Cancel', { action: 'dp:cancel', data: { what: 'csv' }, variant: 'ghost', id: 'dp-merge-cancel' })}
+      </div>
+      ${st.files.length ? `<div class="dp-replace-alt"><p class="fine">To start over from these files only, without the data this page uses now:</p>${c.button('Replace instead…', { action: 'dp:merge-replace', variant: 'secondary', cls: 'btn-small', id: 'dp-merge-replace' })}</div>` : ''}`, { title: 'Add to your data?', id: 'dp-merge-card' });
+    return `${header}<div class="dp stack">
+      ${metrics}
+      <div class="dp-grid dp-grid-report">
+        <div class="stack">${accounts}${balances}${files}${warnings}${review}</div>
+        <div class="stack dp-aside">${decision}</div>
+      </div>
+      ${audit}
     </div>`;
   }
 
@@ -912,6 +1146,7 @@
       title: 'Check the import report',
       subtitle: 'Nothing has changed yet. Read what was found, then use the data or go back and adjust the files.',
     });
+    if (st.result && st.result.mode === 'add') return mergePage(ctx);
     if (!st.result) {
       const msg = st.files.length
         ? `The files or their settings changed after the last check, so this report is out of date. Go back to the ${esc(count(st.files.length, 'file'))} and check them again.`
@@ -1039,6 +1274,7 @@
       ['Format', d.legacy ? 'The earlier version’s format, converted on loading' : 'Current format (version 2)'],
       ['Transactions', `${esc(count(ds.transactions.length, 'transaction'))} in ${esc(count(ds.accounts.length, 'account'))}${first ? `<span class="dp-fact-sub">${esc(dateRange(first.date, last.date))}</span>` : ''}`],
       ['Complete months', months.length ? `${full} of ${months.length}` : '—'],
+      ['Posted balances', (ds.balances || []).length ? esc(count(ds.balances.length, 'balance')) + '<span class="dp-fact-sub">Supplied with the data (statements, or the running balance in exports).</span>' : 'None'],
       ['Prepared', ds.generatedAt ? esc(fmt.date(ds.generatedAt)) : 'Not recorded'],
     ];
     const perAccount = new Map();
@@ -1276,7 +1512,13 @@
       let text;
       try { text = await ctx.app.readFile(file); } catch (err) { problems.push(`“${file.name}” could not be read.`); continue; }
       if (/\u0000/.test(text.slice(0, 4096))) { problems.push(`“${file.name}” is not a CSV text file. Download the CSV version from your bank; a spreadsheet can also be saved as CSV.`); continue; }
-      if (S.csv.files.some(f => f.text === text)) { problems.push(`“${file.name}” is already in the list.`); continue; }
+      if (S.csv.files.concat(S.csv.balanceFiles).some(f => f.text === text)) { problems.push(`“${file.name}” is already in the list.`); continue; }
+      if (isBalancesText(text)) {
+        const b = { key: 'b' + (++seq), kind: 'balances', name: uniqueName(file.name), size: file.size, text };
+        S.csv.balanceFiles.push(b);
+        added.push(b);
+        continue;
+      }
       const f = {
         key: 'f' + (++seq), name: uniqueName(file.name), size: file.size, text, records: firstRecords(text),
         account: '', guessed: false, coverageStart: '', coverageEnd: '', cols: null, amountStyle: '', dateFormat: '', charges: '', noHeader: false,
@@ -1291,7 +1533,7 @@
     S.csv.pickError = problems.length ? problems : null;
     const p = ctx.route.params;
     const onPage = p.load === 'csv' && p.step !== 'report';
-    if (onPage) pendingFocus = added.length ? 'dp-f-' + added[0].key + '-h' : 'dp-csv-add';
+    if (onPage) pendingFocus = added.length ? blockId(added[0]) + '-h' : 'dp-csv-add';
     ctx.app.navigate('data', { load: 'csv' }, { keepFocus: onPage });
   }
 
@@ -1308,6 +1550,71 @@
   }
 
   function changed() { S.csv.result = null; S.csv.useError = null; }
+
+  /** The id of a file's block on the files page. */
+  const blockId = f => (f.kind === 'balances' ? 'dp-b-' : 'dp-f-') + f.key;
+  /** Names of every chosen file (exports, then balances files), kept with the loaded data. */
+  const csvNames = () => S.csv.files.map(f => f.name).concat(S.csv.balanceFiles.map(f => f.name));
+  const engineFiles = () => S.csv.files.map(f => ({ name: f.name, text: f.text, accountId: f.account, mapping: mappingFor(f), coverageStart: f.coverageStart || undefined, coverageEnd: f.coverageEnd || undefined }));
+  const rulesText = () => (S.csv.rules ? ' with the rules in ' + S.csv.rulesName : ' with the general rules');
+
+  /** The chosen files added to the data this page uses (importer.mergeDataset). */
+  function mergeImport(ctx, balances) {
+    const st = S.csv;
+    const today = localDay();
+    const used = new Set(st.files.map(f => f.account));
+    const what = [st.files.length ? count(st.files.length, 'CSV file') : '', balances.length ? count(balances.length, 'statement balance') : ''].filter(Boolean).join(' and ');
+    return E.importer.mergeDataset(ctx.dataset, {
+      files: engineFiles(),
+      accounts: st.newAccounts.filter(a => used.has(a.id)),
+      rules: st.rules || E.importer.DEFAULT_RULES,
+      generatedAt: today,
+      balances,
+      notes: [`Added in the browser on ${today}: ${what}${st.files.length ? rulesText() : ''}.`],
+    });
+  }
+
+  /** The chosen files on their own, as a new data set (importer.buildDataset). */
+  function replaceImport(ctx, datasetId, balances) {
+    const st = S.csv;
+    const used = new Set(st.files.map(f => f.account));
+    // Only the accounts these files belong to, without old coverage: an account in the list
+    // with no export would make every month look incomplete, and old coverage would claim
+    // days these files do not have.
+    const accounts = accountOptions(ctx).filter(a => used.has(a.id)).map(a => ({ id: a.id, label: a.label, type: a.type, scope: a.scope, ownerId: a.ownerId, paidInFull: a.paidInFull, coverage: [] }));
+    const today = localDay();
+    return E.importer.buildDataset({
+      files: engineFiles(),
+      accounts,
+      rules: st.rules || E.importer.DEFAULT_RULES,
+      datasetId,
+      isSynthetic: false,
+      generatedAt: today,
+      balances,
+      notes: [`Imported in the browser on ${today} from ${count(st.files.length, 'CSV file')}${rulesText()}.`],
+    });
+  }
+
+  /** The confirmation before a household's own data is replaced instead of added to. */
+  function replaceConfirm(ctx, n, id) {
+    const now = ctx.dataset.transactions.length;
+    return {
+      title: 'Replace the data instead of adding to it?',
+      body: `<p>The page will use only the ${esc(count(n, 'transaction'))} in these files. The ${esc(count(now, 'transaction'))} it uses now${ctx.app.dataSource === 'browser' ? ', including exports added earlier,' : ''} are no longer used.</p>
+        <p>${esc(budgetNameStatus(ctx, id))} Corrections for transactions that are not in these files stay saved but no longer apply. To keep everything, choose Cancel and add the files instead.</p>`,
+      confirmLabel: 'Replace the data',
+      danger: true,
+    };
+  }
+
+  /** A data file the "Choose a data file" loader reads back: one account, balance or transaction per line. */
+  function dataFileText(ds) {
+    return '{\n' + Object.keys(ds).filter(k => ds[k] !== undefined).map(k => {
+      const v = ds[k];
+      const body = Array.isArray(v) && v.length && v.every(isObj) ? '[\n' + v.map(x => '    ' + JSON.stringify(x)).join(',\n') + '\n  ]' : JSON.stringify(v);
+      return '  ' + JSON.stringify(k) + ': ' + body;
+    }).join(',\n') + '\n}\n';
+  }
 
   const actions = {
     /** Any file input on this page: data-kind = csv | rules | dataset | profile | workbook. */
@@ -1344,12 +1651,15 @@
     },
 
     'dp:csv-remove': (ctx, el) => {
-      const i = S.csv.files.findIndex(f => f.key === el.dataset.file);
-      if (i < 0) return;
-      S.csv.files.splice(i, 1);
-      changed();
-      const next = S.csv.files[i] || S.csv.files[i - 1];
-      rerender(ctx, next ? 'dp-f-' + next.key + '-h' : 'dp-csv-add');
+      for (const list of [S.csv.files, S.csv.balanceFiles]) {
+        const i = list.findIndex(f => f.key === el.dataset.file);
+        if (i < 0) continue;
+        list.splice(i, 1);
+        changed();
+        const next = list[i] || list[i - 1];
+        rerender(ctx, next ? blockId(next) + '-h' : 'dp-csv-add');
+        return;
+      }
     },
 
     'dp:csv-account': (ctx, el) => {
@@ -1439,10 +1749,14 @@
 
     'dp:csv-check': (ctx, form) => {
       const st = S.csv;
-      const data = new FormData(form);
-      st.datasetId = String(data.get('datasetId') || '').trim();
+      const mode = csvMode(ctx);
+      if (mode === 'replace') st.datasetId = String(new FormData(form).get('datasetId') || '').trim();
       const problems = [];
-      if (!st.files.length) problems.push('Choose at least one CSV file.');
+      if (!st.files.length && !(mode === 'add' && st.balanceFiles.length)) {
+        problems.push(st.balanceFiles.length
+          ? 'A balances file needs transactions to go with it: add the exports too, or choose “Add them to the data this page uses”.'
+          : 'Choose at least one CSV file.');
+      }
       let readable = 0;
       for (const f of st.files) {
         if (!accountById(ctx, f.account)) { problems.push(`Choose the account for “${f.name}”.`); continue; }
@@ -1457,9 +1771,27 @@
           problems.push(`“${f.name}”: no transactions could be read. ${dateOrderSuspect(an) ? 'Choose “Day/month/year” under “Dates are written”, ' : ''}Remove the file, or enter both dates the export covers if the account had no activity.`);
         }
       }
-      if (st.files.length && !problems.length && !readable) problems.push('None of these files has a transaction that could be read.');
-      const dsProblem = datasetIdProblem(st.datasetId);
-      if (dsProblem) problems.push('Data set name: ' + dsProblem);
+      // Adding a quiet period (an export with no rows but stated dates) is fine; a replacement needs rows.
+      if (mode === 'replace' && st.files.length && !problems.length && !readable) problems.push('None of these files has a transaction that could be read.');
+      if (mode === 'replace') {
+        const dsProblem = datasetIdProblem(st.datasetId);
+        if (dsProblem) problems.push('Data set name: ' + dsProblem);
+      }
+      // Balances files are read against the accounts the data will have.
+      const used = new Set(st.files.map(f => f.account));
+      const eligible = accountOptions(ctx).filter(a => used.has(a.id) || (mode === 'add' && a.origin === 'existing'));
+      let balances = [];
+      const balanceSkipped = [];
+      for (const f of st.balanceFiles) {
+        const r = readBalances(f, eligible);
+        if (!r.ok) { problems.push(`“${f.name}”: ${r.error}`); continue; }
+        if (!r.balances.length) {
+          problems.push(`“${f.name}”: no balance could be read${r.skipped.length ? ` (${reasonsText(r.skipped)})` : ''}.${mode === 'replace' ? ' When the data is replaced, only accounts with an export among these files can have a balance.' : ''}`);
+          continue;
+        }
+        for (const x of r.skipped) balanceSkipped.push({ file: f.name, row: x.row, reason: x.reason });
+        balances = E.importer.mergeBalances(balances, r.balances).balances; // a later file wins for the same account and day
+      }
       st.result = null;
       st.useError = null;
       if (problems.length) {
@@ -1467,23 +1799,8 @@
         rerender(ctx, 'dp-csv-error');
         return;
       }
-      const used = new Set(st.files.map(f => f.account));
-      // Only the accounts these files belong to, without old coverage: an account in the list
-      // with no export would make every month look incomplete, and old coverage would claim
-      // days these files do not have.
-      const accounts = accountOptions(ctx).filter(a => used.has(a.id)).map(a => ({ id: a.id, label: a.label, type: a.type, scope: a.scope, ownerId: a.ownerId, paidInFull: a.paidInFull, coverage: [] }));
-      const today = localDay();
       try {
-        const res = E.importer.buildDataset({
-          files: st.files.map(f => ({ name: f.name, text: f.text, accountId: f.account, mapping: mappingFor(f), coverageStart: f.coverageStart || undefined, coverageEnd: f.coverageEnd || undefined })),
-          accounts,
-          rules: st.rules || E.importer.DEFAULT_RULES,
-          datasetId: st.datasetId,
-          isSynthetic: false,
-          generatedAt: today,
-          notes: [`Imported in the browser on ${today} from ${count(st.files.length, 'CSV file')}${st.rules ? ' with the rules in ' + st.rulesName : ' with the general rules'}.`],
-        });
-        st.result = res;
+        st.result = mode === 'add' ? { mode, ...mergeImport(ctx, balances), balances, balanceSkipped } : { mode, ...replaceImport(ctx, st.datasetId, balances), balances, balanceSkipped };
         st.error = null;
         ctx.app.navigate('data', { load: 'csv', step: 'report' });
       } catch (err) {
@@ -1493,11 +1810,54 @@
       }
     },
 
-    'dp:csv-use': ctx => {
+    'dp:csv-mode': (ctx, el) => {
+      S.csv.mode = el.value === 'add' ? 'add' : 'replace';
+      changed();
+      rerender(ctx, el.id);
+    },
+
+    'dp:csv-use': async ctx => {
       const st = S.csv;
-      if (!st.result) return;
+      if (!st.result || st.result.mode === 'add') return;
       if (!st.result.report.transactions) throw new E.ValidationError('These files have no transactions to use.');
-      useDataset(ctx, st.result.dataset, { source: 'csv', files: st.files.map(f => f.name) }, 'csv', msg => { st.useError = msg; }, 'dp-csv-use-error');
+      // Replacing a household's own data drops it from this page: say so first.
+      if (!ctx.dataset.isSynthetic && ctx.dataset.transactions.length) {
+        const ok = await ctx.app.confirm(replaceConfirm(ctx, st.result.report.transactions, st.result.dataset.datasetId));
+        if (!ok) return;
+      }
+      useDataset(ctx, st.result.dataset, { source: 'csv', files: csvNames() }, 'csv', msg => { st.useError = msg; }, 'dp-csv-use-error');
+    },
+
+    'dp:merge-apply': ctx => {
+      const st = S.csv;
+      if (!st.result || st.result.mode !== 'add') return;
+      const { dataset, summary } = st.result;
+      const prev = loadedMeta(ctx.app).dataset;
+      const fromBrowser = ctx.app.dataSource === 'browser';
+      // What the added files were added to, for the "Loaded … from …" line after the reload.
+      const basedOn = !fromBrowser ? 'build' : prev && prev.source === 'json' ? { file: prev.file || null } : (prev && prev.basedOn) || null;
+      const before = fromBrowser && prev && prev.source === 'csv' && Array.isArray(prev.files) ? prev.files : [];
+      useDataset(ctx, dataset, {
+        source: 'csv', files: before.concat(csvNames()), basedOn,
+        lastMerge: { added: summary.added, alreadyPresent: summary.alreadyPresent, coverageEnd: summary.coverageEnd, balances: summary.balances.added.length + summary.balances.replaced.length },
+      }, 'merge', msg => { st.useError = msg; }, 'dp-merge-apply-error');
+    },
+
+    'dp:merge-replace': async ctx => {
+      const st = S.csv;
+      if (!st.result || st.result.mode !== 'add' || !st.files.length) return;
+      const id = replacementId(ctx);
+      let res;
+      try { res = replaceImport(ctx, id, st.result.balances || []); } catch (err) {
+        if (!err || err.name !== 'ValidationError') throw err;
+        st.useError = err.message;
+        rerender(ctx, 'dp-merge-apply-error');
+        return;
+      }
+      if (!res.report.transactions) throw new E.ValidationError('These files have no transactions to use on their own: add them to your data instead.');
+      const ok = await ctx.app.confirm(replaceConfirm(ctx, res.report.transactions, id));
+      if (!ok) return;
+      useDataset(ctx, res.dataset, { source: 'csv', files: csvNames() }, 'csv', msg => { st.useError = msg; }, 'dp-merge-apply-error');
     },
 
     'dp:dataset-use': ctx => {
@@ -1567,6 +1927,13 @@
     },
 
     'dp:export-workbook': ctx => exportWorkbook(ctx),
+
+    'dp:export-data': ctx => {
+      const n = ctx.dataset.transactions.length;
+      if (!n) throw new E.ValidationError('There are no transactions to save.');
+      ctx.app.download(`household-budget-data-${localDay()}.json`, dataFileText(ctx.dataset), 'application/json');
+      ctx.app.toast(`Data file downloaded (${count(n, 'transaction')}). It holds your financial data: keep it private.`);
+    },
 
     'dp:export-csv': ctx => {
       if (!ctx.txns.length) throw new E.ValidationError('There are no transactions to export.');

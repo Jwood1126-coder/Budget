@@ -4,7 +4,12 @@
  * Real-browser checks (Chromium via Playwright) against dist/index.html built from the
  * synthetic sample. Each tests/browser/*.spec.cjs exports an array of
  *   { name, viewport?: 'desktop'|'phone'|'both', run: async (t) => {} }
- * where t = { page, open(hash), nav(view, page?), assert, viewport, shot(name), errors }.
+ * where t = { page, open(hash), nav(view, page?), assert, viewport, shot(name), errors, mod, isMac }.
+ * t.mod is the platform's shortcut modifier ('Meta' on macOS, 'Control' elsewhere): specs press
+ * select-all, undo and similar chords as `${t.mod}+A`, never a hard-coded Control. t.isMac lets a
+ * spec take the macOS path where the platform itself behaves differently (a closed <select> opens
+ * its list on ArrowDown there instead of changing value). BUDGET_TEST_PLATFORM=darwin|linux|win32
+ * overrides the detection, to try the other path.
  * nav() clicks the navigation link for a view: on phones Spending, Budget and Forecast sit in the
  * "More" menu of the tab bar, so it opens that first.
  * Every test fails on any uncaught page error or console error.
@@ -34,6 +39,9 @@ const DIST = process.env.BUDGET_DIST ? path.resolve(process.env.BUDGET_DIST) : p
 const OUT_DIR = process.env.BUDGET_RESULTS ? path.resolve(process.env.BUDGET_RESULTS) : null;
 const OUT = OUT_DIR || path.join(ROOT, 'test-results');
 const VIEWPORTS = { desktop: { width: 1366, height: 900 }, phone: { width: 390, height: 844, isMobile: true, hasTouch: true } };
+const PLATFORM = process.env.BUDGET_TEST_PLATFORM || process.platform;
+const IS_MAC = PLATFORM === 'darwin';
+const MOD = IS_MAC ? 'Meta' : 'Control';
 
 async function main() {
   if (!fs.existsSync(DIST)) { console.error('Build first: node tools/build.cjs --sample'); process.exit(2); }
@@ -64,7 +72,7 @@ async function main() {
         page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
         const url = 'file://' + DIST;
         const t = {
-          page, assert, viewport: vp, errors, context,
+          page, assert, viewport: vp, errors, context, mod: MOD, isMac: IS_MAC,
           async open(hash = '#/overview', { clear = true } = {}) {
             await page.goto(url + hash);
             if (clear) { await page.evaluate(() => localStorage.clear()); await page.goto(url + hash); await page.reload(); }

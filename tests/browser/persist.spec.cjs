@@ -17,6 +17,42 @@ async function commit(page, selector, value) {
   await page.press(selector, 'Enter');
 }
 
+/**
+ * Scroll offsets are whole pixels while layout is not: when the browser brings a focused element to
+ * the edge of the view, that edge can land up to about 1.5px past it, and where it lands depends on
+ * font metrics (macOS and Linux differ). Hidden under a bar means more than that.
+ */
+const EDGE_TOLERANCE_PX = 2;
+
+/** Resolve once the page has stopped scrolling: the same scroll position for three frames in a row. */
+function scrollSettled(page) {
+  return page.evaluate(() => new Promise(resolve => {
+    let last = scrollY, same = 0;
+    const tick = () => {
+      if (scrollY === last) same += 1; else { same = 0; last = scrollY; }
+      if (same >= 3) resolve(); else requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }));
+}
+
+/**
+ * Step a focused <select> to its next option the way the keyboard does. On Windows and Linux
+ * ArrowDown changes a closed select's value at once; on macOS it opens the option list instead and
+ * nothing changes until an option is picked, so there the next option is picked directly: the same
+ * input and change events, one option at a time.
+ */
+async function stepSelect(t, selector) {
+  if (!t.isMac) return t.page.keyboard.press('ArrowDown');
+  const next = await t.page.$eval(selector, s => {
+    const options = [...s.options];
+    const i = options.findIndex((o, k) => k > s.selectedIndex && !o.disabled);
+    return i >= 0 ? options[i].value : null;
+  });
+  t.assert.ok(next !== null, 'the select has a next option');
+  await t.page.selectOption(selector, next);
+}
+
 /** A second page in the same browser profile: same storage, its own errors collected into t.errors. */
 async function secondTab(t, hash) {
   const page = await t.context.newPage();
@@ -126,17 +162,17 @@ module.exports = [
       await page.click('#undoBtn');
       await page.waitForFunction(o => window.HouseholdBudget.getState().plan.targets.Groceries === o, original);
       assert.equal(await storedTarget(page, 'Groceries'), original, 'the undo is saved');
-      // Ctrl+Z outside text fields.
+      // Ctrl+Z (Cmd+Z on macOS) outside text fields.
       await commit(page, GROCERIES, '778');
       await page.waitForFunction(() => window.HouseholdBudget.getState().plan.targets.Groceries === 77800);
       await page.focus('#page-title');
-      await page.keyboard.press('Control+z');
+      await page.keyboard.press(`${t.mod}+z`);
       await page.waitForFunction(o => window.HouseholdBudget.getState().plan.targets.Groceries === o, original);
-      // Inside a text field Ctrl+Z stays the browser's own text undo.
+      // Inside a text field the same chord stays the browser's own text undo.
       await commit(page, GROCERIES, '779');
       await page.waitForFunction(() => window.HouseholdBudget.getState().plan.targets.Groceries === 77900);
       await page.focus(GROCERIES);
-      await page.keyboard.press('Control+z');
+      await page.keyboard.press(`${t.mod}+z`);
       assert.equal(await stateTarget(page, 'Groceries'), 77900, 'not undone from inside a field');
       // A focused toast does not time out under the keyboard user.
       await page.focus('#toast button[data-action="undo"]');
@@ -255,7 +291,9 @@ module.exports = [
         const hidden = [];
         for (let i = 0; i < 40; i++) {
           await page.keyboard.press('Tab');
-          const r = await page.evaluate(() => {
+          // Measure once the scroll the focus move caused has finished, not mid-way through it.
+          await scrollSettled(page);
+          const r = await page.evaluate(tol => {
             const el = document.activeElement;
             // The skip link is drawn above the top bar on purpose.
             if (!el || el === document.body || el.closest('.topbar, .mainnav, #toast') || el.classList.contains('skip-link')) return null;
@@ -265,10 +303,10 @@ module.exports = [
             const navTop = getComputedStyle(nav).position === 'fixed' ? nav.getBoundingClientRect().top : innerHeight;
             // A region taller than the space between the bars (a long table) only needs its top edge in view.
             const fits = box.height <= navTop - top;
-            const covered = fits ? box.top < top - 1 || box.bottom > navTop + 1 : box.top < top - 1 || box.top >= navTop;
-            return { id: el.id || el.textContent.trim().slice(0, 30), covered };
-          });
-          if (r && r.covered) hidden.push(r.id);
+            const covered = fits ? box.top < top - tol || box.bottom > navTop + tol : box.top < top - tol || box.top >= navTop;
+            return { id: el.id || el.textContent.trim().slice(0, 30), covered, top: box.top, bottom: box.bottom, bar: top, navTop };
+          }, EDGE_TOLERANCE_PX);
+          if (r && r.covered) hidden.push(`${r.id} (${Math.round(r.top)}–${Math.round(r.bottom)}px; bars end at ${Math.round(r.bar)}px and start at ${Math.round(r.navTop)}px)`);
         }
         assert.deepEqual(hidden, [], route + ': focused controls under a bar');
       }
@@ -285,7 +323,7 @@ module.exports = [
       await page.focus('select[data-param="period"]');
       for (let i = 0; i < 3; i++) {
         const before = await page.evaluate(() => [location.hash, Number(document.documentElement.dataset.renderSeq)]);
-        await page.keyboard.press('ArrowDown');
+        await stepSelect(t, 'select[data-param="period"]');
         // Wait for the re-render and for focus to be back on the new select before the next key.
         await page.waitForFunction(([h, n]) => location.hash !== h && Number(document.documentElement.dataset.renderSeq) > n
           && document.activeElement && document.activeElement.matches('select[data-param="period"]'), before);

@@ -86,6 +86,8 @@ Dataset = {
   generatedAt: 'YYYY-MM-DD'|null,
   currency: 'USD',
   accounts: Account[],
+  balances: Balance[],          // posted balances supplied with the data (see below); [] when none.
+                                //   Optional in files: absent -> [] (additive: schemaVersion stays 2)
   transactions: Txn[],          // sorted by date, then id
   coverageOverrides: { 'YYYY-MM': { status: 'full'|'partial'|'none', note: string } },  // optional
   importLog: ImportLogEntry[],  // optional
@@ -132,6 +134,15 @@ Txn = {
   note: string                  // may hold 'Transaction date YYYY-MM-DD.' when it differs from the posted date
 }
 
+Balance = {                     // the account's balance at the END of `date`
+  accountId: string,            // an account in `accounts`
+  date: 'YYYY-MM-DD',
+  cents: integer,               // money in the account (cash accounts); as the statement prints it
+  source: 'statement'|'bank',   // statement: supplied by the household (import config `balances`,
+                                //   or a balances.csv loaded in the browser); bank: the running
+                                //   balance an export prints, at the account's last covered day
+  note?: string                 // optional, at most 500 characters
+}
 Reference = { id, label, start: 'YYYY-MM-DD', end: 'YYYY-MM-DD', spendingCents: integer, source: string }
 ImportLogEntry = { file, accountId, profile, rows, imported, skipped, duplicatesRemoved,
                    start, end, coverageStart, coverageEnd, signConvention }   // no timestamps
@@ -140,6 +151,49 @@ ImportLogEntry = { file, accountId, profile, rows, imported, skipped, duplicates
 Validation: missing account type/scope or txn category are warnings with the defaults above;
 dangling `pairId`/`matchIds` are warnings; duplicate ids, bad dates, non-integer cents, unknown
 kinds and unknown accounts are errors.
+
+### Balances supplied with the data
+
+Posted balances travel with the data instead of being typed into the app. `dataset.balances` holds
+one entry per account and date, sorted by account id then date. Precedence for the same account
+and date: a `statement` beats a `bank` figure whatever the order; between equals the later one
+wins. Producers:
+
+- `tools/import.cjs`: the config's optional `balances` list, `[{ accountId, date, cents }]` or
+  `"amount": "1,234.56"` instead of `cents`, optional `source` (default `statement`) and `note`;
+  validated by `importer.statementBalances` (the account must exist, the date be valid, one entry
+  per account and date). Plus `importer.bankBalances`: for each checking/savings/other account
+  whose export has a Balance column, the end-of-day running balance of the account's last row,
+  dated the account's last covered day (only when that row lies in the last coverage range and
+  every row of its day prints a balance; card and loan "balances" are amounts owed and are never
+  used). A statement that disagrees with the bank's figure on the same day is a report warning.
+- The browser (Data & privacy): a balances file (`account,date,balance[,note]`, read by
+  `importer.parseBalancesCSV`) adds `statement` entries; exports added later add `bank` entries
+  at the new last covered day (`importer.mergeDataset`).
+
+`ledger.normalizeDataset` keeps `balances` (`ledger.normalizeBalances`: entries with an unknown
+account, bad date, non-integer cents or unknown source are dropped with a validation warning);
+`timeline.anchors` reads them. Per-transaction `balanceCents` stays as before.
+
+### Adding exports over time (`importer.mergeDataset`)
+
+Newer exports are added to an existing dataset instead of replacing it:
+
+- Files are read with the dataset's own accounts (plus any account new in this import that a file
+  uses). A file name already in the data gets a ` (2)` suffix for its new rows.
+- **Dedupe against the data:** a new row whose account, date, amount and normalized description
+  match a row already in the data is not added; counts are a multiset, as in `dedupe` (the data
+  counts as one more file), so genuine same-day repeats survive.
+- **Stable ids:** existing rows keep their ids and contents, so ledger edits keyed by id keep
+  applying. New rows get `'tx-' + hash(account|date|amount|normalized description|n)` with `n`
+  continuing after the copies already in the data, which is exactly the id a fresh import of all
+  the files gives (ids never depend on the file, its name, the row order or the rules).
+- New rows are classified with the rules given; pairing and reimbursement matching run over all
+  rows. An existing row changes only when it pairs with (or matches) a new row, or when its
+  unpaired note no longer fits the merged coverage.
+- Coverage is extended per account (new gaps are warned about); `balances` are merged with the
+  precedence above; `importLog` and `notes` are appended; `generatedAt` becomes the merge date;
+  `isSynthetic` is false unless the caller says otherwise (the browser never vouches for files).
 
 ### Counting rules (the single source of truth: `ledger.measure`)
 
@@ -301,7 +355,21 @@ Plan = {
   balances: { jointCashCents: cents|null, asOf: 'YYYY-MM-DD'|null, note,
               accounts: { [accountId]: cents|null }, accountsAsOf: 'YYYY-MM-DD'|null,     // per-account balances (exports without a running balance)
               accountDates: { [accountId]: 'YYYY-MM-DD'|null } },  // each balance's own date; absent → accountsAsOf
-  settings: { incomeTiming: 'conservative'|'average'|'actual', planningBaseline: 'actual'|'adjusted', comparisonWindow: 3|6|12 }
+  settings: { incomeTiming: 'conservative'|'average'|'actual', planningBaseline: 'actual'|'adjusted', comparisonWindow: 3|6|12 },
+  changes: PlannedChange[]             // dated changes on the plan screen (BudgetEngine.timeline); absent in older budgets → []
+}
+
+PlannedChange = {                      // up to 100; validated like every list item (strict through addItem/updateItem/setPath)
+  id, label,
+  kind: 'oneTime'|'monthly',           // one-time: startMonth only; monthly: startMonth through endMonth (null = open-ended)
+  group: 'income'|'essentials'|'flexible'|'irregular'|'savings',
+  personId: 'p1'|'p2'|null,            // income only (null: "other money in"); cleared on other groups
+  startMonth: 'YYYY-MM',               // required
+  endMonth: 'YYYY-MM'|null,            // monthly only (cleared on a one-time change); never before startMonth
+  cents: signed cents|null,            // null = amount not known yet: listed and reported, never applied as $0
+  accepted: boolean (false),           // false = listed only, not applied
+  template: string|null,               // e.g. 'baby' for items from timeline.templates.baby
+  note
 }
 
 IncomeStream = {
@@ -353,8 +421,9 @@ SavingsGoal = {
 }
 ```
 
-Amounts are integer cents, 0 or more, up to $100M. Only `balances.jointCashCents` and
-`Reference.spendingCents` may be negative (an overdrawn balance). State validation rejects other
+Amounts are integer cents, 0 or more, up to $100M. Only `balances.jointCashCents`, per-account
+balances, `PlannedChange.cents` (a drop in income, a refund) and `Reference.spendingCents` may be
+negative (an overdrawn balance). State validation rejects other
 negative amounts; `plan` and `forecast` treat a negative or non-integer amount as **not entered**
 (listed in `missing`), never as a smaller total.
 
@@ -402,15 +471,24 @@ State = {
   checklist: { [id]: boolean },
   ui: { scope: 'joint'|'household', lastRoute: string, whatIf: { excludePendingReimbursements: boolean, excludeBusinessCandidates: boolean },
         plan: { baselineMonths: 3|6|12|'all' (12), horizon: 6|12|24|60 (12), past: 6|12|'all' (12),
-                mode: 'balance'|'flows' ('balance'), coverFromSavings: boolean (true),
-                dials: { [dialKey]: signed cents|null },          // set directly; null/absent = not set; 0 is an amount
-                rows: { [rowId]: { included?: boolean, cents?: signed cents } },  // drill-down changes
-                hidden: string[]|null },                         // chart series switched off; null = never chosen
+                mode: 'balance'|'flows'|'trends' ('balance'), coverFromSavings: boolean (true),
+                dials: { [dialKey]: signed cents|null },          // set directly; null/absent = not set; 0 is an amount.
+                                                                  // dialKey ∈ state.DIAL_KEYS: p1, p2, inOther, essentials,
+                                                                  // flexible, irregular, savings, other (others refused)
+                rows: { [rowId]: { included?: boolean, cents?: signed cents } },  // essentials/flexible drill-down changes
+                hidden: string[]|null,                            // chart series switched off; null = never chosen
+                groups: { [categoryName | 'merchant:' + place]: 'essentials'|'flexible' },  // household's grouping ({}); keys ≤ 120 chars, up to 300
+                irregularOff: { [txnId]: true },                  // one-time costs left out of the irregular allowance ({}); up to 1,000
+                trends: { series: string[] (['card']; keys from state.TREND_SERIES, up to 16; unknown ones dropped),
+                          ma: 0|3|6 (3), trend: boolean (true) } },   // the Trends chart
                                                  // the plan screen (BudgetEngine.timeline). Replaces the earlier ui.home:
-                                                 // sanitize moves p1InCents/p2InCents/cardCents/bankCents/savedCents to
-                                                 // dials p1/p2/card/bank/savings and baselineMonths/horizon to their fields
-                                                 // (what ui.plan already holds wins), drops ui.home and notes it in
-                                                 // meta.migrationNotes. Idempotent.
+                                                 // sanitize moves p1InCents/p2InCents/savedCents to dials p1/p2/savings
+                                                 // and baselineMonths/horizon to their fields (what ui.plan already holds
+                                                 // wins); cardCents/bankCents/outCents are named as not carried over; it
+                                                 // drops ui.home and notes it in meta.migrationNotes. Card and bank were
+                                                 // dials before spending was grouped by how adjustable it is: a saved
+                                                 // ui.plan.dials.card/bank cannot be mapped to the new dials, so sanitize
+                                                 // removes it with a note in meta.migrationNotes. Both idempotent.
         dismissed: { [noticeId]: boolean } },
   meta: { createdAt, updatedAt, migratedFrom: null|0..4,           // 0 = unversioned earlier budget
           migrationNotes: string[], legacySnapshot: string|null }  // raw earlier data, set only by a migration
@@ -422,7 +500,8 @@ scenarios 20, events per scenario 200, incomes 12, bills 60, savings 30, debts 3
 references 100, checklist 200, dismissed 500, compareIds 3, ledgerEdits 50,000, history per
 correction 200 (latest kept), splits 50, migration notes 200, legacySnapshot 200,000 chars,
 workbook 25,000,000 chars, per-account balances and balance dates 30, plan dials 20, plan row
-changes 500, hidden series 40. Fields: `assumedPerMonthIfUnknown` 0–5, `aprPct` 0–100, `loanCount`
+changes 500, hidden series 40, plan groups 300 (keys 120 chars), one-time costs left out 1,000
+(keys 200 chars), Trends series 16, planned changes 100. Fields: `assumedPerMonthIfUnknown` 0–5, `aprPct` 0–100, `loanCount`
 1–100, `annualReturnPct` 0–25, cost and income growth −50 to 50.
 
 **Storage:** `localStorage['household-budget:v5:' + datasetId]`. Storage is **per browser profile
@@ -465,11 +544,21 @@ transactions from `ledger.applyEdits`.
 - `DEFAULT: [{ name, group, seasonal?: boolean, essential?: boolean }]`, `GROUP_ORDER`
 - `groupOf(name) -> string` ('Other' when unknown), `isSeasonal(name, extraSeasonal?) -> boolean`,
   `isEssential(name)`, `find(name)`, `names() -> string[]`, `sortNames(list)`
+- `essential` marks spending that is hard to cut; the plan screen plans it as **essentials** and
+  everything else as **flexible**: Mortgage, Home maintenance & repairs, Property tax & HOA, every
+  utility (Gas & heating, Electric, Water & sewer, Trash & municipal, Internet & phone), Groceries,
+  Fuel, Auto maintenance, every insurance, Medical & pharmacy, Dental, Vision, Baby & childcare, and
+  'Debt payment' (not a spending category; debt payments themselves are the plan's `other` dial).
+  Flexible: dining, shopping (Mixed retail, household, clothing, electronics), home improvement,
+  parking, rideshare, pets, personal care, education, entertainment, subscriptions, hobbies, travel,
+  gifts, fees, cash, uncategorized.
 - `UNCATEGORIZED = 'Uncategorized'`, `MIXED_RETAIL = 'Mixed retail'`
 
 ### BudgetEngine.ledger
 - `normalizeDataset(raw) -> Dataset` — v1 or v2, object or JSON text (BOM stripped); validates;
-  never mutates; throws `ValidationError` naming the first problems.
+  never mutates; throws `ValidationError` naming the first problems. Always has `balances` ([] when absent).
+- `normalizeBalances(list, accountIds) -> Balance[]` — section 2 "Balances supplied with the data";
+  drops unusable entries, one per account and date (statement > bank; equals: the later wins); never throws.
 - `validateDataset(ds) -> { errors: string[], warnings: string[] }`
 - `applyEdits(dataset, ledgerEdits, { whatIf } = {}) -> EffectiveTxn[]` (new objects) where
 ```js
@@ -669,11 +758,31 @@ rounded up to the limit.
   `days` (ties by id). Charges already refunded on their own account (same amount and merchant,
   refund on or after the charge) are matched to the refund first and not offered. Both rows get
   `reimbursement_candidate`, `matchIds` and a note; nothing is excluded.
-- `buildDataset({ files: [{ name, text, accountId, mapping?, coverageStart?, coverageEnd? }], accounts, rules?, datasetId, isSynthetic?, generatedAt, coverageOverrides?, references?, notes?, pairDays?, reimbursementDays? }) -> { dataset, report }`
+- `buildDataset({ files: [{ name, text, accountId, mapping?, coverageStart?, coverageEnd? }], accounts, rules?, datasetId, isSynthetic?, generatedAt, coverageOverrides?, references?, notes?, balances?, pairDays?, reimbursementDays? }) -> { dataset, report }`
   — `generatedAt` is required (the engine never reads the clock); file names must be unique.
   Account coverage = declared ranges plus each file's coverageStart/End (or its first/last row
-  date), merged; gaps between ranges are warned.
-- `report = { datasetId, generatedAt, isSynthetic, transactions, start, end, files: [{ name, accountId, profile, rows, imported, skipped, skippedReasons, duplicatesRemoved, start, end, coverageStart, coverageEnd, signConvention }], accounts: [{ id, label, type, coverage, transactions }], totalsByKind, spending: { purchasesCents, refundsCents, netCents }, flagCounts, months: monthlySummary, duplicatesRemoved, skippedRows, warnings: string[] }`
+  date), merged; gaps between ranges are warned. `balances` = statement balances (validated by
+  `statementBalances`); `dataset.balances` = `bankBalances` merged with them (section 2).
+- `report = { datasetId, generatedAt, isSynthetic, transactions, start, end, files: [{ name, accountId, profile, rows, imported, skipped, skippedReasons, duplicatesRemoved, start, end, coverageStart, coverageEnd, signConvention }], accounts: [{ id, label, type, coverage, transactions }], balances, totalsByKind, spending: { purchasesCents, refundsCents, netCents }, flagCounts, months: monthlySummary, duplicatesRemoved, skippedRows, warnings: string[] }`
+- `mergeDataset(base, { files?, accounts?, rules?, generatedAt, balances?, notes?, isSynthetic?, pairDays?, reimbursementDays? }) -> { dataset, report, summary }`
+  — adds exports and/or statement balances to an existing dataset (section 2, "Adding exports
+  over time"). `accounts`: accounts new in this import (the dataset's own are used as they are).
+  At least one file or balance; `generatedAt` required.
+  `summary = { transactionsBefore, transactionsAfter, added, alreadyPresent, duplicatesWithinFiles, skipped, existingChanged, coverageEndBefore, coverageEnd, accounts: [{ id, label, type, isNew, added, alreadyPresent, coverageBefore, coverageAfter }], balances: { added, replaced: [{ from, to }], ignored: [{ entry, kept }] }, renamedFiles: [{ from, to }] }`;
+  `report = { datasetId, generatedAt, transactions (new rows), start, end, files: [... + alreadyPresent; duplicatesRemoved includes them], totalsByKind, spending, flagCounts, duplicatesRemoved (within the new files), alreadyPresent: [{ file, row, accountId, date, amountCents, description, keptId, keptFile, keptRow }], skippedRows, balances, warnings }` (all about the new rows).
+- `statementBalances(list, accounts) -> Balance[]` — validates the config's `balances` (throws
+  `ValidationError` naming the item: unknown account, bad date, missing/non-integer cents, an
+  unparseable amount, cents and amount disagreeing, a bad source, two entries for one account and date).
+- `bankBalances(transactions, accounts) -> Balance[]` — the `bank` entries (section 2).
+- `mergeBalances(existing, incoming) -> { balances, added, replaced, ignored, unchanged }` — precedence of section 2.
+- `detectBalancesHeader(header) -> { account, date, balance, note? }|null` — header names: account /
+  account id / account name; date / as of / statement date / balance date / closing date; balance /
+  statement balance / ending balance / closing balance; note / memo. A header with a description or
+  amount column is a transaction export, never a balances file.
+- `parseBalancesCSV(text, accounts, { name?, dateFormat? }) -> { balances, skipped: [{ row, reason }], rows }`
+  — account by id or label (any case; a label two accounts share must be given as an id); amounts
+  like "1,234.56"; a second balance for the same account and day is skipped (the first is used).
+  Throws `ValidationError` with code `NOT_BALANCES` when the first line is not a balances header.
 - Also exported: `cleanMerchant`, `inferCardSign`, `prepareRules`, `mergeRanges`,
   `monthlySummary(dataset)` (per-month covered days per account, `spendingCoverage` ignoring
   savings/loan accounts like `ledger.coverage`, raw totals), `periodBreakdown(dataset, start, end)`
@@ -950,12 +1059,17 @@ Income streams gain `grossPerPaycheckCents` (optional, reference only).
 ### BudgetEngine.balances
 Joint cash accounts only (checking, savings, other; cards and loans are not balances to spend).
 - `cashAccounts(dataset) -> [{ id, label, type, group: 'checking'|'savings', coverage }]`
+- `suppliedBalances(dataset) -> [{ accountId, date, cents, source: 'statement'|'bank', note }]` —
+  `dataset.balances`, checked (unusable entries skipped; absent → []).
 - `history(txns, dataset, { entered?, asOf?, enteredAsOf?, months? }) -> { months, accounts: [{ id, label, group, source: 'bank'|'entered'|'change', values, note, gap, anchor, first, last }], groups: { checking, savings: { label, kind: 'balance'|'change'|'none', values } }, total: { kind, values }, latest: { month, index, checking, savings, total }|null, complete }`
-  - Known balances ("anchors", `anchorsFor(account, rows, entered, asOf)`): the export's running
-    balance at the end of each day with rows (`endOfDay` picks the balance that is not the start of
-    another row that day; file order breaks ties), plus one `entered[accountId]` balance true at the
-    end of its date (`enteredAsOf[accountId]`, else `asOf`) when the export has no running balance or
-    the entered date is after its last one. A month-end value is the nearest anchor at or before it
+  - Known balances ("anchors", `anchorsFor(account, rows, entered, asOf, supplied?)`): the export's
+    running balance at the end of each day with rows (`endOfDay` picks the balance that is not the
+    start of another row that day; file order breaks ties), and the balances supplied with the data
+    (`dataset.balances` for that account, `suppliedBalances(dataset)`; source 'statement' or 'bank';
+    a supplied figure wins over the running balance on the same day), plus one `entered[accountId]`
+    balance true at the end of its date (`enteredAsOf[accountId]`, else `asOf`) when there is no bank
+    figure or the entered date is after the last one. A supplied 'statement' anchor counts as a bank
+    figure for the account's `source` ('bank'); `anchor.source` keeps 'statement'. A month-end value is the nearest anchor at or before it
     plus the flows in between, or the next anchor minus the flows in between; it is null unless
     every day in between is covered by the account's exports or is in its `gap`
     (`{ side: 'after'|'before', from, to, days }`, `gapFor`), where no transactions are assumed.
@@ -986,44 +1100,107 @@ Joint cash accounts only (checking, savings, other; cards and loans are not bala
 ### BudgetEngine.timeline
 The plan screen's model, built once per render. Pure; `today` is passed in.
 - `build({ txns, dataset, plan, settings, today, coverageMap? })` — `txns` effective (no what-if),
-  `plan` = `state.plan`, `settings` = `state.ui.plan`, `today` 'YYYY-MM-DD'. Returns
+  `plan` = `state.plan` (with `plan.changes`), `settings` = `state.ui.plan`, `today` 'YYYY-MM-DD'. Returns
   `{ today, todayMonth, planStart, lastComplete, firstMonth, lastMonth, horizon, months, window,
-  people, dials, dialsByKey, groups, plan, changed, baseline, balances, settings }`:
+  people, dials, dialsByKey, groups, plan, changed, changedBy, changes, baseline, balances, series,
+  migration, settings }`:
   - `planStart` = the month after the last month every spending account covers in full.
     `months` run from the first month with data (earlier when a balance is known before it) to
     `planStart + horizon − 1`: `{ month, status: 'actual'|'partial'|'plan', current, complete,
-    coverage, in: { [personId], unassigned, other, total }, out: { card, bank, debt, business,
-    invest, total }, savings, net, oneOffs, oneOffCents, actualSoFar }`. Actual months come from
-    `flows.breakdown` (incomplete ones: amounts null, `actualSoFar` = the covered part); from
-    `planStart` on, amounts come from the dials, and a partly covered month is `partial`.
+    coverage, in: { [personId], unassigned, other, total }, out: { essentials, flexible, irregular,
+    card, bank, debt, business, invest, other, total }, savings, net, combinedChange, oneOffs,
+    oneOffCents, actualSoFar, changesApplied, baseline }`. `out.essentials + flexible + irregular =
+    card + bank`; `out.other = debt + business + invest`; `out.total = card + bank + other`;
+    `combinedChange = in.total − out.total` (moves to and from savings stay inside joint cash);
+    `net = combinedChange − savings` (left in checking). Actual months come from `flows.breakdown`
+    (incomplete ones: amounts null, `actualSoFar` = the covered part, same shape); their spending is
+    split by group with the same rules as the dials (one-time costs: the baseline window's
+    classification, else one over every month with data). From `planStart` on, amounts come from
+    the dials plus the accepted planned changes, and a partly covered month is `partial`.
+    `changesApplied: [{ id, label, group, cents }]` (plan months; [] otherwise). `baseline`: for plan
+    months when `changed`, `{ in, out, savings, net, combinedChange }` at baseline dials with no
+    planned changes (totals); otherwise null.
   - `dials`: one `in` dial per person in the plan (`inOther` when the baseline has unmatched
-    deposits or interest), `out` dials `card`, `bank`, `savings` (signed) and `other` (debt,
-    business, investments; only when nonzero). `{ key, group, label, baselineCents, planCents,
-    source: 'baseline'|'direct'|'rows', basis, hint, drill }`. Baseline = average of the
-    `baselineMonths` complete months (`flows.baseline`, one-time purchases out, yearly spread).
-    `planCents`: `settings.dials[key]`, else the drill rows when any is changed, else the baseline;
-    never clamped. Person dials also carry `budgetCents` (the person's monthly joint amount from
-    `flows.planFunding` for `planStart`, annual-average timing: biweekly 26 a year, semimonthly 24;
-    ended and not-yet-started streams out; null when no stream counts or any counted amount is
-    unknown), `averageCents` (the deposit average of the window), `basisKind: 'budget'|'average'|
-    'direct'`, `needsConfirm` (true for 'average') and `budget: { streams: [{ id, name,
-    perPaycheckJointCents, perYear, cadenceLabel, monthlyCents, assumedCadence }], unknown: [names] }`;
-    their `baselineCents` is `budgetCents` when known, else `averageCents`, and `basis` reads
-    "From Budget: 2 × $… to joint (semimonthly)", "Average of … deposits, N months — not a
-    confirmed setting" or "Set here". `hint` (in dials): observed deposits `{ count, lastCents, lastDate,
-    typicalIntervalDays, cadence, cadenceLabel, days, perYear, perMonthCents }` (semimonthly 24 a
-    year, biweekly 26, matched with `schedule.paydays`). `drill` (card, bank): `{ rows,
-    categoryCount, baselineCents, rowsCents, overridden, stableCount, orphanIds, tinyCategoryCents }`;
-    rows are categories (level 1, tiny ones grouped as "Other") and regular places plus "Everything
-    else" (level 2) with stable ids `<dial>-c|m|r-<hash>`. Every row has `avgCents` (the average)
-    and `defaultCents` (its plan amount with no change); level-2 rows also `latestCents`,
-    `latestDate` (null on "Everything else" rows), `seenMonths`, `ofMonths` and `stable`. A stable
-    regular place (3+ charges, about once a month, all within 10% of their median) defaults to its
-    latest charge; others to their average. Categories add up their rows, and the dial baseline is
-    Σ category `defaultCents` (the basis then ends "; regular bills at their latest amount").
-  - `baseline`: `{ setting, count, months, start, end, label, oneTime, oneTimeCents, keptIn, yearly }`
-    — one-time items with `{ id, date, month, merchant, description, accountLabel, role, dialKey,
-    cents, auto }`; toggled with the `planningBaseline` ledger edit.
+    deposits or interest), then the `out` dials in `groups.out` order: `essentials`, `flexible`,
+    `irregular`, `savings` (signed) and `other` (debt, business, investments; only when nonzero).
+    Card and bank spending are not dials: they are derived (see `plan.out.card`/`bank`).
+    Every dial: `{ key, group, label, baselineCents, planCents, source: 'baseline'|'direct'|'rows',
+    basis, hint, drill }`. Baseline = average of the `baselineMonths` complete months
+    (`flows.baseline`, yearly bills spread). `planCents`: `settings.dials[key]`, else the drill rows
+    (irregular: the costs still in) when any is changed, else the baseline; never clamped. Person dials
+    also carry `budgetCents` (the person's monthly joint amount from `flows.planFunding` for
+    `planStart`, annual-average timing: biweekly 26 a year, semimonthly 24; ended and not-yet-started
+    streams out; null when no stream counts or any counted amount is unknown), `averageCents` (the
+    deposit average of the window), `basisKind: 'budget'|'average'|'direct'`, `needsConfirm` (true
+    for 'average') and `budget: { streams: [{ id, name, perPaycheckJointCents, perYear, cadenceLabel,
+    monthlyCents, assumedCadence }], unknown: [names] }`; their `baselineCents` is `budgetCents` when
+    known, else `averageCents`, and `basis` reads "From Budget: 2 × $… to joint (semimonthly)",
+    "Average of … deposits, N months — not a confirmed setting" or "Set here". `hint` (in dials):
+    observed deposits `{ count, lastCents, lastDate, typicalIntervalDays, cadence, cadenceLabel, days,
+    perYear, perMonthCents }` (semimonthly 24 a year, biweekly 26, matched with `schedule.paydays`).
+    Spending dials (essentials, flexible, irregular) also carry `cardShare` (0..1), `cardCents` /
+    `bankCents` (the plan amount split by how it was paid; a direct amount splits by `cardShare`) and
+    `baselineCardCents` / `baselineBankCents`.
+  - Grouping: a category is `essentials` when `categories.isEssential` says so, else `flexible`;
+    `settings.groups[category]` overrides it, and `settings.groups['merchant:' + place]` moves every
+    purchase of that place (all its categories) into a synthetic category row named after the place
+    in the chosen group. One-time costs are never in these groups: they are the `irregular` dial.
+  - `drill` (essentials, flexible): `{ kind: 'categories', group, rows, categoryCount, baselineCents,
+    rowsCents, baselineCardCents, rowsCardCents, cardShare, overridden, stableCount, yearlyCount,
+    orphanIds, tinyCategoryCents }`; rows are categories (level 1, tiny ones grouped as "Other") and
+    regular places plus "Everything else" (level 2) with stable ids `<group>-c|m|r-<hash>` (the hash
+    of the same parts as the earlier card/bank ids). Every row has `avgCents` (the average; card and
+    bank averages added), `defaultCents` (its plan amount with no change), `planCents`, `override`,
+    `included`, `group`, `synthetic` (a place moved as a whole), `paidBy: 'card'|'bank'|'mixed'`,
+    `cardShare` (0..1, by amount), `cardCents` / `bankCents` (its plan amount split; at the default
+    exactly the card and bank averages), `pattern: 'bill'|'everyday'|'occasional'` (bill = regular
+    and stable; everyday = seen in at least `baseline.regularAt` of the window months (60%, at least
+    2) and not stable; occasional = the rest; a category is 'bill' when all its rows are) and
+    `legacyId` (the earlier card/bank row whose change it is using, else null). Level-1 rows also
+    `members`, `merchant` (synthetic rows), `movedFrom` (synthetic rows: the place's categories),
+    `groupKey` (what `setGroup` takes: the category, 'merchant:' + place, or null for the grouped
+    "Other"), `groupSource: 'taxonomy'|'override'|null`, `seenMonths`, `ofMonths`; level-2 rows also
+    `latestCents`, `latestDate` (null on "Everything else" rows), `seenMonths`, `ofMonths`, `stable`. A
+    stable regular place (3+ charges, about once a month, all within 10% of their median) defaults to
+    its latest charge; others to their average. Categories add up their rows, and the dial baseline
+    is Σ category `defaultCents` (the basis then ends "; regular bills at their latest amount").
+  - `drill` (irregular): `{ kind: 'items', rows: [{ id (txn id), label (place), date, month, cents,
+    monthlyCents, included, auto, paidBy, category, description, accountLabel }], count,
+    includedCount, leftOutCount, totalCents, includedCents, baselineCents, rowsCents,
+    baselineCardCents, rowsCardCents, cardShare, overridden, orphanIds, examples }` — every one-time
+    cost of the window (found automatically, `auto`, or marked with the `planningBaseline: 'exclude'`
+    edit). Baseline = Σ costs ÷ window months; items are in the allowance unless
+    `settings.irregularOff[id]`; the `planningBaseline: 'include'` edit ("count as regular") moves an
+    item into its category instead (it is then in `baseline.keptIn`, not here). Nothing is left out
+    of the plan automatically. Basis: "One-time costs over Oct 2025–Sep 2026 spread per month
+    (14 items, $X) — dental work, trips, repairs, tax" (+ "; N left out by you").
+  - `plan`: one plan month from the dials (no planned changes): `{ in, out, savings, net,
+    combinedChange, toSavings, fromSavings }` (`toSavings` = max(0, savings), `fromSavings` =
+    max(0, −savings)); `out.card` / `out.bank` derived from the spending dials.
+  - `changed`: any dial not at its baseline, or any planned change applied; `changedBy: { dials,
+    changes }`.
+  - `changes`: `{ list, applied, unset, totalOneTimeCents, monthlyNowCents }` — `list`: each valid
+    `plan.changes` entry with `status: 'unset'|'notAccepted'|'applied'|'outside'`, `monthsApplied`,
+    `appliedCents`; `applied`: how many applied; `unset`: ids with no amount (never applied as $0).
+    Accepted changes with an amount add to plan months from `startMonth` (one-time: that month only;
+    monthly: through `endMonth` when set): income to `in[personId]` (`in.other` without a person),
+    spending groups to that group, `out.bank` and `out.total`, savings to `savings`. Totals count
+    money out of checking as positive (spending and savings +, income −): `totalOneTimeCents` over
+    the applied one-time changes, `monthlyNowCents` over the monthly ones in the first plan month.
+  - `baseline`: `{ setting, count, months, start, end, label, oneTime, oneTimeCents, keptIn, yearly,
+    regularAt, plan }` — one-time items with `{ id, date, month, merchant, description, accountLabel,
+    role, dialKey ('irregular' for card and bank purchases), cents, auto }`; toggled with the
+    `planningBaseline` ledger edit. `plan`: when `changed`, one plan month at baseline dials (same
+    shape as `plan`), else null.
+  - `series`: the Trends chart's lines, `[{ key, name, group: 'in'|'out'|'savings'|'net', values }]`
+    aligned with `months` (actual months from what happened, null when incomplete; partial and plan
+    months from the plan). Keys, in order: `in-<personId>` per person, `in-other`, `in-total`,
+    `card`, `bank`, `essentials`, `flexible`, `irregular`, `other-out`, `out-total`, `to-savings`,
+    `from-savings`, `net`, `combined-change` (`SERIES` lists the fixed ones).
+  - `migration`: null, or `{ rows: [{ from, to }], dropped, superseded, note }` when
+    `settings.rows` still holds changes saved under the earlier card/bank dials. A change applies to
+    the same row (`<group>` instead of `card`/`bank` in its id) when that row is paid only that way
+    and is not the grouped "Other"; `migrateRows` makes that permanent.
   - `balances`: `{ mode: 'accounts'|'simple'|'none', simple, label, rule, accounts, missing,
     combined, policy, runsOut, lowest, notes, assumed, illustrative }`. Points are `{ month, cents,
     status: 'reconstructed'|'assumed'|'projected'|null, anchor, gap, note, illustrative }`: a
@@ -1035,17 +1212,56 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
     `illustrative`: a sentence when account lines have projected points (checking's projected
     points carry `illustrative: true`: card spending is taken when it happens), else null. Per anchored account: points per month
     (`reconstructed` from the transactions, then `projected`: checking + net, savings + savings;
-    the month of the last known day adds net × days left ÷ days in month). `combined` sums the
-    anchored accounts only (`missing` ones are never counted as $0). A savings account with a
-    balance but no export of its own is worked back and forward from the savings transfers in the
-    one covered export holding them (`mirroredFrom`), when it is the only savings account; otherwise
-    a note says why it is not. Simple mode projects the one
-    joint cash figure (labelled illustrative). Nothing is floored; `coverFromSavings` moves projected
-    checking shortfalls from savings (`policy.moves`), per account only.
-- `anchors(plan, dataset, txns?) -> { simple, accounts: [{ id, name, type, group, cents, asOf, source, dateAssumed, gap }], combined: { cents, asOf, members, sameDate }|null, missing, enteredAsOf }`
-  — the starting balances; Forecast reads its starting cash from `combined`.
-- `settings(raw)`, `setDial(state, key, cents|null)`, `setRow(state, rowId, { included?, cents? })`,
-  `resetDial(state, key)`, `resetPlan(state)`, `prorate(cents, daysLeft, daysInMonth)`.
+    the month of the last known day adds net × days left ÷ days in month), `source`, and `anchor:
+    { date, cents, source: 'entered'|'bank'|'statement', label }` (label: "Entered by you, Sep 30,
+    2026", "From your bank data, Sep 30, 2026" or "From your statement, Sep 30, 2026"). `combined`
+    sums the anchored accounts only (`missing` ones are never counted as $0), and has
+    `baselinePoints`: when `changed`, the combined line from the same anchors at baseline dials with
+    no planned changes (same length as `points`; null where the point is not projected), else null.
+    A savings account with a known balance (entered or supplied) but no export of its own is worked
+    back and forward from the savings transfers in the one covered export holding them
+    (`mirroredFrom`), when it is the only savings account; otherwise a note says why it is not.
+    Simple mode projects the one joint cash figure (labelled illustrative). Nothing is floored;
+    `coverFromSavings` moves projected checking shortfalls from savings (`policy.moves`), per
+    account only.
+- `anchors(plan, dataset, txns?) -> { simple, accounts: [{ id, name, type, group, cents, asOf, source, dateAssumed, gap, anchor: { date, cents, source, label } }], combined: { cents, asOf, members, sameDate }|null, missing, enteredAsOf }`
+  — the starting balances; Forecast reads its starting cash from `combined`. Per account the newest
+  known balance wins: the export's running balance, a balance supplied with the data
+  (`dataset.balances`, source 'statement'|'bank'; absent is fine) or the entered one, which is used
+  only when no bank figure is dated the same day or later.
+- `toCSV(tl, { people?, format? }) -> string` — RFC 4180, CRLF, deterministic. Block "Settings"
+  (`key,value` rows: today, baseline window/setting/months used/from/to, plan start, last month,
+  horizon, cover from savings, `dial.<key>.label|baseline|plan|source|card|bank`, `group.<key>`,
+  `row.<id>.label|included|amount`, `one_time.<txnId>.label|date|amount|state` ('in the irregular
+  allowance' | 'left out by you' | 'counted as regular spending'), `balance.<accountId>.name|date|
+  amount|source` (simple mode: `balance.joint_cash.*`), `change.<id>.label|kind|group|person|start|
+  end|amount|accepted|status`), a blank line, then block "Months": `month,status,in_<personId>…,
+  in_other,in_total,essentials,flexible,irregular,other_out,out_total,to_savings,from_savings,
+  combined_change,net_checking,combined_balance,combined_status,<accountId>_balance,
+  <accountId>_status…`. Dollars as plain decimals ("-1234.50"; `format: 'cents'` for whole cents),
+  unknown as empty, statuses as words; free text starting with = + - @ gets a leading '.
+- `templates.list() -> [{ key: 'baby', label: 'Baby', needs: ['dueDate'] }]`,
+  `templates.baby(dueDate 'YYYY-MM-DD') -> item[]` — generic US estimates timed from the due month
+  D (car seat, nursery D−2; starter clothes, feeding gear, monitor D−1; delivery out-of-pocket D+1;
+  crib D+4; diapers, formula, clothes, copays monthly from D; baby food from D+6; childcare from
+  D+3; parental leave income change D..D+2 with no amount), all `accepted: false`,
+  `template: 'baby'`, each note saying it is an estimate to adjust.
+- State writes (return a new State, validated through `state.setPath` / `addItem` / `updateItem`):
+  `setDial(state, key, cents|null)`, `setRow(state, rowId, { included?, cents? })`,
+  `resetDial(state, key, tl?)` (irregular: also clears `irregularOff`; with `tl`, also the earlier card/bank row changes its rows use), `resetPlan(state)` (dials, rows
+  and `irregularOff`; groups and planned changes stay), `setGroup(state, key, 'essentials'|
+  'flexible'|null, tl?)` (key = category or 'merchant:' + place; with the current `tl` a category's
+  row changes follow it to the other group), `setIrregular(state, txnId, included)`,
+  `addChange(state, item | item[])`, `setChange(state, id, patch)` (switching to one-time clears
+  `endMonth`, away from income clears `personId`, unless the patch sets them),
+  `removeChange(state, id)`, `acceptChanges(state, id | ids, accepted = true)`,
+  `migrateRows(state, tl)` (moves the earlier card/bank row changes `tl.migration` matched, removes
+  the rest, and appends `tl.migration.note` to `meta.migrationNotes`; returns the same state when
+  there is nothing to do).
+- `settings(raw)` (adds `groups`, `irregularOff`, `trends: { series, ma, trend }`; `mode` may be
+  'trends'), `prorate(cents, daysLeft, daysInMonth)`, `depositHint(credits, personId)`; constants
+  `SPEND_GROUPS`, `OUT_DIALS`, `MERCHANT_KEY`, `CHANGE_KINDS`, `CHANGE_GROUPS`, `SERIES`, `TREND_MA`,
+  `TREND_DEFAULTS`, `DIAL_LABEL`.
 
 ### BudgetEngine.state
 - `VERSION = 5`, `storageKey(datasetId)`, `LEGACY_KEYS(copyIds?)`, constants `STORAGE_PREFIX`,
@@ -1066,6 +1282,9 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
   - `compareIds` is never empty: it falls back to `['baseline', first other scenario]`.
   - A saved `ui.home` (the earlier Home settings) is moved to `ui.plan` (section 7) and dropped,
     with one note that is also appended to `meta.migrationNotes`.
+  - A saved `ui.plan.dials.card` / `bank` (dials before spending was grouped as essentials,
+    flexible and irregular) is removed with one note naming the amounts, also appended to
+    `meta.migrationNotes`. A missing `plan.changes` becomes `[]` without a note.
   - A dataset id differing from the saved one is noted; edits apply where the transactions exist.
 - `migrate(raw, profile, dataset, opts?) -> { state, notes }` — saved-state versions 1–4 or
   unversioned earlier budgets (object, JSON text or `{ copyId, state }` wrapper) → v5. Never
@@ -1111,15 +1330,19 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
   columns can be told apart; a clash throws `ValidationError` on field `name`), `deleteScenario` (alias `removeScenario`; the baseline cannot be deleted),
   `addEvent(state, scenarioId, event)` (not on the baseline), `updateEvent(state, scenarioId, eventId, patch)`
   (`undefined` in the patch removes an optional field), `removeEvent`, `validateEvent(event)`.
-- Plan list items: `addItem(state, 'incomes'|'bills'|'savings'|'debts', item, { now }?)`,
+- Plan list items: `addItem(state, 'incomes'|'bills'|'savings'|'debts'|'changes', item, { now }?)`,
+  `updateItem(state, list, id, patch, { now }?)` (several fields at once, merged and validated
+  strictly like a new item; `undefined` resets a field to its default; the id is kept),
   `removeItem(state, list, id, { now }?)` — removing a bill/debt clears the link on the other side;
   removing a goal sets `goalId: null` on scenario events.
+- Constants for the plan screen: `DIAL_KEYS`, `RETIRED_DIALS` (['card', 'bank']), `SPEND_GROUPS`,
+  `CHANGE_KINDS`, `CHANGE_GROUPS`, `TREND_SERIES`.
 - `setPath(state, path, value) -> State` (validated writes from forms, path-copying, input never
   modified), `getPath(state, path)` (returns a copy, or undefined for a missing item):
   - Lists use selectors: `plan.incomes[id=p1-pay].netPerPaycheckCents`,
     `plan.personalSpending[personId=p2].monthlyCents` (a personalSpending entry for p1/p2 is created
     on first write), `scenarios[id=…].events[id=…].monthlyCents`; a numeric index also works.
-  - Map entries (`plan.targets`, `checklist`, `ui.dismissed`) take the rest of the path as the key
+  - Map entries (`plan.targets`, `checklist`, `ui.dismissed`, `ui.plan.dials|rows|groups|irregularOff`) take the rest of the path as the key
     (`plan.targets.Gas & heating`) or a quoted key (`plan.targets["A.B"]`).
   - Writing `undefined` **removes** a map entry or an optional `income_change` field.
   - Ids cannot be written, and a list's selector field cannot be rewritten
@@ -1139,12 +1362,12 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
 
 | Route | View |
 | --- | --- |
-| `#/overview` | Plan (`views/overview.js`, one `timeline.build` per render): the cash chart first (Balance: combined cash and, switched off until chosen, each account; Flows: money in by person, other and from savings, out to cards, mortgage & bills, savings and debt/business/investing, with a net line; Past 6/12/all and Ahead 6/12/24/60 months); the balances it starts from (per joint cash account, amount and date, or one cash figure when the data has no cash account); the dials (money in by person, money out by kind; slider in $25 steps plus an exact box; card and bank open into categories and places that can be unticked or given an amount, and one-time purchases that can be counted again); the monthly sum of the dials; More options (baseline window, cover from savings). Every change goes through `app.update` and can be undone; legend toggles are saved to `ui.plan.hidden` without a re-render |
+| `#/overview` | Plan (`views/overview.js`, one `timeline.build` per render): the cash chart first (Balance: combined cash and, switched off until chosen, each account, plus a faint baseline-plan line once a dial has moved and markers for planned changes; Flows: money in by person, other and from savings, out as essentials, flexible, irregular, savings and debt/business/investing, with a net line; Trends: any monthly series as lines with an optional trailing average and a straight-line trend; Past 6/12/all and Ahead 6/12/24/60 months; Export CSV); the balances it starts from (taken from the data — statement or bank running balance — with their source shown; an entered balance is an override); the dials (money in by person from the pay saved in Budget, money out as Essentials, Flexible spending, Irregular costs, Net to savings and Other; slider in $25 steps plus an exact box; essentials and flexible open into categories and places with pattern badges that can be unticked, given an amount or moved between the two groups; irregular lists the one-time items in the allowance); the headline (all accounts per month, then checking); the Planned changes drawer (dated one-time and monthly changes, the Baby template); More options (baseline window, cover from savings). Every change goes through `app.update` and can be undone; view settings and legend toggles are saved without a re-render |
 | `#/spending?period=2026-09&cat=Groceries&merchant=…&txn=…&q=…&window=3` | month → category → merchant → transaction drilldown with breadcrumbs |
 | `#/budget?section=income|bills|targets|savings|debts` | edit plan inputs; planned vs actual; consequences |
 | `#/forecast?scenario=…&compare=a,b&horizon=36` | scenarios, events, projections, side-by-side |
 | `#/review?queue=uncertain|duplicates|transfers|reimbursements|business|spikes|coverage|edited|reconcile` | data review & corrections |
-| `#/data` | load files, export/import workbook, storage & privacy explanation, reset |
+| `#/data` | load files, export/import workbook, storage & privacy explanation, reset. `?load=csv`: bank exports and balances files, added to the data in use (default for a household's own data; `importer.mergeDataset`, summary "N new, M already present, coverage now to …" with Add / Cancel and Replace instead… behind a confirmation) or replacing it (default for the fictional sample; import report, then Use this data). The hub lists posted balances and offers the data in use as a data file (JSON) that "Choose a data file" reads back |
 
 `period` is `YYYY-MM` or a range `YYYY-MM..YYYY-MM`. Browser Back/Forward move through drilldown levels.
 

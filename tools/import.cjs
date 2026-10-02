@@ -9,6 +9,11 @@
  *                                                 also print a breakdown of that period (reconciliation)
  *   node tools/import.cjs --sample                rebuild fixtures/sample-data.json from the synthetic CSVs
  *
+ * Posted balances: the config's optional "balances" list ([{ accountId, date, cents | amount, note? }],
+ * one per account and date) is validated and written to dataset.balances as 'statement' entries,
+ * together with the bank's running balance ('bank') at the last covered day of each account whose
+ * export has a Balance column (docs/ARCHITECTURE.md §2, "Balances supplied with the data").
+ *
  * Options: --config <file>  --out <file>  --report <file>  --period A..B  --sample  --help
  * Paths are relative to the repository root. Outputs contain private financial data: they belong
  * in the git-ignored private/ folder. Writing inside fixtures/ is refused unless --sample is given.
@@ -63,7 +68,8 @@ function localToday() {
 /**
  * Build { dataset, report } from an import config.
  * @param {object} config  { datasetId, isSynthetic, generatedAt?, accounts, files: [{ path, accountId, mapping?, coverageStart?, coverageEnd? }],
- *                           rules?: string|object, coverageOverrides?, references?, notes? }
+ *                           rules?: string|object, balances?: [{ accountId, date, cents | amount, source?, note? }],
+ *                           coverageOverrides?, references?, notes? }
  * @param {{readText: (relPath: string) => string, today?: string}} io
  */
 function runImportFromConfig(config, { readText, today } = {}) {
@@ -103,7 +109,8 @@ function runImportFromConfig(config, { readText, today } = {}) {
     generatedAt: config.generatedAt || today || localToday(),
     coverageOverrides: config.coverageOverrides,
     references: config.references,
-    notes: config.notes
+    notes: config.notes,
+    balances: config.balances
   });
   result.report.warnings.unshift(...extraWarnings);
   return result;
@@ -136,6 +143,17 @@ function renderMarkdown(report, dataset) {
   for (const a of report.accounts) {
     out.push('- **' + a.label + '** (' + a.type + ', ' + a.transactions + ' transactions): ' +
       (a.coverage.length ? a.coverage.map(r => r.start + ' – ' + r.end).join('; ') : 'no coverage'));
+  }
+  out.push('');
+
+  out.push('## Balances embedded in the data', '');
+  const balances = report.balances || [];
+  if (!balances.length) {
+    out.push('None. Add a "balances" list to the import config (account, date, amount from a statement), or include the Balance column in checking and savings exports.');
+  } else {
+    out.push('Each is the balance at the end of its date. Statement = from the config\'s "balances"; bank = the running balance printed in an export, at the account\'s last covered day.', '');
+    out.push('| Account | Date | Balance | Source | Note |', '| --- | --- | ---: | --- | --- |');
+    for (const b of balances) out.push('| ' + [label.get(b.accountId) || b.accountId, b.date, $(b.cents), b.source, b.note || ''].map(cell).join(' | ') + ' |');
   }
   out.push('');
 
@@ -235,7 +253,18 @@ const EXAMPLE_CONFIG = {
     { path: 'private/raw/CHECKING-EXPORT.csv', accountId: 'joint-checking', coverageStart: 'YYYY-MM-DD', coverageEnd: 'YYYY-MM-DD' },
     { path: 'private/raw/CARD-EXPORT.csv', accountId: 'joint-card', coverageStart: 'YYYY-MM-DD', coverageEnd: 'YYYY-MM-DD' }
   ],
-  rules: 'private/rules.json'
+  rules: 'private/rules.json',
+  _balancesHelp: [
+    'balances is optional: posted balances from statements, so the plan screen knows real balances without typing them in the app.',
+    'One entry per account and date; the balance at the END of that date. Give "cents" (whole cents) or "amount" ("1,234.56"); "note" is optional.',
+    'Exports with a Balance column add the bank\'s running balance themselves (source "bank"); a statement balance on the same date wins.',
+    'Invented examples: { "accountId": "joint-checking", "date": "2026-09-30", "amount": "4,250.00", "note": "September statement" }',
+    '                   { "accountId": "joint-checking", "date": "2026-10-31", "cents": 398712 }',
+    'Delete the placeholder entry below, or replace its placeholders (an entry left as YYYY-MM-DD stops the import).'
+  ],
+  balances: [
+    { accountId: 'joint-checking', date: 'YYYY-MM-DD', amount: '0.00', note: 'Statement closing balance' }
+  ]
 };
 
 function setupHelp(configRel, exampleRel, wroteExample) {
@@ -403,6 +432,10 @@ function main(argv, { log = console.log, error = console.error } = {}) {
   const E = loadImporterEngine();
   log('Imported ' + report.transactions + ' transactions (' + (report.start || '—') + ' to ' + (report.end || '—') + ') from ' + report.files.length + ' files.');
   for (const f of report.files) log('  ' + f.name + ': ' + f.rows + ' rows, ' + f.imported + ' imported, ' + f.skipped + ' skipped, ' + f.duplicatesRemoved + ' duplicates removed');
+  if ((report.balances || []).length) {
+    const label = new Map(dataset.accounts.map(a => [a.id, a.label]));
+    log('Balances embedded: ' + report.balances.map(b => (label.get(b.accountId) || b.accountId) + ' ' + b.date + ' ' + E.money.format(b.cents) + ' (' + b.source + ')').join('; ') + '.');
+  }
   log('Spending (purchases − refunds): ' + E.money.format(report.spending.netCents) + '. Flags: ' +
     (Object.entries(report.flagCounts).map(([k, n]) => k + ' ' + n).join(', ') || 'none') + '.');
   for (const w of report.warnings) log('Warning: ' + w);

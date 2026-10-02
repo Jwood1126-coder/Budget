@@ -680,9 +680,16 @@ module.exports = [
       await open(t, '#/spending?txn=tx-1pldxbxvxt');
       await page.click('#sp-jump-actions');
       await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'sp-txn-actions-h');
+      // Measured once scrolling has stopped (same position for three frames), against the top bar's
+      // real height; 2px allows for whole-pixel scrolling of a fractional layout (fonts differ by platform).
+      await page.evaluate(() => new Promise(resolve => {
+        let last = scrollY, same = 0;
+        const tick = () => { if (scrollY === last) same += 1; else { same = 0; last = scrollY; } if (same >= 3) resolve(); else requestAnimationFrame(tick); };
+        requestAnimationFrame(tick);
+      }));
       const inView = await page.$eval('#sp-txn-actions-h', h => {
         const r = h.getBoundingClientRect(), bar = document.querySelector('.topbar').getBoundingClientRect();
-        return r.top >= bar.bottom && r.bottom <= window.innerHeight;
+        return r.top >= bar.bottom - 2 && r.bottom <= window.innerHeight + 2;
       });
       assert.ok(inView, 'the correction tools are scrolled into view, below the sticky top bar');
       assert.equal(await page.evaluate(() => location.hash), '#/spending?txn=tx-1pldxbxvxt', 'the jump does not change the route');

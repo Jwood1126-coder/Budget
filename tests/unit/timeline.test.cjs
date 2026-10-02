@@ -60,13 +60,13 @@ function small({ withSavings = false } = {}) {
   return dataset(txns, { from: '2026-03-01', to: '2026-05-31', withSavings });
 }
 // Plan net −45,000 a month: 2,000 in; 1,500 card, 950 bank, 0 to savings.
-const LOSING = { dials: { p1: 200000, p2: 0, card: 150000, bank: 95000, savings: 0 } };
+const LOSING = { dials: { p1: 200000, p2: 0, essentials: 150000, flexible: 95000, savings: 0 } };
 
 test('an entered balance is used at its exact date and worked back to the day before the export starts, never further', () => {
   const ds = small();
   const r = run(ds, { plan: planWith({ accounts: { chk: 350000 }, accountDates: { chk: '2026-06-10' } }), settings: LOSING });
   const chk = account(r, 'chk');
-  assert.deepEqual(chk.anchor, { date: '2026-06-10', cents: 350000, source: 'entered' }, 'the date is never moved');
+  assert.deepEqual(chk.anchor, { date: '2026-06-10', cents: 350000, source: 'entered', label: 'Entered by you, Jun 10, 2026' }, 'the date is never moved');
   assert.equal(r.planStart, '2026-06');
   assert.equal(r.lastComplete, '2026-05');
   // Backward through the covered transactions: 3 months of +2,000 − 1,200 on checking. The balance
@@ -136,7 +136,7 @@ test('cover from savings moves a projected checking shortfall from savings, per 
   const ds = small({ withSavings: true });
   const balances = { accounts: { chk: 100000, sav: 50000 }, accountsAsOf: '2026-05-31', accountDates: { sav: '2026-05-31' } };
   // Checking −60,000 a month (2,000 in, 1,500 card, 1,000 bank, 100 to savings); savings +10,000.
-  const settings = { dials: { p1: 200000, p2: 0, card: 150000, bank: 100000, savings: 10000 }, horizon: 6 };
+  const settings = { dials: { p1: 200000, p2: 0, essentials: 150000, flexible: 100000, savings: 10000 }, horizon: 6 };
   const on = run(ds, { plan: planWith(balances), settings, today: '2026-06-02' });
   const off = run(ds, { plan: planWith(balances), settings: Object.assign({}, settings, { coverFromSavings: false }), today: '2026-06-02' });
   const months = ['2026-06', '2026-07', '2026-08', '2026-09', '2026-10'];
@@ -172,7 +172,7 @@ test('an account with data but no known balance is listed as missing and never s
 test('simple mode: no account balances, so one entered joint cash figure gives an illustrative line', () => {
   const ds = small();
   // Money in − money out = −30,000 a month; moves to savings stay inside joint cash.
-  const settings = { dials: { p1: 200000, p2: 0, card: 150000, bank: 80000, savings: 25000 } };
+  const settings = { dials: { p1: 200000, p2: 0, essentials: 150000, flexible: 80000, savings: 25000 } };
   const r = run(ds, { plan: planWith({ jointCashCents: 500000, asOf: '2026-06-15' }), settings });
   assert.equal(r.balances.mode, 'simple');
   assert.equal(r.balances.simple, true);
@@ -203,7 +203,7 @@ test('a savings account with a balance but no export is worked back from the sav
   const txns = base.concat([xfer('2026-03-20', -10000), xfer('2026-04-20', -10000), xfer('2026-04-25', 4000), xfer('2026-05-20', -10000)]);
   const ds = dataset(txns, { from: '2026-03-01', to: '2026-05-31', withSavings: true, savingsCoverage: [] });
   const plan = planWith({ accounts: { chk: 350000, sav: 80000 }, accountsAsOf: '2026-05-31', accountDates: { sav: '2026-06-10' } });
-  const r = run(ds, { plan, settings: { dials: { p1: 200000, p2: 0, card: 150000, bank: 95000, savings: 6000 } } });
+  const r = run(ds, { plan, settings: { dials: { p1: 200000, p2: 0, essentials: 150000, flexible: 95000, savings: 6000 } } });
   const sav = account(r, 'sav');
   assert.deepEqual(sav.mirroredFrom, { id: 'chk', name: 'Test checking' });
   assert.deepEqual(sav.known, { from: '2026-02-28', to: '2026-06-10' }, 'the checking export’s coverage, up to the balance date');
@@ -263,7 +263,7 @@ function quarter({ to = '2026-09-30', savings = 'covered' } = {}) {
   return dataset(txns, { from: '2026-06-01', to, withSavings: true, savingsCoverage: savings === 'covered' ? undefined : [] });
 }
 // Plan: checking −20,000 a month (2,100 in; 1,200 card, 1,000 bank, 100 to savings); savings +10,000.
-const QUARTER_DIALS = { dials: { p1: 210000, p2: 0, card: 120000, bank: 100000, savings: 10000 } };
+const QUARTER_DIALS = { dials: { p1: 210000, p2: 0, essentials: 120000, flexible: 100000, savings: 10000 } };
 const statuses = r => r.balances.accounts.flatMap(a => a.points.map(p => p.status)).concat(r.balances.combined.points.map(p => p.status));
 
 test('regression: balances dated 2 Oct after an export ending 30 Sep — every earlier point is assumed, not history', () => {
@@ -285,8 +285,8 @@ test('regression: balances dated 2 Oct after an export ending 30 Sep — every e
   });
   assert.equal(r.balances.assumed.days, 2);
   // The entered balances are kept exactly, at their own date…
-  assert.deepEqual(account(r, 'chk').anchor, { date: '2026-10-02', cents: 412000, source: 'entered' });
-  assert.deepEqual(account(r, 'sav').anchor, { date: '2026-10-02', cents: 95500, source: 'entered' });
+  assert.deepEqual(account(r, 'chk').anchor, { date: '2026-10-02', cents: 412000, source: 'entered', label: 'Entered by you, Oct 2, 2026' });
+  assert.deepEqual(account(r, 'sav').anchor, { date: '2026-10-02', cents: 95500, source: 'entered', label: 'Entered by you, Oct 2, 2026' });
   // …and October starts from them: entered + plan net × 29/31, whatever the gap.
   const oct = id => point(account(r, id), '2026-10');
   assert.deepEqual([oct('chk').cents, oct('chk').status], [412000 + E.money.divide(-20000 * 29, 31), 'projected']);
@@ -490,17 +490,19 @@ test('baseline window: 3, 12 (all there are) and "all" complete months, named in
   assert.equal(all.baseline.count, 9);
   assert.equal(all.baseline.start, '2025-10');
   assert.equal(all.baseline.end, '2026-06');
-  assert.equal(all.dialsByKey.card.basis.split(';')[0], 'Average of all 9 complete months, Oct 2025–Jun 2026');
+  assert.equal(all.dialsByKey.essentials.basis.split(';')[0], 'Average of all 9 complete months, Oct 2025–Jun 2026');
   const twelve = run(ds, { settings: { baselineMonths: 12 }, today: '2026-07-03' });
   assert.equal(twelve.baseline.count, 9);
-  assert.match(twelve.dialsByKey.bank.basis, /^Average of Oct 2025–Jun 2026, 9 months \(all there are\)/);
+  assert.match(twelve.dialsByKey.essentials.basis, /^Average of Oct 2025–Jun 2026, 9 months \(all there are\)/);
   const three = run(ds, { settings: { baselineMonths: 3 }, today: '2026-07-03' });
   assert.deepEqual(three.baseline.months, ['2026-04', '2026-05', '2026-06']);
   // No pay saved in Budget here: the person dials stand in with the deposit average, labelled as such.
   assert.equal(three.dialsByKey.p2.basis, 'Average of Apr 2026–Jun 2026 deposits, 3 months — not a confirmed setting');
-  // Both bank bills are stable (monthly, within 10%): each counts at its latest charge.
-  assert.equal(three.dialsByKey.bank.baselineCents, 145000 + (8800 + 8 * 210));
-  assert.match(three.dialsByKey.bank.basis, /; regular bills at their latest amount$/);
+  // Both bank bills are essentials and stable (monthly, within 10%): each counts at its latest charge,
+  // and they are the bank-paid part of the essentials dial.
+  assert.equal(three.dialsByKey.essentials.bankCents, 145000 + (8800 + 8 * 210));
+  assert.equal(three.dialsByKey.flexible.bankCents, 0, 'everything flexible here is on the card');
+  assert.match(three.dialsByKey.essentials.basis, /; regular bills at their latest amount$/);
 });
 
 test('drill-down: categories add up to the dial and places to their category; unticking a regular place lowers the dial by exactly its amount', () => {
@@ -508,108 +510,132 @@ test('drill-down: categories add up to the dial and places to their category; un
   let state = E.state.defaults(null, ds);
   const build = st => T.build({ txns: L.applyEdits(ds, st.ledgerEdits), dataset: ds, plan: Object.assign({}, st.plan, { people: PEOPLE }), settings: st.ui.plan, today: '2026-07-03' });
   const r = build(state);
-  const card = r.dialsByKey.card;
-  const cats = card.drill.rows.filter(x => x.level === 1);
-  assert.equal(card.baselineCents, cats.reduce((s, c) => s + c.defaultCents, 0), 'dial baseline = Σ categories as they stand by default');
-  assert.equal(card.baselineCents, cats.reduce((s, c) => s + c.planCents, 0));
+  const flex = r.dialsByKey.flexible;
+  const cats = flex.drill.rows.filter(x => x.level === 1);
+  assert.equal(flex.drill.kind, 'categories');
+  assert.equal(flex.baselineCents, cats.reduce((s, c) => s + c.defaultCents, 0), 'dial baseline = Σ categories as they stand by default');
+  assert.equal(flex.baselineCents, cats.reduce((s, c) => s + c.planCents, 0));
   for (const c of cats) {
-    const children = card.drill.rows.filter(x => x.parent === c.id);
+    const children = flex.drill.rows.filter(x => x.parent === c.id);
     assert.equal(c.avgCents, children.reduce((s, k) => s + k.avgCents, 0), c.label + ' average');
     assert.equal(c.defaultCents, children.reduce((s, k) => s + k.defaultCents, 0), c.label + ' default');
   }
-  assert.deepEqual(cats.map(c => c.label), ['Groceries', 'Dining & takeout', 'Subscriptions', 'Other'], 'the two tiny categories are grouped');
+  assert.deepEqual(cats.map(c => c.label), ['Dining & takeout', 'Subscriptions', 'Other'], 'the two tiny categories are grouped');
   assert.deepEqual(cats.find(c => c.label === 'Other').members.sort(), ['Gifts & donations', 'Hobbies']);
-  const lumen = card.drill.rows.find(x => x.label === 'Lumen Streaming');
+  assert.equal(cats.find(c => c.label === 'Other').groupKey, null, 'the grouped row is moved per member');
+  assert.deepEqual([cats[0].groupKey, cats[0].groupSource], ['Dining & takeout', 'taxonomy']);
+  const lumen = flex.drill.rows.find(x => x.label === 'Lumen Streaming');
   assert.deepEqual([lumen.kind, lumen.level, lumen.regular, lumen.avgCents, lumen.months, lumen.txnCount], ['merchant', 2, true, 2599, 9, 9]);
   assert.deepEqual([lumen.stable, lumen.latestCents, lumen.latestDate, lumen.seenMonths, lumen.ofMonths, lumen.defaultCents], [true, 2599, '2026-06-08', 9, 9, 2599]);
-  assert.match(lumen.id, /^card-m-[0-9a-z]+$/);
+  assert.deepEqual([lumen.group, lumen.paidBy, lumen.cardShare, lumen.pattern, lumen.cardCents, lumen.bankCents], ['flexible', 'card', 1, 'bill', 2599, 0]);
+  assert.match(lumen.id, /^flexible-m-[0-9a-z]+$/);
   // Places seen in most months get their own row (Pine Cafe: 6 of 9); the rest is one row.
-  const kids = label => card.drill.rows.filter(x => x.parent === cats.find(c => c.label === label).id).map(x => [x.kind, x.label]);
+  const kids = label => flex.drill.rows.filter(x => x.parent === cats.find(c => c.label === label).id).map(x => [x.kind, x.label]);
   assert.deepEqual(kids('Dining & takeout'), [['merchant', 'Tidewater Diner'], ['merchant', 'Pine Cafe']]);
   assert.deepEqual(kids('Other'), [['rest', 'Everything in Other']]);
   // Rest rows carry the same fields; there is no single latest charge for many places.
-  const otherRest = card.drill.rows.find(x => x.kind === 'rest' && x.category === 'Other');
+  const otherRest = flex.drill.rows.find(x => x.kind === 'rest' && x.category === 'Other');
   assert.deepEqual([otherRest.latestCents, otherRest.latestDate, otherRest.stable, otherRest.seenMonths, otherRest.ofMonths, otherRest.defaultCents], [null, null, false, 4, 9, otherRest.avgCents]);
+  assert.equal(otherRest.pattern, 'occasional', 'seen in 4 of 9 months');
   // Untick the streaming subscription.
   state = T.setRow(state, lumen.id, { included: false });
   assert.deepEqual(state.ui.plan.rows, { [lumen.id]: { included: false } });
   const r2 = build(state);
-  const card2 = r2.dialsByKey.card;
-  assert.equal(card2.source, 'rows');
-  assert.equal(card2.baselineCents, card.baselineCents, 'the baseline itself is unchanged');
-  assert.equal(card2.planCents, card.baselineCents - 2599);
-  const included = card2.drill.rows.filter(x => x.level === 1 && x.included);
-  assert.equal(card2.planCents, included.reduce((s, c) => s + c.planCents, 0), 'dial = Σ included categories');
-  const subs = card2.drill.rows.find(x => x.label === 'Subscriptions');
-  assert.equal(subs.planCents, card2.drill.rows.filter(x => x.parent === subs.id && x.included).reduce((s, k) => s + k.planCents, 0));
-  assert.equal(r2.plan.out.card, card2.planCents);
-  assert.equal(r2.months.find(m => m.month === '2026-08').out.card, card2.planCents, 'plan months use it');
+  const flex2 = r2.dialsByKey.flexible;
+  assert.equal(flex2.source, 'rows');
+  assert.equal(flex2.baselineCents, flex.baselineCents, 'the baseline itself is unchanged');
+  assert.equal(flex2.planCents, flex.baselineCents - 2599);
+  const included = flex2.drill.rows.filter(x => x.level === 1 && x.included);
+  assert.equal(flex2.planCents, included.reduce((s, c) => s + c.planCents, 0), 'dial = Σ included categories');
+  const subs = flex2.drill.rows.find(x => x.label === 'Subscriptions');
+  assert.equal(subs.planCents, flex2.drill.rows.filter(x => x.parent === subs.id && x.included).reduce((s, k) => s + k.planCents, 0));
+  assert.equal(r2.plan.out.flexible, flex2.planCents);
+  assert.equal(r2.plan.out.card, r.plan.out.card - 2599, 'the derived card total follows the row');
+  assert.equal(r2.months.find(m => m.month === '2026-08').out.flexible, flex2.planCents, 'plan months use it');
   assert.equal(r2.months.find(m => m.month === '2026-05').out.card, r.months.find(m => m.month === '2026-05').out.card, 'history is unchanged');
   // An amount on a row, then ticking it back: only the amount remains.
   state = T.setRow(state, lumen.id, { cents: 999 });
   state = T.setRow(state, lumen.id, { included: true });
   assert.deepEqual(state.ui.plan.rows, { [lumen.id]: { cents: 999 } });
-  assert.equal(build(state).dialsByKey.card.planCents, card.baselineCents - 2599 + 999);
+  assert.equal(build(state).dialsByKey.flexible.planCents, flex.baselineCents - 2599 + 999);
   // Ids are stable from one build to the next.
-  assert.deepEqual(build(state).dialsByKey.card.drill.rows.map(x => x.id), card.drill.rows.map(x => x.id));
+  assert.deepEqual(build(state).dialsByKey.flexible.drill.rows.map(x => x.id), flex.drill.rows.map(x => x.id));
 });
 
 test('a dial set directly wins over row changes and the baseline; clearing it falls back in that order', () => {
   const ds = household();
   let state = E.state.defaults(null, ds);
   const build = st => T.build({ txns: L.applyEdits(ds, st.ledgerEdits), dataset: ds, plan: Object.assign({}, st.plan, { people: PEOPLE }), settings: st.ui.plan, today: '2026-07-03' });
-  const base = build(state).dialsByKey.card;
+  const base = build(state).dialsByKey.essentials;
   const grocer = base.drill.rows.find(x => x.label === 'Harbor Grocer');
   state = T.setRow(state, grocer.id, { cents: 30000 });
-  state = T.setDial(state, 'card', 123456);
+  state = T.setDial(state, 'essentials', 123456);
   state = T.setDial(state, 'savings', -20001);
   let r = build(state);
-  assert.deepEqual([r.dialsByKey.card.source, r.dialsByKey.card.planCents], ['direct', 123456]);
+  assert.deepEqual([r.dialsByKey.essentials.source, r.dialsByKey.essentials.planCents], ['direct', 123456]);
   assert.deepEqual([r.dialsByKey.savings.source, r.dialsByKey.savings.planCents], ['direct', -20001], 'negative: drawing savings down');
   assert.equal(r.plan.savings, -20001);
   assert.equal(r.plan.net, r.plan.in.total - r.plan.out.total + 20001);
+  assert.deepEqual([r.plan.fromSavings, r.plan.toSavings], [20001, 0]);
   assert.equal(r.changed, true);
-  state = T.setDial(state, 'card', null);
+  // A direct amount still splits into card and bank by how the group was paid.
+  const ess = r.dialsByKey.essentials;
+  assert.equal(ess.cardCents, Math.round(123456 * ess.cardShare));
+  assert.equal(ess.cardCents + ess.bankCents, 123456);
+  assert.throws(() => T.setDial(state, 'card', 1000), err => err instanceof E.ValidationError && /worked out from essentials, flexible and irregular/.test(err.message), 'card is not a dial any more');
+  state = T.setDial(state, 'essentials', null);
   r = build(state);
-  assert.equal(r.dialsByKey.card.source, 'rows');
-  assert.equal(r.dialsByKey.card.planCents, base.baselineCents - grocer.avgCents + 30000);
-  state = T.resetDial(state, 'card');
+  assert.equal(r.dialsByKey.essentials.source, 'rows');
+  assert.equal(r.dialsByKey.essentials.planCents, base.baselineCents - grocer.avgCents + 30000);
+  state = T.resetDial(state, 'essentials');
   r = build(state);
-  assert.deepEqual([r.dialsByKey.card.source, r.dialsByKey.card.planCents], ['baseline', base.baselineCents]);
+  assert.deepEqual([r.dialsByKey.essentials.source, r.dialsByKey.essentials.planCents], ['baseline', base.baselineCents]);
   assert.deepEqual(state.ui.plan.rows, {});
   state = T.resetPlan(state);
   assert.deepEqual(state.ui.plan.dials, {});
   assert.equal(build(state).changed, false);
 });
 
-test('one-time items: left out of the dial by default, listed in full, and counted again by a planning-baseline edit', () => {
+test('one-time items: in the irregular allowance by default (one-time costs ÷ months), listed in full, and counted as regular by a planning-baseline edit', () => {
   const big = spend('card', '2026-04-18', 129900, 'Summit Appliance', 'Electronics');
   const ds = household({ extra: [big] });
   const r = run(ds, { today: '2026-07-03' });
   const item = r.baseline.oneTime.find(o => o.id === big.id);
-  assert.deepEqual(item, { id: big.id, date: '2026-04-18', month: '2026-04', merchant: 'Summit Appliance', description: 'SUMMIT APPLIANCE 7731', accountLabel: 'Test card', role: 'card', dialKey: 'card', cents: 129900, auto: true });
+  assert.deepEqual(item, { id: big.id, date: '2026-04-18', month: '2026-04', merchant: 'Summit Appliance', description: 'SUMMIT APPLIANCE 7731', accountLabel: 'Test card', role: 'card', dialKey: 'irregular', cents: 129900, auto: true });
   assert.equal(r.baseline.oneTimeCents, 129900);
-  assert.ok(!r.dialsByKey.card.drill.rows.some(x => x.category === 'Electronics'), 'kept out of the rows too');
-  assert.match(r.dialsByKey.card.basis, /1 one-time item left out/);
+  assert.ok(!r.dialsByKey.flexible.drill.rows.some(x => x.category === 'Electronics'), 'kept out of the category rows');
+  const irr = r.dialsByKey.irregular;
+  assert.equal(irr.drill.kind, 'items');
+  assert.deepEqual(irr.drill.rows.map(i => [i.id, i.label, i.date, i.cents, i.monthlyCents, i.included, i.auto]), [[big.id, 'Summit Appliance', '2026-04-18', 129900, E.money.divide(129900, 9), true, true]]);
+  assert.equal(irr.baselineCents, E.money.divide(129900, 9), 'one-time costs ÷ months');
+  assert.equal(irr.planCents, irr.baselineCents, 'in the plan: nothing is left out automatically');
+  assert.equal(irr.basis, 'One-time costs over Oct 2025–Jun 2026 spread per month (1 item, $1,299.00) — electronics');
+  assert.equal(r.plan.out.irregular, irr.planCents);
   const april = r.months.find(m => m.month === '2026-04');
   assert.deepEqual(april.oneOffs.map(o => o.id), [big.id]);
   assert.equal(april.oneOffCents, 129900);
-  // "Count it": the household's edit wins.
+  assert.equal(april.out.irregular, 129900, 'the actual month shows it as irregular');
+  assert.equal(april.out.essentials + april.out.flexible + april.out.irregular, april.out.card + april.out.bank);
+  // "Count it as regular": the household's edit moves it into its category.
   const include = { [big.id]: E.review.editRecord(null, 'planningBaseline', 'include', 'A planned replacement cycle') };
   const r2 = run(ds, { edits: include, today: '2026-07-03' });
   assert.ok(!r2.baseline.oneTime.some(o => o.id === big.id));
+  assert.ok(!r2.dialsByKey.irregular.drill.rows.some(i => i.id === big.id), 'no longer listed as one-time');
   assert.deepEqual(r2.baseline.keptIn.map(o => o.id), [big.id]);
-  assert.equal(r2.dialsByKey.card.baselineCents, r.dialsByKey.card.baselineCents + E.money.divide(129900, 9));
+  assert.equal(r2.dialsByKey.flexible.baselineCents, r.dialsByKey.flexible.baselineCents + E.money.divide(129900, 9));
+  assert.equal(r2.dialsByKey.irregular.baselineCents, 0);
   assert.equal(r2.months.find(m => m.month === '2026-04').out.card, april.out.card, 'actual months always count it');
-  // Leaving out an ordinary purchase by hand.
+  // Leaving out an ordinary purchase by hand makes it a one-time cost: in the allowance, not the category.
   const grocery = ds.transactions.find(t => t.merchant === 'Harbor Grocer' && t.date === '2026-05-10');
   const exclude = Object.assign({}, include, { [grocery.id]: E.review.editRecord(null, 'planningBaseline', 'exclude', 'Party supplies') });
   const r3 = run(ds, { edits: exclude, today: '2026-07-03' });
   const manual = r3.baseline.oneTime.find(o => o.id === grocery.id);
   assert.equal(manual.auto, false);
   assert.equal(manual.cents, -grocery.amountCents);
+  assert.equal(r3.dialsByKey.irregular.drill.rows.find(i => i.id === grocery.id).auto, false);
+  assert.equal(r3.dialsByKey.irregular.baselineCents, E.money.divide(-grocery.amountCents, 9));
   const groceries = rows => rows.find(x => x.level === 1 && x.label === 'Groceries').avgCents;
-  assert.equal(groceries(r3.dialsByKey.card.drill.rows), E.money.divide(groceries(r2.dialsByKey.card.drill.rows) * 9 + grocery.amountCents, 9));
+  assert.equal(groceries(r3.dialsByKey.essentials.drill.rows), E.money.divide(groceries(r2.dialsByKey.essentials.drill.rows) * 9 + grocery.amountCents, 9));
 });
 
 test('the months: actual before planStart, partial for a partly covered month, plan after; a 5-year horizon has 60 plan months', () => {
@@ -645,6 +671,7 @@ test('the months: actual before planStart, partial for a partly covered month, p
   assert.notEqual(combined[combined.length - 1].cents, null);
 });
 
+
 test('stable regular bills plan at their latest charge; the average is kept beside it', () => {
   // A mortgage due on the 1st, paid a day early once: the July payment landed on 30 June, before
   // the 12-month window, so the window holds 11 payments and averages to 11/12 of the bill.
@@ -659,28 +686,30 @@ test('stable regular bills plan at their latest charge; the average is kept besi
   E.months.range('2025-07', '2026-06').forEach(m => [2, 9, 16, 23].forEach(d => txns.push(spend('card', `${m}-${String(d).padStart(2, '0')}`, 7250, 'Harbor Grocer', 'Groceries'))));
   const ds = dataset(txns, { from: '2025-06-01', to: '2026-06-30' });
   const r = run(ds, { today: '2026-07-03' });
-  const bank = r.dialsByKey.bank;
-  const loan = bank.drill.rows.find(x => x.label === 'Larkspur Home Lending');
+  const ess = r.dialsByKey.essentials;
+  const loan = ess.drill.rows.find(x => x.label === 'Larkspur Home Lending');
   assert.equal(loan.avgCents, E.money.divide(11 * 152340, 12), 'the average is 11/12 of the bill');
   assert.deepEqual([loan.stable, loan.latestCents, loan.latestDate, loan.seenMonths, loan.ofMonths], [true, 152340, '2026-06-01', 11, 12]);
-  assert.deepEqual([loan.defaultCents, loan.planCents], [152340, 152340]);
-  const power = bank.drill.rows.find(x => x.label === 'Brightwater Energy');
-  assert.deepEqual([power.stable, power.latestCents, power.latestDate, power.seenMonths, power.ofMonths], [false, 9000, '2026-06-14', 12, 12]);
+  assert.deepEqual([loan.defaultCents, loan.planCents, loan.pattern, loan.paidBy], [152340, 152340, 'bill', 'bank']);
+  const power = ess.drill.rows.find(x => x.label === 'Brightwater Energy');
+  assert.deepEqual([power.stable, power.latestCents, power.latestDate, power.seenMonths, power.ofMonths, power.pattern], [false, 9000, '2026-06-14', 12, 12, 'everyday']);
   assert.equal(power.planCents, power.avgCents);
-  assert.equal(bank.baselineCents, 152340 + power.avgCents, 'the dial baseline follows the rows');
-  assert.equal(bank.planCents, bank.baselineCents);
-  assert.equal(bank.source, 'baseline');
-  assert.match(bank.basis, /; regular bills at their latest amount$/);
-  const grocer = r.dialsByKey.card.drill.rows.find(x => x.label === 'Harbor Grocer');
-  assert.deepEqual([grocer.regular, grocer.stable, grocer.planCents], [true, false, 4 * 7250]);
-  assert.doesNotMatch(r.dialsByKey.card.basis, /latest amount/);
+  const grocer = ess.drill.rows.find(x => x.label === 'Harbor Grocer');
+  assert.deepEqual([grocer.regular, grocer.stable, grocer.planCents, grocer.pattern, grocer.paidBy], [true, false, 4 * 7250, 'everyday', 'card']);
+  assert.equal(ess.baselineCents, 152340 + power.avgCents + 4 * 7250, 'the dial baseline follows the rows');
+  assert.deepEqual([ess.bankCents, ess.cardCents], [152340 + power.avgCents, 4 * 7250], 'card and bank worked out from the rows');
+  assert.equal(ess.planCents, ess.baselineCents);
+  assert.equal(ess.source, 'baseline');
+  assert.match(ess.basis, /; regular bills at their latest amount$/);
+  assert.equal(r.dialsByKey.flexible.baselineCents, 0, 'nothing flexible here');
   // A row amount the household set still wins over the latest charge.
   const changed = run(ds, { settings: { rows: { [loan.id]: { cents: 150000 } } }, today: '2026-07-03' });
-  assert.equal(changed.dialsByKey.bank.drill.rows.find(x => x.id === loan.id).planCents, 150000);
-  assert.equal(changed.dialsByKey.bank.planCents, 150000 + power.avgCents);
+  assert.equal(changed.dialsByKey.essentials.drill.rows.find(x => x.id === loan.id).planCents, 150000);
+  assert.equal(changed.dialsByKey.essentials.planCents, 150000 + power.avgCents + 4 * 7250);
+  assert.equal(changed.plan.out.bank, 150000 + power.avgCents);
 });
 
-test('state: the earlier Home settings become ui.plan once, and the plan screen reads them', () => {
+test('state: the earlier Home settings become ui.plan once, and the plan screen reads them (card and bank amounts cannot be carried over)', () => {
   const ds = household();
   const raw = JSON.parse(JSON.stringify(E.state.defaults(null, ds)));
   delete raw.ui.plan;
@@ -689,8 +718,11 @@ test('state: the earlier Home settings become ui.plan once, and the plan screen 
   const twice = E.state.sanitize(once.state, null, ds);
   assert.deepEqual(twice.state, once.state);
   assert.equal(once.state.ui.home, undefined);
+  assert.deepEqual(once.state.ui.plan.dials, { p1: 410000, savings: -7525 });
   const r = T.build({ txns: L.applyEdits(ds, {}), dataset: ds, plan: Object.assign({}, once.state.plan, { people: PEOPLE }), settings: once.state.ui.plan, today: '2026-07-03' });
-  assert.deepEqual(['p1', 'card', 'savings'].map(k => [r.dialsByKey[k].source, r.dialsByKey[k].planCents]), [['direct', 410000], ['direct', 88000], ['direct', -7525]]);
+  assert.deepEqual(['p1', 'savings', 'essentials', 'flexible'].map(k => [r.dialsByKey[k].source, r.dialsByKey[k].planCents]),
+    [['direct', 410000], ['direct', -7525], ['baseline', r.dialsByKey.essentials.baselineCents], ['baseline', r.dialsByKey.flexible.baselineCents]]);
+  assert.equal(r.dialsByKey.card, undefined, 'card is not a dial');
   assert.equal(r.baseline.count, 3);
   assert.equal(r.horizon, 24);
 });
@@ -699,8 +731,481 @@ test('build needs today and the data set; settings fall back to the defaults', (
   const ds = small();
   assert.throws(() => T.build({ dataset: ds, plan: planWith() }), err => err instanceof E.ValidationError && err.field === 'today');
   assert.throws(() => T.build({ today: '2026-06-12' }), err => err instanceof E.ValidationError && err.field === 'dataset');
-  assert.deepEqual(T.settings({ horizon: 36, baselineMonths: 'all', dials: { card: 1.5, bank: -4 }, rows: { a: { included: false, x: 1 }, b: {} } }),
-    { baselineMonths: 'all', horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: { bank: -4 }, rows: { a: { included: false } }, hidden: null });
+  assert.deepEqual(T.settings({ horizon: 36, baselineMonths: 'all', dials: { essentials: 1.5, flexible: -4 }, rows: { a: { included: false, x: 1 }, b: {} },
+    groups: { Pets: 'essentials', 'merchant:Bayside Club': 'flexible', Travel: 'sometimes' }, irregularOff: { t1: true, t2: false }, trends: { series: ['card', 'card', 'nope', 'in-p2'], ma: 4 } }),
+  { baselineMonths: 'all', horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: { flexible: -4 }, rows: { a: { included: false } }, hidden: null,
+    groups: { Pets: 'essentials', 'merchant:Bayside Club': 'flexible' }, irregularOff: { t1: true }, trends: { series: ['card', 'in-p2'], ma: 3, trend: true } });
   assert.equal(T.settings(undefined).hidden, null, 'never chosen');
+  assert.deepEqual(T.settings(undefined).trends, { series: ['card'], ma: 3, trend: true });
+  assert.equal(T.settings({ mode: 'trends' }).mode, 'trends');
   assert.deepEqual(T.settings({ hidden: [] }).hidden, [], 'an empty choice stays a choice');
+});
+
+// ------------------------------------------------------------------ essentials, flexible, irregular
+// A household with a warehouse club and an online shop in "Mixed retail", a vet (Pets) and insurance.
+function shops({ extra = [] } = {}) {
+  const txns = [];
+  E.months.range('2025-10', '2026-06').forEach((m, i) => {
+    const day = d => `${m}-${String(d).padStart(2, '0')}`;
+    txns.push(spend('chk', day(1), 145000, 'Westbrook Home Loans', 'Mortgage'));
+    txns.push(spend('chk', day(9), 12400, 'Pinecrest Mutual', 'Other insurance'));
+    txns.push(spend('card', day(5), 21000 + i * 100, 'Bayside Warehouse Club', 'Mixed retail'));
+    txns.push(spend('card', day(14), 6400 + (i % 3) * 900, 'Riverbend Online', 'Mixed retail'));
+    txns.push(spend('card', day(18), 3900 + (i % 2) * 1200, 'Maple Vet Clinic', 'Pets'));
+    txns.push(spend('card', day(22), 15500, 'Harbor Grocer', 'Groceries'));
+    txns.push(deposit(day(25), 400000, 'p1'));
+  });
+  return dataset(txns.concat(extra), { from: '2025-10-01', to: '2026-06-30' });
+}
+const totalSpending = r => r.dialsByKey.essentials.baselineCents + r.dialsByKey.flexible.baselineCents;
+
+test('spending groups follow the taxonomy: mortgage, insurance and groceries are essentials; shopping and pets are flexible', () => {
+  const r = run(shops(), { today: '2026-07-03' });
+  assert.deepEqual(r.groups.out, ['essentials', 'flexible', 'irregular', 'savings']);
+  const labels = key => r.dialsByKey[key].drill.rows.filter(x => x.level === 1).map(x => x.label).sort();
+  assert.deepEqual(labels('essentials'), ['Groceries', 'Mortgage', 'Other insurance']);
+  assert.deepEqual(labels('flexible'), ['Mixed retail', 'Pets']);
+  assert.ok(r.dialsByKey.essentials.drill.rows.every(x => x.group === 'essentials'));
+  assert.equal(E.categories.isEssential('Pets'), false);
+  assert.equal(E.categories.isEssential('Other insurance'), true);
+  for (const c of ['Mortgage', 'Gas & heating', 'Electric', 'Water & sewer', 'Internet & phone', 'Groceries', 'Fuel', 'Auto insurance', 'Home insurance', 'Medical & pharmacy', 'Dental', 'Vision', 'Auto maintenance', 'Debt payment']) assert.equal(E.categories.isEssential(c), true, c);
+  for (const c of ['Dining & takeout', 'Mixed retail', 'Entertainment', 'Subscriptions', 'Home improvement', 'Travel', 'Gifts & donations', 'Personal care', 'Pets']) assert.equal(E.categories.isEssential(c), false, c);
+});
+
+test('moving a category, or one place, between essentials and flexible: rows follow, a moved place gets its own row, and the totals still add up', () => {
+  const ds = shops();
+  let state = E.state.defaults(null, ds);
+  const build = st => T.build({ txns: L.applyEdits(ds, st.ledgerEdits), dataset: ds, plan: Object.assign({}, st.plan, { people: PEOPLE }), settings: st.ui.plan, today: '2026-07-03' });
+  const r0 = build(state);
+  const vet = r0.dialsByKey.flexible.drill.rows.find(x => x.label === 'Maple Vet Clinic');
+  state = T.setRow(state, vet.id, { cents: 5000 });
+  // Pets → essentials, with the timeline so the vet row's change follows it.
+  state = T.setGroup(state, 'Pets', 'essentials', build(state));
+  assert.deepEqual(state.ui.plan.groups, { Pets: 'essentials' });
+  const r1 = build(state);
+  const pets = r1.dialsByKey.essentials.drill.rows.find(x => x.level === 1 && x.label === 'Pets');
+  assert.deepEqual([pets.groupKey, pets.groupSource, pets.group], ['Pets', 'override', 'essentials']);
+  const vet1 = r1.dialsByKey.essentials.drill.rows.find(x => x.label === 'Maple Vet Clinic');
+  assert.match(vet1.id, /^essentials-m-/);
+  assert.deepEqual(vet1.override, { cents: 5000 }, 'the row change moved with it');
+  assert.deepEqual(Object.keys(state.ui.plan.rows), [vet1.id]);
+  assert.ok(!r1.dialsByKey.flexible.drill.rows.some(x => x.label === 'Pets'));
+  assert.equal(totalSpending(r1), totalSpending(r0), 'the same spending, grouped differently');
+  // One place: the warehouse club → essentials, while the online shop stays flexible.
+  state = T.setGroup(state, 'merchant:Bayside Warehouse Club', 'essentials');
+  const r2 = build(state);
+  const club = r2.dialsByKey.essentials.drill.rows.find(x => x.level === 1 && x.label === 'Bayside Warehouse Club');
+  assert.deepEqual([club.synthetic, club.merchant, club.groupKey, club.movedFrom, club.kind], [true, 'Bayside Warehouse Club', 'merchant:Bayside Warehouse Club', ['Mixed retail'], 'category']);
+  const clubKids = r2.dialsByKey.essentials.drill.rows.filter(x => x.parent === club.id);
+  assert.deepEqual(clubKids.map(k => [k.kind, k.label, k.synthetic]), [['merchant', 'Bayside Warehouse Club', true]]);
+  assert.equal(club.defaultCents, clubKids[0].defaultCents);
+  const mixed = r2.dialsByKey.flexible.drill.rows.find(x => x.level === 1 && x.label === 'Mixed retail');
+  assert.deepEqual(r2.dialsByKey.flexible.drill.rows.filter(x => x.parent === mixed.id).map(x => x.label), ['Riverbend Online']);
+  const mixed0 = r0.dialsByKey.flexible.drill.rows.find(x => x.level === 1 && x.label === 'Mixed retail');
+  assert.equal(mixed.avgCents + club.avgCents, mixed0.avgCents, 'the place left its category: nothing lost, nothing counted twice');
+  assert.equal(totalSpending(r2), totalSpending(r0));
+  assert.equal(r2.dialsByKey.essentials.planCents + r2.dialsByKey.flexible.planCents, r1.dialsByKey.essentials.planCents + r1.dialsByKey.flexible.planCents);
+  // Actual months split the same way, and still add up to card + bank.
+  const may = r2.months.find(m => m.month === '2026-05');
+  assert.equal(may.out.essentials + may.out.flexible + may.out.irregular, may.out.card + may.out.bank);
+  assert.equal(may.out.essentials, 145000 + 12400 + 15500 + (3900 + 1200) + (21000 + 7 * 100), 'mortgage, insurance, groceries, the vet and the club');
+  // Back to the default grouping.
+  state = T.setGroup(state, 'merchant:Bayside Warehouse Club', null);
+  assert.deepEqual(state.ui.plan.groups, { Pets: 'essentials' });
+  assert.throws(() => T.setGroup(state, 'Pets', 'sometimes'), err => err instanceof E.ValidationError);
+});
+
+test('pattern badges: bill (regular and stable), everyday (most months, not stable), occasional (the rest)', () => {
+  const r = run(household(), { today: '2026-07-03' });
+  const row = label => r.dialsByKey.essentials.drill.rows.concat(r.dialsByKey.flexible.drill.rows).find(x => x.label === label);
+  assert.deepEqual(['Westbrook Home Loans', 'Copperline Power', 'Lumen Streaming', 'Harbor Grocer', 'Everything in Other'].map(l => row(l).pattern), ['bill', 'bill', 'bill', 'everyday', 'occasional']);
+  assert.equal(row('Subscriptions').pattern, 'bill', 'a category whose rows are all bills');
+  assert.equal(row('Groceries').pattern, 'everyday');
+  assert.equal(row('Other').pattern, 'occasional');
+  assert.deepEqual([row('Mortgage').paidBy, row('Groceries').paidBy, row('Groceries').cardShare, row('Mortgage').cardShare], ['bank', 'card', 1, 0]);
+});
+
+test('irregular: the baseline is one-time costs ÷ months; one can be left out (and put back), and the dial says so', () => {
+  const tv = spend('card', '2026-01-18', 99000, 'Summit Appliance', 'Electronics');
+  const dentist = spend('chk', '2026-03-07', 162000, 'Brookside Dental Group', 'Dental');
+  const trip = spend('card', '2026-05-02', 84000, 'Coastline Air', 'Travel');
+  const ds = household({ extra: [tv, dentist, trip] });
+  let state = E.state.defaults(null, ds);
+  const build = st => T.build({ txns: L.applyEdits(ds, st.ledgerEdits), dataset: ds, plan: Object.assign({}, st.plan, { people: PEOPLE }), settings: st.ui.plan, today: '2026-07-03' });
+  const r = build(state);
+  const irr = r.dialsByKey.irregular;
+  assert.equal(irr.baselineCents, E.money.divide(99000 + 162000 + 84000, 9));
+  assert.deepEqual(irr.drill.rows.map(i => i.id), [dentist.id, tv.id, trip.id], 'biggest first');
+  assert.equal(irr.basis, 'One-time costs over Oct 2025–Jun 2026 spread per month (3 items, $3,450.00) — dental work, electronics, trips');
+  assert.deepEqual([irr.cardCents, irr.bankCents], [E.money.divide(99000 + 84000, 9), irr.planCents - E.money.divide(99000 + 84000, 9)]);
+  assert.equal(r.plan.out.total, r.plan.out.essentials + r.plan.out.flexible + irr.planCents + r.plan.out.other);
+  // Leave the dentist out.
+  state = T.setIrregular(state, dentist.id, false);
+  assert.deepEqual(state.ui.plan.irregularOff, { [dentist.id]: true });
+  const r2 = build(state);
+  const irr2 = r2.dialsByKey.irregular;
+  assert.deepEqual([irr2.source, irr2.baselineCents, irr2.planCents], ['rows', irr.baselineCents, E.money.divide(99000 + 84000, 9)]);
+  assert.equal(irr2.drill.rows.find(i => i.id === dentist.id).included, false, 'still listed, marked left out');
+  assert.match(irr2.basis, /; 1 left out by you$/);
+  assert.equal(r2.changed, true);
+  // Back in, then reset: nothing left out.
+  assert.deepEqual(T.setIrregular(state, dentist.id, true).ui.plan.irregularOff, {});
+  assert.deepEqual(T.resetDial(state, 'irregular').ui.plan.irregularOff, {});
+  assert.deepEqual(T.resetPlan(state).ui.plan.irregularOff, {});
+  // A left-out id that is no longer a one-time cost is reported, not applied.
+  const stale = build(T.setIrregular(state, 'tl-gone', false));
+  assert.deepEqual(stale.dialsByKey.irregular.drill.orphanIds, ['tl-gone']);
+  // Nothing at all: the dial is still there, at $0.
+  const none = run(household(), { today: '2026-07-03' }).dialsByKey.irregular;
+  assert.deepEqual([none.baselineCents, none.planCents, none.basis], [0, 0, 'No one-time costs over Oct 2025–Jun 2026']);
+});
+
+test('card and bank are derived: on the same data they equal the earlier card and bank dial math', () => {
+  const ds = household();
+  const r = run(ds, { today: '2026-07-03' });
+  // The earlier dials, worked out by hand: card = the grocer's average + the stable places at their
+  // latest charge (streaming, Pine Cafe, Tidewater Diner) + the tiny categories' average; bank = the
+  // two stable bills at their latest charge.
+  let grocer = 0;
+  E.months.range('2025-10', '2026-06').forEach((m, i) => [0, 1, 2, 3].forEach(k => { grocer += 8150 + ((i * 37 + k * 113) % 2000); }));
+  const tiny = (640 + 1) + (640 + 5) + (410 + 3) + (410 + 7);
+  const oldCard = E.money.divide(grocer, 9) + 2599 + (2475 + 7 * 31) + (3120 + 8 * 17) + E.money.divide(tiny, 9);
+  const oldBank = 145000 + (8800 + 8 * 210);
+  assert.equal(r.plan.out.card, oldCard);
+  assert.equal(r.plan.out.bank, oldBank);
+  assert.equal(r.plan.out.card + r.plan.out.bank, r.plan.out.essentials + r.plan.out.flexible + r.plan.out.irregular);
+  assert.deepEqual(['essentials', 'flexible', 'irregular'].map(k => r.dialsByKey[k].cardCents + r.dialsByKey[k].bankCents), ['essentials', 'flexible', 'irregular'].map(k => r.dialsByKey[k].planCents));
+  // Actual months keep the card and bank amounts that happened.
+  const may = r.months.find(m => m.month === '2026-05');
+  const mayTxns = ds.transactions.filter(t => t.date.startsWith('2026-05') && t.kind === 'spend');
+  assert.equal(may.out.card, mayTxns.filter(t => t.accountId === 'card').reduce((s, t) => s - t.amountCents, 0));
+  assert.equal(may.out.bank, mayTxns.filter(t => t.accountId === 'chk').reduce((s, t) => s - t.amountCents, 0));
+});
+
+test('headline numbers: combinedChange = money in − money out (savings moves net to zero); net is what is left in checking', () => {
+  const ds = small({ withSavings: true });
+  const r = run(ds, { settings: { dials: { p1: 200000, p2: 0, essentials: 120000, flexible: 30000, savings: 25000 } } });
+  assert.equal(r.plan.combinedChange, r.plan.in.total - r.plan.out.total);
+  assert.equal(r.plan.combinedChange, 200000 - 150000);
+  assert.equal(r.plan.net, r.plan.combinedChange - 25000);
+  assert.deepEqual([r.plan.toSavings, r.plan.fromSavings], [25000, 0]);
+  for (const m of r.months) {
+    if (m.in.total === null) { assert.equal(m.combinedChange, null, m.month); continue; }
+    assert.equal(m.combinedChange, m.in.total - m.out.total, m.month);
+    assert.equal(m.net, m.combinedChange - m.savings, m.month);
+  }
+  const april = r.months.find(m => m.month === '2026-04');
+  assert.equal(april.combinedChange, 200000 - 120000 - 16125, 'actual: pay − mortgage − groceries; the transfer to savings stays inside joint cash');
+  const draw = run(ds, { settings: { dials: { savings: -40000 } } });
+  assert.deepEqual([draw.plan.toSavings, draw.plan.fromSavings], [0, 40000]);
+});
+
+test('the baseline ghost: only when the plan is changed — one plan month at baseline dials, and the combined line it would give', () => {
+  const ds = small({ withSavings: true });
+  const plan = planWith({ accounts: { chk: 350000, sav: 90000 }, accountsAsOf: '2026-05-31' });
+  const same = run(ds, { plan });
+  assert.equal(same.changed, false);
+  assert.equal(same.baseline.plan, null);
+  assert.ok(same.months.every(m => m.baseline === null));
+  assert.equal(same.balances.combined.baselinePoints, null);
+  const changed = run(ds, { plan, settings: { dials: { flexible: 50000 } } });
+  assert.equal(changed.changed, true);
+  assert.deepEqual(changed.changedBy, { dials: true, changes: false });
+  assert.deepEqual(changed.baseline.plan, same.plan, 'the ghost is the plan with nothing changed');
+  const plans = changed.months.filter(m => m.month >= changed.planStart);
+  assert.ok(plans.every(m => m.baseline && m.baseline.in === same.plan.in.total && m.baseline.out === same.plan.out.total && m.baseline.net === same.plan.net && m.baseline.savings === same.plan.savings && m.baseline.combinedChange === same.plan.combinedChange));
+  assert.ok(changed.months.filter(m => m.month < changed.planStart).every(m => m.baseline === null));
+  const ghost = changed.balances.combined.baselinePoints;
+  assert.equal(ghost.length, changed.balances.combined.points.length);
+  changed.balances.combined.points.forEach((p, i) => {
+    if (p.status === 'projected') assert.equal(ghost[i], same.balances.combined.points[i].cents, p.month);
+    else assert.equal(ghost[i], null, 'history has no ghost: ' + p.month);
+  });
+  assert.notDeepEqual(changed.balances.combined.points.map(p => p.cents), same.balances.combined.points.map(p => p.cents));
+});
+
+// ------------------------------------------------------------------ planned changes
+const change = (id, fields) => Object.assign({ id, label: id, kind: 'monthly', group: 'flexible', personId: null, startMonth: '2026-08', endMonth: null, cents: 10000, accepted: true, template: null, note: '' }, fields);
+
+test('planned changes: one-time in its month only, monthly through its end month, income to its person; unset and unaccepted ones are listed, not applied', () => {
+  const ds = small();
+  const plan = Object.assign(planWith(), { changes: [
+    change('roof', { kind: 'oneTime', group: 'irregular', startMonth: '2026-09', cents: 250000 }),
+    change('gym', { group: 'flexible', startMonth: '2026-08', endMonth: '2026-10', cents: 6000 }),
+    change('raise', { group: 'income', personId: 'p2', startMonth: '2026-06', cents: 30000 }),
+    change('side', { group: 'income', personId: null, startMonth: '2026-07', endMonth: '2026-07', cents: 5000 }),
+    change('saving', { group: 'savings', startMonth: '2026-12', cents: 20000 }),
+    change('leave', { group: 'income', personId: 'p1', startMonth: '2026-08', cents: null }),
+    change('maybe', { group: 'essentials', cents: 99999, accepted: false }),
+    change('old', { kind: 'oneTime', group: 'irregular', startMonth: '2026-03', cents: 1000 }),
+  ] });
+  const settings = { dials: { p1: 200000, p2: 0, essentials: 150000, flexible: 50000, savings: 0 } };
+  const r = run(ds, { plan, settings });
+  const at = m => r.months.find(x => x.month === m);
+  assert.equal(r.plan.combinedChange, 0, 'the plan itself (dials only) is unchanged');
+  assert.deepEqual(at('2026-07').changesApplied.map(a => a.id), ['raise', 'side']);
+  assert.deepEqual([at('2026-07').in.p2, at('2026-07').in.other, at('2026-07').in.total], [30000, r.plan.in.other + 5000, 200000 + 35000]);
+  assert.deepEqual(at('2026-08').changesApplied.map(a => a.id), ['gym', 'raise']);
+  assert.deepEqual(at('2026-08').changesApplied[0], { id: 'gym', label: 'gym', group: 'flexible', cents: 6000 });
+  assert.deepEqual([at('2026-08').out.flexible, at('2026-08').out.bank, at('2026-08').out.total], [56000, r.plan.out.bank + 6000, 206000]);
+  assert.equal(at('2026-09').out.irregular, r.plan.out.irregular + 250000, 'the one-time change in its month');
+  assert.equal(at('2026-10').out.irregular, r.plan.out.irregular, '…and only then');
+  assert.equal(at('2026-10').out.flexible, 56000, 'monthly through its end month');
+  assert.equal(at('2026-11').out.flexible, 50000, '…and not after');
+  assert.equal(at('2026-12').savings, 20000);
+  assert.equal(at('2026-12').net, at('2026-12').combinedChange - 20000);
+  assert.equal(at('2026-09').combinedChange, 30000 - 6000 - 250000);
+  assert.equal(at('2026-09').net, at('2026-09').in.total - at('2026-09').out.total - at('2026-09').savings);
+  assert.ok(r.months.every(m => !m.changesApplied.some(a => a.id === 'leave' || a.id === 'maybe' || a.id === 'old')), 'unknown, unaccepted and past changes are not applied');
+  assert.deepEqual(r.changes.unset, ['leave']);
+  assert.deepEqual(r.changes.list.map(c => [c.id, c.status]), [['roof', 'applied'], ['gym', 'applied'], ['raise', 'applied'], ['side', 'applied'], ['saving', 'applied'], ['leave', 'unset'], ['maybe', 'notAccepted'], ['old', 'outside']]);
+  assert.deepEqual([r.changes.list[1].monthsApplied, r.changes.list[1].appliedCents], [3, 18000]);
+  assert.equal(r.changes.applied, 5);
+  assert.equal(r.changes.totalOneTimeCents, 250000);
+  assert.equal(r.changes.monthlyNowCents, -30000, 'income counts against money out (first plan month: the raise)');
+  assert.equal(r.changed, true);
+  assert.deepEqual(r.changedBy, { dials: true, changes: true });
+  // The months before the plan are what happened.
+  assert.deepEqual(at('2026-05').changesApplied, []);
+});
+
+test('planned changes through state: add, edit, accept and remove; switching kind or group clears what no longer fits', () => {
+  const ds = small();
+  let st = E.state.defaults(null, ds);
+  assert.deepEqual(st.plan.changes, []);
+  st = T.addChange(st, { label: 'New car payment', kind: 'monthly', group: 'essentials', startMonth: '2026-09', endMonth: '2029-08', cents: 41000 });
+  const id = st.plan.changes[0].id;
+  assert.match(id, /^change-/);
+  assert.deepEqual(st.plan.changes[0], { id, label: 'New car payment', kind: 'monthly', group: 'essentials', personId: null, startMonth: '2026-09', endMonth: '2029-08', cents: 41000, accepted: false, template: null, note: '' });
+  st = T.acceptChanges(st, [id], true);
+  assert.equal(st.plan.changes[0].accepted, true);
+  st = T.setChange(st, id, { kind: 'oneTime' });
+  assert.deepEqual([st.plan.changes[0].kind, st.plan.changes[0].endMonth], ['oneTime', null], 'a one-time change has no end month');
+  st = T.setChange(st, id, { group: 'income', personId: 'p1', kind: 'monthly', cents: -50000 });
+  assert.deepEqual([st.plan.changes[0].group, st.plan.changes[0].personId, st.plan.changes[0].cents], ['income', 'p1', -50000], 'signed: a drop in income');
+  st = T.setChange(st, id, { group: 'flexible' });
+  assert.equal(st.plan.changes[0].personId, null, 'only income belongs to a person');
+  st = T.setChange(st, id, { cents: null });
+  assert.equal(st.plan.changes[0].cents, null, 'unknown stays unknown');
+  assert.throws(() => T.setChange(st, id, { endMonth: '2026-01' }), err => err instanceof E.ValidationError, 'end before start');
+  assert.throws(() => T.addChange(st, { label: 'x', kind: 'weekly', group: 'flexible', startMonth: '2026-09' }), err => err instanceof E.ValidationError);
+  assert.throws(() => T.addChange(st, { label: 'x', group: 'flexible' }), err => err instanceof E.ValidationError, 'a start month is needed');
+  assert.throws(() => T.setChange(st, 'nope', { cents: 1 }), err => err instanceof E.ValidationError);
+  st = T.acceptChanges(st, id, false);
+  assert.equal(st.plan.changes[0].accepted, false);
+  st = T.removeChange(st, id);
+  assert.deepEqual(st.plan.changes, []);
+});
+
+test('the baby template: dated from the due month, every amount present except the leave income, nothing accepted', () => {
+  assert.deepEqual(T.templates.list(), [{ key: 'baby', label: 'Baby', needs: ['dueDate'] }]);
+  const items = T.templates.baby('2028-05-14');
+  const by = label => items.find(i => i.label === label);
+  assert.deepEqual(items.map(i => [i.label, i.kind, i.group, i.startMonth, i.endMonth, i.cents]), [
+    ['Car seat', 'oneTime', 'irregular', '2028-03', null, 25000],
+    ['Nursery setup (paint, dresser, glider)', 'oneTime', 'irregular', '2028-03', null, 90000],
+    ['Starter clothes and basics', 'oneTime', 'irregular', '2028-04', null, 25000],
+    ['Feeding gear (bottles, pump accessories)', 'oneTime', 'irregular', '2028-04', null, 20000],
+    ['Baby monitor', 'oneTime', 'irregular', '2028-04', null, 10000],
+    ['Crib and mattress (after the bassinet)', 'oneTime', 'irregular', '2028-09', null, 35000],
+    ['Delivery out-of-pocket (insurance deductible/out-of-pocket max)', 'oneTime', 'irregular', '2028-06', null, 350000],
+    ['Diapers and wipes', 'monthly', 'essentials', '2028-05', null, 8500],
+    ['Formula / feeding', 'monthly', 'essentials', '2028-05', null, 12000],
+    ['Baby food', 'monthly', 'essentials', '2028-11', null, 7500],
+    ['Clothes as they grow', 'monthly', 'flexible', '2028-05', null, 4500],
+    ['Health copays and medicines', 'monthly', 'essentials', '2028-05', null, 4000],
+    ['Childcare', 'monthly', 'essentials', '2028-08', null, 120000],
+    ['Parental leave: income change', 'monthly', 'income', '2028-05', '2028-07', null],
+  ]);
+  assert.ok(items.every(i => i.accepted === false && i.template === 'baby' && i.personId === null));
+  assert.ok(items.every(i => /estimate/i.test(i.note) && /adjust/.test(i.note)), 'every note says it is an estimate to adjust');
+  assert.match(by('Formula / feeding').note, /about \$0 if breastfeeding/i);
+  assert.match(by('Childcare').note, /typical infant daycare; set to \$0 for family care/i);
+  assert.match(by('Parental leave: income change').note, /monthly reduction in take-home while on leave/);
+  // A due date in late December crosses the year both ways.
+  const dec = T.templates.baby('2026-12-30');
+  assert.deepEqual([dec[0].startMonth, dec[5].startMonth, dec[13].endMonth], ['2026-10', '2027-04', '2027-02']);
+  assert.throws(() => T.templates.baby('2027-02-30'), err => err instanceof E.ValidationError && err.field === 'dueDate');
+  // Into a plan: listed, nothing applied until accepted; the leave item is reported as unset.
+  const ds = small();
+  let st = T.addChange(E.state.defaults(null, ds), T.templates.baby('2026-09-20'));
+  assert.equal(st.plan.changes.length, 14);
+  assert.equal(new Set(st.plan.changes.map(c => c.id)).size, 14, 'each gets its own id');
+  const build = s => T.build({ txns: L.applyEdits(ds, s.ledgerEdits), dataset: ds, plan: Object.assign({}, s.plan, { people: PEOPLE }), settings: s.ui.plan, today: '2026-06-12' });
+  const before = build(st);
+  assert.equal(before.changes.applied, 0);
+  assert.deepEqual(before.changes.unset, [st.plan.changes[13].id]);
+  st = T.acceptChanges(st, st.plan.changes.map(c => c.id), true);
+  const after = build(st);
+  assert.equal(after.changes.applied, 13, 'every change with an amount and a month in the plan');
+  assert.equal(after.months.find(m => m.month === '2026-07').out.irregular, after.plan.out.irregular + 25000 + 90000, 'car seat and nursery two months before');
+  assert.equal(after.changes.totalOneTimeCents, 25000 + 90000 + 25000 + 20000 + 10000 + 35000 + 350000);
+  assert.equal(after.changes.monthlyNowCents, 0, 'nothing monthly yet in June');
+});
+
+// ------------------------------------------------------------------ balances supplied with the data
+const withBalances = (ds, balances) => Object.assign({}, ds, { balances });
+
+test('balances supplied with the data are bank anchors: used unless an entered balance is dated later', () => {
+  const ds = withBalances(quarter(), [{ accountId: 'chk', date: '2026-09-30', cents: 412000, source: 'statement' }, { accountId: 'sav', date: '2026-09-15', cents: 80000, source: 'bank', note: 'Posted balance' }, { accountId: 'card', date: '2026-09-30', cents: -5000, source: 'statement' }, { accountId: 'chk', date: 'soon', cents: 1 }]);
+  const r = run(ds, { settings: QUARTER_DIALS, today: '2026-10-03' });
+  const chk = account(r, 'chk'), sav = account(r, 'sav');
+  assert.deepEqual(chk.anchor, { date: '2026-09-30', cents: 412000, source: 'statement', label: 'From your statement, Sep 30, 2026' });
+  assert.deepEqual(sav.anchor, { date: '2026-09-15', cents: 80000, source: 'bank', label: 'From your bank data, Sep 15, 2026' });
+  assert.deepEqual([point(chk, '2026-09').cents, point(chk, '2026-09').status], [412000, 'reconstructed']);
+  assert.equal(point(chk, '2026-08').cents, 412000 - (210000 - 98000 - 10000), 'worked back with the transactions');
+  assert.equal(point(sav, '2026-09').cents, 80000 + 10000, 'worked forward over the covered days to the month end');
+  assert.match(chk.note, /^From the statement balance supplied with your data for Sep 30, 2026\./);
+  assert.deepEqual(r.balances.accounts.map(a => a.id), ['chk', 'sav'], 'the card is not a cash account');
+  const anc = T.anchors(planWith(), ds);
+  assert.deepEqual(anc.accounts.map(a => [a.id, a.source, a.asOf, a.anchor.label]), [['chk', 'statement', '2026-09-30', 'From your statement, Sep 30, 2026'], ['sav', 'bank', '2026-09-15', 'From your bank data, Sep 15, 2026']]);
+  // An entered balance dated later wins; one dated earlier (or the same day) does not.
+  const later = run(ds, { plan: planWith({ accounts: { chk: 400000 }, accountDates: { chk: '2026-10-02' } }), settings: QUARTER_DIALS, today: '2026-10-03' });
+  assert.deepEqual(account(later, 'chk').anchor, { date: '2026-10-02', cents: 400000, source: 'entered', label: 'Entered by you, Oct 2, 2026' });
+  assert.equal(T.anchors(planWith({ accounts: { chk: 400000 }, accountDates: { chk: '2026-10-02' } }), ds).accounts[0].source, 'entered');
+  for (const d of ['2026-09-20', '2026-09-30']) {
+    const older = run(ds, { plan: planWith({ accounts: { chk: 1 }, accountDates: { chk: d } }), settings: QUARTER_DIALS, today: '2026-10-03' });
+    assert.deepEqual([account(older, 'chk').anchor.source, account(older, 'chk').anchor.cents], ['statement', 412000], d);
+    assert.match(account(older, 'chk').note, /is not newer than the last balance from your bank, so the bank’s own figure is used\./);
+  }
+  // Absent or unusable: nothing changes.
+  assert.deepEqual(E.balances.suppliedBalances({}), []);
+  assert.deepEqual(E.balances.suppliedBalances({ balances: 'x' }), []);
+  assert.equal(T.anchors(planWith(), quarter()).accounts.length, 0);
+});
+
+test('a savings account with only a supplied balance is worked back from the transfers in checking', () => {
+  const ds = withBalances(quarter({ savings: 'mirrored' }), [{ accountId: 'sav', date: '2026-09-30', cents: 95500, source: 'statement' }]);
+  const r = run(ds, { plan: planWith({ accounts: { chk: 412000 }, accountsAsOf: '2026-09-30' }), settings: QUARTER_DIALS, today: '2026-10-03' });
+  const sav = account(r, 'sav');
+  assert.deepEqual(sav.mirroredFrom, { id: 'chk', name: 'Test checking' });
+  assert.deepEqual([sav.anchor.source, sav.anchor.label], ['statement', 'From your statement, Sep 30, 2026']);
+  assert.equal(point(sav, '2026-08').cents, 95500 - 10000);
+  assert.match(sav.note, /^From the statement balance supplied with your data for Sep 30, 2026, worked back from the transfers/);
+});
+
+// ------------------------------------------------------------------ series (Trends) and CSV
+
+test('series: every catalogue key is there, aligned with the months; incomplete months are null; plan months use the plan', () => {
+  const ds = small();
+  const r = run(ds, { plan: planWith({ accounts: { chk: 350000 }, accountDates: { chk: '2026-05-31' } }), settings: LOSING });
+  assert.deepEqual(r.series.map(s => s.key), ['in-p1', 'in-p2', 'in-other', 'in-total', 'card', 'bank', 'essentials', 'flexible', 'irregular', 'other-out', 'out-total', 'to-savings', 'from-savings', 'net', 'combined-change']);
+  assert.deepEqual(r.series.map(s => s.group), ['in', 'in', 'in', 'in', 'out', 'out', 'out', 'out', 'out', 'out', 'out', 'savings', 'savings', 'net', 'net']);
+  assert.equal(r.series[0].name, 'Morgan');
+  assert.ok(r.series.every(s => s.values.length === r.months.length));
+  const s = key => r.series.find(x => x.key === key).values;
+  const iFeb = r.months.findIndex(m => m.month === '2026-02'), iApr = r.months.findIndex(m => m.month === '2026-04'), iAug = r.months.findIndex(m => m.month === '2026-08');
+  assert.equal(r.months[iFeb].complete, false);
+  assert.ok(r.series.every(x => x.values[iFeb] === null), 'an incomplete month is unknown in every series');
+  assert.deepEqual(['in-p1', 'card', 'bank', 'essentials', 'out-total', 'net', 'combined-change'].map(k => s(k)[iApr]), [200000, 16125, 120000, 136125, 136125, 63875, 63875]);
+  assert.deepEqual(['in-total', 'essentials', 'flexible', 'out-total', 'net', 'to-savings', 'from-savings'].map(k => s(k)[iAug]), [200000, 150000, 95000, 245000, -45000, 0, 0]);
+  for (const k of T.SERIES.map(x => x.key)) assert.ok(E.state.TREND_SERIES.includes(k), k + ' can be saved in ui.plan.trends');
+});
+
+/** A small RFC 4180 reader for the tests: rows of fields. */
+function parseCSV(text) {
+  const rows = [];
+  let row = [], field = '', quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"' && text[i + 1] === '"') { field += '"'; i++; }
+      else if (ch === '"') quoted = false;
+      else field += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ',') { row.push(field); field = ''; }
+    else if (ch === '\r' && text[i + 1] === '\n') { row.push(field); rows.push(row); row = []; field = ''; i++; }
+    else field += ch;
+  }
+  if (field || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+test('CSV: a settings block, a blank line, then one row per month; plain dollars, empty for unknown, quoted where needed', () => {
+  const odd = spend('card', '2026-04-11', 61234, 'Fox, "The" Outfitters', 'Travel');
+  const ds = small({ withSavings: true });
+  const ds2 = L.normalizeDataset(Object.assign({}, ds, { transactions: ds.transactions.concat([odd]) }));
+  const plan = Object.assign(planWith({ accounts: { chk: 350000, sav: 90000 }, accountsAsOf: '2026-05-31' }), { changes: [change('gym', { label: '=Gym, "Pro"', startMonth: '2026-07', cents: 6000 })] });
+  const r = run(ds2, { plan, settings: { dials: { p1: 200000, p2: 0, essentials: 150000, flexible: 95050, savings: -1234 } } });
+  const csv = T.toCSV(r);
+  assert.equal(csv, T.toCSV(r), 'deterministic');
+  assert.ok(csv.includes('\r\n') && csv.endsWith('\r\n'));
+  const rows = parseCSV(csv);
+  assert.deepEqual(rows.slice(0, 2), [['Settings'], ['key', 'value']]);
+  const blank = rows.findIndex(x => x.length === 1 && x[0] === '');
+  assert.ok(blank > 2, 'a blank line between the blocks');
+  assert.deepEqual(rows[blank + 1], ['Months']);
+  const header = rows[blank + 2];
+  assert.deepEqual(header, ['month', 'status', 'in_p1', 'in_p2', 'in_other', 'in_total', 'essentials', 'flexible', 'irregular', 'other_out', 'out_total', 'to_savings', 'from_savings', 'combined_change', 'net_checking', 'combined_balance', 'combined_status', 'chk_balance', 'chk_status', 'sav_balance', 'sav_status']);
+  const body = rows.slice(blank + 3);
+  assert.equal(body.length, r.months.length);
+  const cell = (month, col) => body.find(x => x[0] === month)[header.indexOf(col)];
+  assert.equal(cell('2026-08', 'status'), 'plan');
+  assert.equal(cell('2026-08', 'essentials'), '1500.00');
+  assert.equal(cell('2026-08', 'flexible'), '1010.50', '950.50 + the 60.00 gym change');
+  assert.equal(cell('2026-08', 'from_savings'), '12.34');
+  assert.equal(cell('2026-08', 'to_savings'), '0.00');
+  assert.equal(cell('2026-08', 'combined_change'), String((r.months.find(m => m.month === '2026-08').combinedChange / 100).toFixed(2)));
+  assert.equal(cell('2026-08', 'combined_status'), 'projected');
+  assert.equal(cell('2026-04', 'irregular'), '612.34');
+  assert.equal(cell('2026-04', 'chk_status'), 'reconstructed');
+  assert.equal(cell('2026-04', 'in_p1'), '2000.00');
+  // Unknown is empty, never 0.
+  const feb = body.find(x => x[0] === '2026-02');
+  assert.deepEqual([feb[header.indexOf('in_total')], feb[header.indexOf('net_checking')]], ['', '']);
+  // Settings: key,value rows, with labels quoted and formula-like text made inert.
+  const kv = Object.fromEntries(rows.slice(2, blank).map(x => [x[0], x[1]]));
+  assert.equal(kv['dial.essentials.plan'], '1500.00');
+  assert.equal(kv['dial.savings.plan'], '-12.34');
+  assert.equal(kv['dial.essentials.source'], 'direct');
+  assert.equal(kv['horizon_months'], '12');
+  assert.equal(kv['cover_from_savings'], 'yes');
+  assert.equal(kv['one_time.' + odd.id + '.label'], 'Fox, "The" Outfitters');
+  assert.equal(kv['one_time.' + odd.id + '.state'], 'in the irregular allowance');
+  assert.equal(kv['change.gym.label'], '\'=Gym, "Pro"');
+  assert.deepEqual([kv['change.gym.accepted'], kv['change.gym.amount'], kv['change.gym.start'], kv['change.gym.status']], ['yes', '60.00', '2026-07', 'applied']);
+  assert.deepEqual([kv['balance.chk.date'], kv['balance.chk.amount'], kv['balance.chk.source']], ['2026-05-31', '3500.00', 'entered']);
+  assert.ok(csv.includes('"Fox, ""The"" Outfitters"'), 'RFC 4180 quoting');
+  // Cents on request; other people's columns.
+  const cents = parseCSV(T.toCSV(r, { format: 'cents', people: [{ id: 'p1', name: 'Morgan' }] }));
+  const h2 = cents.find(x => x[0] === 'month');
+  assert.equal(h2.indexOf('in_p2'), -1);
+  assert.equal(cents.find(x => x[0] === '2026-08')[h2.indexOf('essentials')], '150000');
+  assert.throws(() => T.toCSV(null), err => err instanceof E.ValidationError);
+});
+
+// ------------------------------------------------------------------ changes saved under the earlier card/bank dials
+
+test('row changes saved under the earlier card and bank dials still apply to the same rows, and migrateRows makes that permanent', () => {
+  const ds = household();
+  const oldId = (dial, kind, ...parts) => dial + '-' + kind + '-' + E.util.hash(parts.join('\u0001'));
+  const lumenOld = oldId('card', 'm', 'Subscriptions', 'Lumen Streaming');
+  const mortgageOld = oldId('bank', 'c', 'Mortgage');
+  const otherOld = oldId('card', 'c', 'Other');
+  const goneOld = oldId('card', 'm', 'Groceries', 'Nobody Market');
+  let state = E.state.defaults(null, ds);
+  state = E.state.setPath(state, 'ui.plan.rows.' + lumenOld, { included: false });
+  state = E.state.setPath(state, 'ui.plan.rows.' + mortgageOld, { cents: 140000 });
+  state = E.state.setPath(state, 'ui.plan.rows.' + otherOld, { cents: 1 });
+  state = E.state.setPath(state, 'ui.plan.rows.' + goneOld, { cents: 2 });
+  const build = st => T.build({ txns: L.applyEdits(ds, st.ledgerEdits), dataset: ds, plan: Object.assign({}, st.plan, { people: PEOPLE }), settings: st.ui.plan, today: '2026-07-03' });
+  const r = build(state);
+  const lumen = r.dialsByKey.flexible.drill.rows.find(x => x.label === 'Lumen Streaming');
+  const mortgage = r.dialsByKey.essentials.drill.rows.find(x => x.level === 1 && x.label === 'Mortgage');
+  assert.deepEqual([lumen.included, lumen.legacyId], [false, lumenOld]);
+  assert.deepEqual([mortgage.planCents, mortgage.legacyId], [140000, mortgageOld]);
+  assert.deepEqual(r.migration.rows, [{ from: lumenOld, to: lumen.id }, { from: mortgageOld, to: mortgage.id }].sort((a, b) => (a.from < b.from ? -1 : 1)));
+  assert.deepEqual(r.migration.dropped.sort(), [goneOld, otherOld].sort(), 'the grouped "Other" and a place that is gone cannot be matched');
+  const next = T.migrateRows(state, r);
+  assert.deepEqual(Object.keys(next.ui.plan.rows).sort(), [lumen.id, mortgage.id].sort());
+  assert.deepEqual(next.ui.plan.rows[lumen.id], { included: false });
+  assert.ok(next.meta.migrationNotes.includes(r.migration.note));
+  assert.match(r.migration.note, /^ui\.plan\.rows: spending is now planned as essentials, flexible and irregular\. 2 changes to card and bank spending rows now apply to the same rows there\. 2 changes to card and bank spending rows could not be matched/);
+  const r2 = build(next);
+  assert.equal(r2.migration, null);
+  assert.deepEqual([r2.dialsByKey.flexible.planCents, r2.dialsByKey.essentials.planCents], [r.dialsByKey.flexible.planCents, r.dialsByKey.essentials.planCents], 'the same plan after the move');
+  assert.equal(T.migrateRows(next, r2), next, 'nothing to do');
+  // Resetting a dial with the timeline also clears the earlier changes its rows use.
+  const reset = T.resetDial(state, 'flexible', r);
+  assert.deepEqual(Object.keys(reset.ui.plan.rows).sort(), [mortgageOld, otherOld, goneOld].sort());
 });

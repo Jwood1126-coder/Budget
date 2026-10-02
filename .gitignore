@@ -56,3 +56,7 @@ node_modules/
 test-results/
 __pycache__/
 .DS_Store
+
+# Data files downloaded from the app (may hold a household's real transactions)
+household-budget-data-*.json
+*budget-data*.json

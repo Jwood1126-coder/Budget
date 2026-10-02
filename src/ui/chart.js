@@ -6,6 +6,11 @@
  *                 lines). Actual months solid, plan months dashed, gaps dotted or broken.
  *   Flows mode    monthly money in stacked above the axis, money out stacked below it; plan months
  *                 striped. An optional net line on top.
+ *   Trends mode   one line per series in dollars a month (actual solid, plan dashed), with an optional
+ *                 trailing moving average and a least-squares trend line (stats helpers below).
+ *
+ * Presentation-only extras: a ghost "Baseline plan" line in balance mode, and change markers on the
+ * bottom axis (one-time triangles, monthly ticks with a faint band to the right edge).
  *
  * Both modes share the same margins and x positions, so switching modes never shifts the
  * timeline. cashChart() returns an HTML string (escaped like every component); attach(root) wires
@@ -27,7 +32,10 @@
   // Validated order (adjacent pairs, light and dark): in stacks up from blue, out stacks down from
   // magenta, so the two series that meet at the axis stay distinct under colour-vision deficiency.
   const IN_CLS = ['series-1', 'series-2', 'series-4'];
-  const OUT_CLS = ['series-5', 'series-4', 'series-3'];
+  const OUT_CLS = ['series-5', 'series-4', 'series-3', 'series-6'];
+  // Trends lines follow the categorical order.
+  const TREND_CLS = ['series-1', 'series-2', 'series-3', 'series-4', 'series-5', 'series-6'];
+  const GHOST_CLS = 'series-ghost';
   const known = v => typeof v === 'number' && Number.isFinite(v);
   const f1 = v => (Math.round(v * 10) / 10).toFixed(1);
   const isOther = s => String(s.key).toLowerCase() === 'other' || /^other\b/i.test(String(s.name || ''));
@@ -65,9 +73,61 @@
       'z';
   }
 
+  // ------------------------------------------------------------------ stats (trends mode)
+  /**
+   * Trailing mean over the last n positions (i-n+1 .. i), skipping nulls. null where fewer than n
+   * positions exist yet (i < n-1), where the window holds no known value, or when n < 1.
+   * Integer cents in, unrounded numbers out.
+   */
+  function movingAverage(values, n) {
+    const list = Array.isArray(values) ? values : [];
+    const w = Math.floor(Number(n));
+    return list.map((_, i) => {
+      if (!(w >= 1) || i < w - 1) return null;
+      let sum = 0, count = 0;
+      for (let k = i - w + 1; k <= i; k++) if (known(list[k])) { sum += list[k]; count++; }
+      return count ? sum / count : null;
+    });
+  }
+
+  /**
+   * Ordinary least squares of value on position (0, 1, 2 ...) over the known values only.
+   * fit[i] = intercept + slope * i at every position, so it extends past the data. With fewer
+   * than two known values: { slope: null, intercept: null, fit: all null }.
+   */
+  function linearTrend(values) {
+    const list = Array.isArray(values) ? values : [];
+    const pts = [];
+    list.forEach((v, i) => { if (known(v)) pts.push([i, v]); });
+    if (pts.length < 2) return { slope: null, intercept: null, fit: list.map(() => null) };
+    const mx = pts.reduce((a, p) => a + p[0], 0) / pts.length;
+    const my = pts.reduce((a, p) => a + p[1], 0) / pts.length;
+    let sxx = 0, sxy = 0;
+    for (const [x, v] of pts) { sxx += (x - mx) * (x - mx); sxy += (x - mx) * (v - my); }
+    const slope = sxy / sxx;
+    const intercept = my - slope * mx;
+    return { slope, intercept, fit: list.map((_, i) => intercept + slope * i) };
+  }
+
+  /** Runs of index pairs over adjacent known values (a null breaks the line), joined by kind. */
+  function runsOf(vals, kindOf) {
+    const runs = [];
+    let cur = null, prev = -1;
+    vals.forEach((v, i) => {
+      if (!known(v)) { prev = -1; cur = null; return; }
+      if (prev >= 0) {
+        const kind = kindOf(prev, i);
+        if (cur && cur.kind === kind) cur.idx.push(i);
+        else { cur = { kind, idx: [prev, i] }; runs.push(cur); }
+      }
+      prev = i;
+    });
+    return runs;
+  }
+
   // ------------------------------------------------------------------ data preparation
   function prepareLines(lines, months, isPlan) {
-    const used = new Set((lines || []).map(l => l.cls).filter(Boolean));
+    const used = new Set((lines || []).filter(l => l && l.role !== 'ghost').map(l => l.cls).filter(Boolean));
     const free = ACCOUNT_CLS.filter(c => !used.has(c));
     let combinedSeen = false;
     return (lines || []).map((l, li) => {
@@ -78,14 +138,16 @@
         const status = STATUS[p.status] ? p.status : (isPlan(m) ? 'projected' : 'recorded');
         return { cents: known(p.cents) ? Math.round(p.cents) : null, status, note: p.note ? String(p.note) : '', illustrative: p.illustrative === true };
       });
-      const role = l.role === 'combined' ? 'combined' : 'account';
-      let cls = l.cls;
+      // 'ghost': the baseline plan, drawn muted behind everything; it takes no series colour.
+      const role = l.role === 'combined' ? 'combined' : l.role === 'ghost' ? 'ghost' : 'account';
+      let cls = role === 'ghost' ? GHOST_CLS : l.cls;
       if (!cls) {
         if (role === 'combined' && !combinedSeen && !used.has('series-1')) cls = 'series-1';
         else cls = free.shift() || 'series-muted';
       }
       if (role === 'combined') combinedSeen = true;
-      return { key: String(l.key ?? 'line-' + li), name: String(l.name ?? ''), role, cls, pts };
+      const name = String(l.name ?? '') || (role === 'ghost' ? 'Baseline plan' : '');
+      return { key: String(l.key ?? 'line-' + li), name, role, cls, pts };
     });
   }
 
@@ -101,25 +163,54 @@
     }));
   }
 
+  function prepareTrendSeries(list, n) {
+    const used = new Set((list || []).map(s => s && s.cls).filter(Boolean));
+    const free = TREND_CLS.filter(c => !used.has(c));
+    return (list || []).filter(Boolean).map((s, si) => ({
+      key: String(s.key ?? 'trend-' + si),
+      name: String(s.name ?? ''),
+      cls: s.cls || (isOther(s) ? 'series-muted' : free.shift() || 'series-muted'),
+      values: Array.from({ length: n }, (_, i) => (s.values && known(s.values[i]) ? Math.round(s.values[i]) : null)),
+    }));
+  }
+
+  /** Markers inside the months shown, grouped by month index: Map(i -> [{ label, cents, kind }]). */
+  function prepareMarkers(list, months) {
+    const at = new Map(months.map((m, i) => [m, i]));
+    const byIndex = new Map();
+    for (const mk of Array.isArray(list) ? list : []) {
+      if (!mk || !at.has(String(mk.month))) continue;
+      const i = at.get(String(mk.month));
+      if (!byIndex.has(i)) byIndex.set(i, []);
+      byIndex.get(i).push({ label: String(mk.label ?? ''), cents: known(mk.cents) ? Math.round(mk.cents) : null, kind: mk.kind === 'monthly' ? 'monthly' : 'oneTime' });
+    }
+    return new Map([...byIndex].sort((a, b) => a[0] - b[0]));
+  }
+
   const sumKnown = vals => (vals.some(known) ? vals.reduce((a, v) => a + (known(v) ? v : 0), 0) : null);
 
   // ------------------------------------------------------------------ renderer
   /**
    * cashChart(spec) -> HTML string:
-   *   id, title, mode 'balance'|'flows', months ['YYYY-MM'], todayMonth, planStart,
-   *   lines [{ key, name, role, cls?, points: [{ month, cents|null, status, note? }] }],
+   *   id, title, mode 'balance'|'flows'|'trends', months ['YYYY-MM'], todayMonth, planStart,
+   *   lines [{ key, name, role 'combined'|'account'|'ghost', cls?, points: [{ month, cents|null, status, note? }] }]
+   *     (role 'ghost': the baseline plan, muted and dashed behind the other lines; name defaults to
+   *     'Baseline plan'; null points draw nothing; never the summary's line or its low point),
    *   columns { in: [{ key, name, cls?, values }], out: [...] (positive = money leaving), status?: [], notes?: [] },
-   *   net { key, name, values } | null, hidden [keys], format, caption, tableCaption,
+   *   net { key, name, values } | null,
+   *   trends { series: [{ key, name, cls?, values: [cents|null per month] }], ma: 0|3|6, trend: bool },
+   *   markers [{ month, label, cents?, kind 'oneTime'|'monthly' }] (presentation only, any mode),
+   *   hidden [keys], format, caption, tableCaption,
    *   controls (trusted HTML placed on the title row, e.g. the mode switch), titleHidden.
    */
   function cashChart(spec = {}) {
     const {
       id, title = '', mode: modeIn = 'balance', months: monthsIn = [], todayMonth = null, planStart = null,
       lines = [], columns: columnsIn, net = null, hidden = [], format: formatIn, caption = '', tableCaption,
-      controls = '', titleHidden = false,
+      controls = '', titleHidden = false, trends: trendsIn = null, markers: markersIn = [],
     } = spec || {};
     const columns = columnsIn || {};
-    const mode = modeIn === 'flows' ? 'flows' : 'balance';
+    const mode = modeIn === 'flows' ? 'flows' : modeIn === 'trends' ? 'trends' : 'balance';
     const months = (monthsIn || []).map(String);
     const n = months.length;
     const figId = String(id || UI.dom.domId('cash', title || 'chart'));
@@ -128,7 +219,7 @@
     const signed = v => (known(v) && v > 0 ? '+' : '') + money(v);
     const hiddenSet = new Set((hidden || []).map(String));
     const isPlan = m => !!planStart && m >= planStart;
-    const axisTitle = mode === 'balance' ? 'Balance, $ at month end' : 'Flows, $ per month';
+    const axisTitle = mode === 'balance' ? 'Balance, $ at month end' : mode === 'trends' ? 'Monthly, $ per month' : 'Flows, $ per month';
     // Title and controls share the top row, so the legend below has the full width in both modes.
     const head = (keysHtml, chipsHtml) => `<div class="cc-top${titleHidden ? ' is-title-hidden' : ''}">
         <p class="cc-title${titleHidden ? ' sr-only' : ''}" id="${esc(figId)}-title">${esc(title)}</p>
@@ -146,13 +237,19 @@
     const plot0 = g.padT, plot1 = g.H - g.padB;
 
     // ---- series and the value domain (hidden series included: hiding never rescales)
-    let ls = [], cin = [], cout = [], netVals = null, monthStatus = [], inTot = [], outTot = [];
-    let lo = 0, hi = 0, anyKnown = false;
+    let ls = [], real = [], ghosts = [], cin = [], cout = [], netVals = null, monthStatus = [], inTot = [], outTot = [];
+    let ts = [], maN = 0;
+    let lo = 0, hi = 0, anyKnown = false, negReal = false;
     let primary = null, low = null;
+    const widen = v => { if (known(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } };
     if (mode === 'balance') {
       ls = prepareLines(lines, months, isPlan);
-      for (const s of ls) for (const p of s.pts) if (known(p.cents)) { anyKnown = true; lo = Math.min(lo, p.cents); hi = Math.max(hi, p.cents); }
-      primary = ls.find(s => s.role === 'combined') || ls[0] || null;
+      real = ls.filter(s => s.role !== 'ghost');
+      ghosts = ls.filter(s => s.role === 'ghost');
+      // The baseline (ghost) widens the scale to its own values only: the zero line's emphasis, the
+      // low point and the summary all follow the real lines.
+      for (const s of ls) for (const p of s.pts) if (known(p.cents)) { anyKnown = true; widen(p.cents); if (s.role !== 'ghost' && p.cents < 0) negReal = true; }
+      primary = ls.find(s => s.role === 'combined') || real[0] || null;
       if (primary) {
         primary.pts.forEach((p, i) => { if (known(p.cents) && (!low || p.cents < low.cents)) low = { i, cents: p.cents }; });
         if (low && low.cents >= 0) low = null;
@@ -163,6 +260,28 @@
         const p = primary && primary.pts[i];
         return p && p.status ? p.status : (isPlan(m) ? 'projected' : null);
       });
+    } else if (mode === 'trends') {
+      const tr = trendsIn || {};
+      const w = Math.floor(Number(tr.ma));
+      maN = w >= 2 ? w : 0;
+      ts = prepareTrendSeries(tr.series, n);
+      monthStatus = months.map(m => (isPlan(m) ? 'projected' : 'recorded'));
+      let actualEnd = -1;
+      monthStatus.forEach((st, i) => { if (st !== 'projected') actualEnd = i; });
+      for (const s of ts) {
+        // The average and the trend use actual months only; plan values never enter them.
+        const actual = s.values.map((v, i) => (monthStatus[i] === 'projected' ? null : v));
+        s.ma = maN ? movingAverage(actual, maN).map((v, i) => (monthStatus[i] === 'projected' ? null : v)) : null;
+        s.tr = null;
+        if (tr.trend === true) {
+          const fit = linearTrend(actual);
+          // Drawn from the first actual value to the last actual month, then dotted to the end.
+          if (fit.slope !== null) s.tr = { slope: fit.slope, intercept: fit.intercept, fit: fit.fit, from: actual.findIndex(known), to: actualEnd };
+        }
+        for (const v of s.values) if (known(v)) { anyKnown = true; widen(v); }
+        if (s.ma) s.ma.forEach(widen);
+        if (s.tr) [s.tr.from, s.tr.to, n - 1].forEach(i => widen(s.tr.fit[i]));
+      }
     } else {
       cin = prepareColumns(columns.in, 'in', n);
       cout = prepareColumns(columns.out, 'out', n);
@@ -188,7 +307,7 @@
     const t = UI.c.ticks(Math.floor(lo), Math.ceil(hi), 5);
     const ymin = t[0], ymax = t[t.length - 1];
     const y = v => plot0 + (1 - (v - ymin) / (ymax - ymin || 1)) * plotH;
-    const anyNeg = lo < 0;
+    const anyNeg = mode === 'balance' ? negReal : lo < 0;
     const short = v => UI.c.compactMoney(v);
     // Tick labels keep the decimals the step needs ($12.5k, never a rounded $13k).
     const tickStep = t.length > 1 ? Math.abs(t[1] - t[0]) : 100;
@@ -203,6 +322,10 @@
 
     // ---- background: plan band, grid, zero line, month labels
     const planIdx = planStart ? months.findIndex(m => m >= planStart) : -1;
+    const mks = prepareMarkers(markersIn, months);
+    const markerText = mk => mk.label + (mk.cents !== null ? ' ' + signed(mk.cents) : '') + (mk.kind === 'monthly' ? ' (monthly)' : ' (one-time)');
+    // Slope of a trend in whole dollars a month: '+$42/mo'.
+    const slopeText = v => signed(Math.round(v / 100) * 100 || 0) + '/mo';
     const planX = planIdx >= 0 ? g.padL + band * planIdx : null;
     const todayIdx = todayMonth ? months.indexOf(String(todayMonth)) : -1;
     const todayX = todayIdx >= 0 ? xc(todayIdx) : null;
@@ -248,9 +371,21 @@
     const groupOpen = (s, extra = '') => `<g class="cc-series ${esc(s.cls)}${extra}${hiddenSet.has(s.key) ? ' is-hidden' : ''}" data-cc-series="${esc(s.key)}">`;
     let marks = '', hoverDots = '', defs = '';
     const dots = {};
+    const pathD = (idx, val) => idx.map((i, k) => (k ? 'L' : 'M') + f1(xc(i)) + ' ' + f1(y(val(i)))).join(' ');
+    // End labels: nudged apart when lines end close together.
+    const endLabels = ends => {
+      ends.sort((a, b) => a.ly - b.ly);
+      for (let k = 1; k < ends.length; k++) if (ends[k].ly - ends[k - 1].ly < 13) ends[k].ly = ends[k - 1].ly + 13;
+      return new Map(ends.map(e => [e.s, `<circle class="end-dot ${esc(e.s.cls)}" cx="${f1(xc(e.i))}" cy="${f1(y(e.v))}" r="4"/><text class="end-label cc-end-label" x="${f1(xc(e.i) + 8)}" y="${f1(e.ly + 4)}">${esc(short(e.v))}</text>`]));
+    };
+    const hoverDot = s => `<circle class="cc-dot end-dot ${esc(s.cls)}${hiddenSet.has(s.key) ? ' is-hidden' : ''}" data-cc-series="${esc(s.key)}" r="4.5" cx="0" cy="0" visibility="hidden"/>`;
     if (mode === 'balance') {
       const ends = [];
       const body = ls.map(s => {
+        if (s.role === 'ghost') {
+          // Thin, muted and dashed; no dots, no end label, and nothing where the baseline has no value.
+          return { s, html: runsOf(s.pts.map(p => p.cents), () => 'ghost').map(r => `<path class="line cc-ghost-line ${esc(s.cls)}" d="${pathD(r.idx, i => s.pts[i].cents)}"/>`).join('') };
+        }
         const segs = [];
         let prev = -1;
         s.pts.forEach((p, i) => {
@@ -290,16 +425,37 @@
             `<text class="cc-low-label" x="${f1(lx)}" y="${f1(y(low.cents) + 17)}" text-anchor="middle">${esc('Low ' + short(low.cents))}</text>`;
         }
         dots[s.key] = s.pts.map(p => (known(p.cents) ? Math.round(y(p.cents) * 10) / 10 : null));
-        hoverDots += `<circle class="cc-dot end-dot ${esc(s.cls)}${hiddenSet.has(s.key) ? ' is-hidden' : ''}" data-cc-series="${esc(s.key)}" r="4.5" cx="0" cy="0" visibility="hidden"/>`;
+        hoverDots += hoverDot(s);
         return { s, html: paths + lonely + lowMark };
       });
-      // End labels: nudged apart when lines end close together.
-      ends.sort((a, b) => a.ly - b.ly);
-      for (let k = 1; k < ends.length; k++) if (ends[k].ly - ends[k - 1].ly < 13) ends[k].ly = ends[k - 1].ly + 13;
-      const endHtml = new Map(ends.map(e => [e.s, `<circle class="end-dot ${esc(e.s.cls)}" cx="${f1(xc(e.i))}" cy="${f1(y(e.v))}" r="4"/><text class="end-label cc-end-label" x="${f1(xc(e.i) + 8)}" y="${f1(e.ly + 4)}">${esc(short(e.v))}</text>`]));
-      // The combined line is drawn last so it sits on top of account lines.
-      const order = body.slice().sort((a, b) => (a.s === primary) - (b.s === primary));
-      marks = order.map(b => groupOpen(b.s, ' cc-line-series') + b.html + (endHtml.get(b.s) || '') + '</g>').join('');
+      const endHtml = endLabels(ends);
+      // The baseline is drawn first (behind everything) and the combined line last, on top.
+      const rank = s => (s.role === 'ghost' ? 0 : s === primary ? 2 : 1);
+      const order = body.slice().sort((a, b) => rank(a.s) - rank(b.s));
+      marks = order.map(b => groupOpen(b.s, b.s.role === 'ghost' ? ' cc-ghost' : ' cc-line-series') + b.html + (endHtml.get(b.s) || '') + '</g>').join('');
+    } else if (mode === 'trends') {
+      const ends = [];
+      const kindOf = (a, b) => (monthStatus[a] === 'projected' || monthStatus[b] === 'projected' ? 'projected' : 'actual');
+      const body = ts.map(s => {
+        const cls = esc(s.cls);
+        let html = '';
+        // Under the series line: its moving average (thick, translucent), then its trend (thin).
+        if (s.ma) html += runsOf(s.ma, () => 'ma').map(r => `<path class="line cc-ma-line ${cls}" d="${pathD(r.idx, i => s.ma[i])}"/>`).join('');
+        if (s.tr) {
+          const { fit, from, to } = s.tr;
+          if (to > from) html += `<path class="line cc-trend-line ${cls}" d="${pathD([from, to], i => fit[i])}"/>`;
+          if (n - 1 > to) html += `<path class="line cc-trend-line is-extended ${cls}" d="${pathD([to, n - 1], i => fit[i])}"/>`;
+        }
+        html += runsOf(s.values, kindOf).map(r => `<path class="line ${cls}${r.kind === 'projected' ? ' is-projected' : ''}" d="${pathD(r.idx, i => s.values[i])}"/>`).join('');
+        html += s.values.map((v, i) => (known(v) && !known(s.values[i - 1]) && !known(s.values[i + 1]) ? `<circle class="cc-lone end-dot ${cls}" cx="${f1(xc(i))}" cy="${f1(y(v))}" r="3.5"/>` : '')).join('');
+        const lastIdx = s.values.map((v, i) => (known(v) ? i : -1)).filter(i => i >= 0).pop();
+        if (lastIdx !== undefined) ends.push({ s, i: lastIdx, v: s.values[lastIdx], ly: y(s.values[lastIdx]) });
+        dots[s.key] = s.values.map(v => (known(v) ? Math.round(y(v) * 10) / 10 : null));
+        hoverDots += hoverDot(s);
+        return { s, html };
+      });
+      const endHtml = endLabels(ends);
+      marks = body.map(b => groupOpen(b.s, ' cc-trend-series') + b.html + (endHtml.get(b.s) || '') + '</g>').join('');
     } else {
       const pid = figId + '-hatch';
       defs = `<defs><pattern id="${esc(pid)}" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)"><rect class="cc-hatch" width="2.5" height="6"/></pattern></defs>`;
@@ -347,10 +503,31 @@
       }
     }
 
+    // ---- planned changes on the bottom axis line (presentation only): a triangle for one-time, a
+    // tick for a monthly change with one faint band from the first monthly start to the right edge.
+    // Several in one month share one glyph with a count above it.
+    let changeSvg = '';
+    if (mks.size) {
+      const firstMonthly = [...mks].find(([, list]) => list.some(mk => mk.kind === 'monthly'));
+      if (firstMonthly) {
+        const bx = xc(firstMonthly[0]);
+        changeSvg += `<rect class="cc-change-band" x="${f1(bx)}" y="${f1(plot1 - 5)}" width="${f1(g.W - g.padR - bx)}" height="5"/>`;
+      }
+      for (const [i, list] of mks) {
+        const x = xc(i);
+        const once = list.some(mk => mk.kind === 'oneTime');
+        const glyph = once
+          ? `<path class="cc-change-once" d="M${f1(x - 4.5)} ${f1(plot1)}L${f1(x)} ${f1(plot1 - 7)}L${f1(x + 4.5)} ${f1(plot1)}z"/>`
+          : `<line class="cc-change-monthly" x1="${f1(x)}" x2="${f1(x)}" y1="${f1(plot1)}" y2="${f1(plot1 - 10)}"/>`;
+        const count = list.length > 1 ? `<text class="cc-change-count" x="${f1(x)}" y="${f1(plot1 - (once ? 10 : 13))}" text-anchor="middle">${list.length}</text>` : '';
+        changeSvg += `<g class="cc-change ${once ? 'is-once' : 'is-monthly'}" data-cc-change="${esc(months[i])}">${glyph}${count}</g>`;
+      }
+    }
+
     const svg = `<svg class="cc-svg" viewBox="0 0 ${g.W} ${g.H}" aria-hidden="true" focusable="false">${defs}
       ${bandSvg}${grid}
       <rect class="cc-hover-band" x="0" y="${plot0}" width="${f1(band)}" height="${plotH}" visibility="hidden"/>
-      ${marks}${zeroOver}${xlabels}${markers}
+      ${marks}${zeroOver}${changeSvg}${xlabels}${markers}
       <g class="cc-hover" visibility="hidden"><line class="crosshair cc-crosshair" x1="0" x2="0" y1="${plot0}" y2="${plot1}"/>${hoverDots}</g>
     </svg>`;
 
@@ -360,11 +537,23 @@
     const modelMonths = months.map((m, i) => {
       const rows = [];
       const notes = [];
+      const plan = monthStatus[i] === 'projected' || isPlan(m);
       if (mode === 'balance') {
         for (const s of ls) {
+          if (s.role === 'ghost') { groups[s.key] = 'ghost'; continue; }
           groups[s.key] = 'line';
           const p = s.pts[i];
           rows.push({ k: s.key, n: s.name, v: p.status === 'gap' && !known(p.cents) ? 'No data' : money(p.cents), c: 'key-line ' + s.cls, s: statusText(p.status) + (p.illustrative ? ' (illustrative)' : ''), note: p.note });
+          // The baseline plan sits right under the combined row, in plan months only.
+          if (s === primary && plan) for (const gs of ghosts) if (known(gs.pts[i].cents)) rows.push({ k: gs.key, g: 'ghost', n: gs.name, v: money(gs.pts[i].cents), c: 'key-line ' + gs.cls });
+        }
+      } else if (mode === 'trends') {
+        for (const s of ts) {
+          groups[s.key] = 'line';
+          // The slope belongs to the series, so it rides on the series row; the fit is its own row.
+          rows.push({ k: s.key, n: s.name, v: money(s.values[i]), c: 'key-line ' + s.cls, s: s.tr ? 'trend ' + slopeText(s.tr.slope) : '' });
+          if (s.ma && known(s.ma[i])) rows.push({ k: s.key, g: 'ma', n: 'MA ' + maN, v: money(Math.round(s.ma[i])), c: 'key-line cc-key-ma ' + s.cls });
+          if (s.tr && i >= s.tr.from) rows.push({ k: s.key, g: 'trend', n: 'Trend', v: money(Math.round(s.tr.fit[i])), c: 'key-line cc-key-trend ' + s.cls });
         }
       } else {
         const add = (list, label, total) => {
@@ -381,7 +570,7 @@
         const note = Array.isArray(columns.notes) ? columns.notes[i] : null;
         if (note) notes.push(String(note));
       }
-      const plan = monthStatus[i] === 'projected' || isPlan(m);
+      const planned = (mks.get(i) || []).map(mk => 'Planned: ' + markerText(mk));
       return {
         x: Math.round(xc(i) * 10) / 10,
         t: fmt.monthLong(m),
@@ -389,6 +578,7 @@
         s: mode === 'flows' ? statusText(monthStatus[i]) : '',
         rows,
         note: notes.join(' '),
+        pc: planned.length ? planned : undefined,
       };
     });
 
@@ -422,19 +612,36 @@
       const pi = avg(inTot, plan), po = avg(outTot, plan);
       if (pi !== null || po !== null) parts.push(`the plan has ${money(pi)} in and ${money(po)} out a month`);
       summary = parts.length ? parts.join('; ') + '.' : '';
+    } else if (mode === 'trends') {
+      const parts = ts.map(s => {
+        const vals = s.values.filter((v, i) => known(v) && monthStatus[i] !== 'projected');
+        if (!vals.length) return '';
+        const avg = Math.round(vals.reduce((a, v) => a + v, 0) / vals.length);
+        return `${s.name} averaged ${money(avg)} a month${s.tr ? ' (trend ' + slopeText(s.tr.slope) + ')' : ''}`;
+      }).filter(Boolean);
+      summary = parts.length ? 'In actual months, ' + parts.join('; ') + '.' : '';
     }
+    const markerCount = [...mks.values()].reduce((a, list) => a + list.length, 0);
+    if (markerCount) summary += ` ${markerCount} planned change${markerCount === 1 ? ' is' : 's are'} marked on the timeline.`;
     const range = `${fmt.month(months[0])} to ${fmt.month(months[n - 1])}`;
     const ariaLabel = `${title ? title + '. ' : ''}${axisTitle}, ${range}.${planX !== null ? ' Months from ' + fmt.month(months[planIdx]) + ' are the plan.' : ''} ${summary} Use the left and right arrow keys to read each month. A table follows.`;
 
     // ---- legend: toggle chips per series + static keys for the line/fill treatments
-    const chip = (key, name, swatch) => `<button type="button" class="cc-chip" id="${esc(UI.dom.domId(figId + '-chip', key))}" data-cc-key="${esc(key)}" aria-pressed="${hiddenSet.has(key) ? 'false' : 'true'}"><span class="key ${swatch}" aria-hidden="true"></span><span class="cc-chip-name">${esc(name)}</span></button>`;
+    const chip = (key, name, swatch, tip = '') => `<button type="button" class="cc-chip" id="${esc(UI.dom.domId(figId + '-chip', key))}" data-cc-key="${esc(key)}" aria-pressed="${hiddenSet.has(key) ? 'false' : 'true'}"${tip ? ` title="${esc(tip)}"` : ''}><span class="key ${swatch}" aria-hidden="true"></span><span class="cc-chip-name">${esc(name)}</span></button>`;
+    const planKeys = '<span class="cc-key-item"><span class="key key-line cc-key-solid" aria-hidden="true"></span>Actual</span><span class="cc-key-item"><span class="key key-line key-dashed" aria-hidden="true"></span>Plan (projected)</span>';
     let chips = '', keys = [];
     if (mode === 'balance') {
-      chips = ls.map(s => chip(s.key, s.name, 'key-line ' + esc(s.cls))).join('');
-      const has = st => ls.some(s => s.pts.some(p => p.status === st));
-      if (has('projected')) keys.push('<span class="cc-key-item"><span class="key key-line cc-key-solid" aria-hidden="true"></span>Actual</span><span class="cc-key-item"><span class="key key-line key-dashed" aria-hidden="true"></span>Plan (projected)</span>');
+      // The baseline's chip comes after the real lines.
+      chips = [...real, ...ghosts].map(s => chip(s.key, s.name, 'key-line ' + esc(s.cls))).join('');
+      const has = st => real.some(s => s.pts.some(p => p.status === st));
+      if (has('projected')) keys.push(planKeys);
       if (has('assumed')) keys.push('<span class="cc-key-item"><span class="key key-line cc-key-dotted" aria-hidden="true"></span>Assumed (days without data)</span>');
       if (has('gap')) keys.push('<span class="cc-key-item"><span class="key key-line cc-key-dotted" aria-hidden="true"></span>Gap in the data</span>');
+    } else if (mode === 'trends') {
+      chips = ts.map(s => chip(s.key, s.name, 'key-line ' + esc(s.cls), s.tr ? 'Trend ' + slopeText(s.tr.slope) : '')).join('');
+      if (monthStatus.some(st => st === 'projected')) keys.push(planKeys);
+      if (maN) keys.push(`<span class="cc-key-item" title="${esc('Moving average of the last ' + maN + ' actual months')}"><span class="key key-line cc-key-ma cc-key-ink" aria-hidden="true"></span>MA ${maN}</span>`);
+      if (ts.some(s => s.tr)) keys.push('<span class="cc-key-item" title="Straight-line fit to the actual months, dotted across the plan"><span class="key key-line cc-key-trend cc-key-ink" aria-hidden="true"></span>Trend</span>');
     } else {
       // Each group's label is glued to its first chip so a wrapped legend never strands "Out" at a line end.
       const group = (label, list) => (list.length ? `<span class="cc-chip-group"><span class="cc-chip-lead"><span class="cc-chip-label">${label}</span>${list[0]}</span>${list.slice(1).join('')}</span>` : '');
@@ -443,23 +650,44 @@
         (net && netVals ? `<span class="cc-chip-group"><span class="cc-chip-lead">${chip(String(net.key ?? 'net'), String(net.name ?? 'Net'), 'key-line series-net')}</span></span>` : '');
       if (monthStatus.some(s => s === 'projected')) keys.push('<span class="cc-key-item"><span class="key key-swatch cc-key-solid-swatch" aria-hidden="true"></span>Actual</span><span class="cc-key-item"><span class="key key-swatch is-hatched" aria-hidden="true"></span>Plan (striped)</span>');
     }
+    const kinds = new Set([...mks.values()].flat().map(mk => mk.kind));
+    if (kinds.has('oneTime')) keys.push('<span class="cc-key-item"><span class="key cc-key-once" aria-hidden="true"></span>One-time change</span>');
+    if (kinds.has('monthly')) keys.push('<span class="cc-key-item"><span class="key cc-key-monthly" aria-hidden="true"></span>Monthly change</span>');
     const keysHtml = `<div class="cc-axisrow"><p class="cc-axis-title">${esc(axisTitle)}</p>${keys.length ? `<p class="cc-keys">${keys.join('')}</p>` : ''}</div>`;
 
     // ---- table twin
     const statusOfRow = i => statusText(monthStatus[i]) || '—';
     let columnsT, rowsT;
     if (mode === 'balance') {
-      const anyNote = ls.some(s => s.pts.some(p => p.note));
-      columnsT = [{ key: 'm', label: 'Month' }, { key: 'st', label: 'Status' }, ...ls.map((s, si) => ({ key: 's' + si, label: s.name, align: 'right' })), ...(anyNote ? [{ key: 'note', label: 'Note' }] : [])];
+      const anyNote = real.some(s => s.pts.some(p => p.note));
+      const cols = [...real, ...ghosts];
+      columnsT = [{ key: 'm', label: 'Month' }, { key: 'st', label: 'Status' }, ...cols.map((s, si) => ({ key: 's' + si, label: s.name, align: 'right' })), ...(anyNote ? [{ key: 'note', label: 'Note' }] : [])];
       rowsT = months.map((m, i) => {
-        const r = { m: fmt.month(m), st: statusOfRow(i), note: [...new Set(ls.map(s => s.pts[i].note).filter(Boolean))].join('; ') };
-        ls.forEach((s, si) => {
+        const r = { m: fmt.month(m), st: statusOfRow(i), note: [...new Set(real.map(s => s.pts[i].note).filter(Boolean))].join('; ') };
+        cols.forEach((s, si) => {
           const p = s.pts[i];
+          if (s.role === 'ghost') { r['s' + si] = known(p.cents) ? money(p.cents) : '—'; return; }
           const v = p.status === 'gap' && !known(p.cents) ? 'No data' : money(p.cents);
           const tags = [];
           if (p.status && p.status !== monthStatus[i]) tags.push(STATUS[p.status].toLowerCase());
           if (p.illustrative) tags.push('illustrative');
           r['s' + si] = v + (tags.length ? ' (' + tags.join(', ') + ')' : '');
+        });
+        return r;
+      });
+    } else if (mode === 'trends') {
+      columnsT = [{ key: 'm', label: 'Month' }, { key: 'st', label: 'Status' }];
+      ts.forEach((s, si) => {
+        columnsT.push({ key: 'v' + si, label: s.name, align: 'right' });
+        if (s.ma) columnsT.push({ key: 'a' + si, label: s.name + ' MA ' + maN, align: 'right' });
+        if (s.tr) columnsT.push({ key: 't' + si, label: s.name + ' trend (' + slopeText(s.tr.slope) + ')', align: 'right' });
+      });
+      rowsT = months.map((m, i) => {
+        const r = { m: fmt.month(m), st: statusOfRow(i) };
+        ts.forEach((s, si) => {
+          r['v' + si] = money(s.values[i]);
+          if (s.ma) r['a' + si] = known(s.ma[i]) ? money(Math.round(s.ma[i])) : '—';
+          if (s.tr) r['t' + si] = i >= s.tr.from ? money(Math.round(s.tr.fit[i])) : '—';
         });
         return r;
       });
@@ -477,6 +705,10 @@
         r.net = row ? row.v : '';
         return r;
       });
+    }
+    if (mks.size) {
+      columnsT.push({ key: 'pc', label: 'Planned changes' });
+      rowsT.forEach((r, i) => { r.pc = (mks.get(i) || []).map(markerText).join('; '); });
     }
     const tableHtml = UI.c.table({ caption: tableCaption || (title ? title + ', by month' : 'By month'), columns: columnsT, rows: rowsT, cls: 'cc-table' });
 
@@ -583,6 +815,7 @@
         if (r.note && !noted.has(r.note)) { noted.add(r.note); tip.appendChild(el('div', 'cc-tip-note', r.note)); }
         spoken.push(label + ' ' + r.v + (r.s ? ' ' + r.s.toLowerCase() : ''));
       }
+      for (const text of m.pc || []) { tip.appendChild(el('div', 'cc-tip-planned', text)); spoken.push(text); }
       if (m.note) tip.appendChild(el('div', 'cc-tip-note', m.note));
       return `${m.t}, ${m.p.toLowerCase()}${m.s && m.s !== 'Projected' ? ' (' + m.s.toLowerCase() + ')' : ''}: ${spoken.join(', ')}${m.note ? '. ' + m.note : ''}`;
     }
@@ -593,6 +826,7 @@
       const pr = plot.getBoundingClientRect(), sr = svg.getBoundingClientRect();
       const scale = sr.width / model.W;
       const x = sr.left - pr.left + model.months[i].x * scale;
+      tip.style.left = '0px'; // measure at its natural width, not squeezed by the last position
       const w = tip.offsetWidth, h = tip.offsetHeight;
       const gap = Math.max(10, (model.band * scale) / 2 + 6);
       let left = x + gap;
@@ -602,7 +836,7 @@
       const plotBottom = sr.top - pr.top + (model.H - model.padB) * scale;
       let top = plotTop;
       if (state.via === 'mouse' && state.y !== null) top = Math.max(0, Math.min(state.y - pr.top - h / 2, plotBottom - h));
-      else if (model.mode === 'balance') {
+      else if (model.mode !== 'flows') {
         // Touch and keyboard: keep the readout in the half of the plot away from the points it describes.
         const ys = Object.keys(model.dots).filter(k => !hidden.has(k)).map(k => model.dots[k][i]).filter(v => v !== null && v !== undefined);
         const mid = model.padT + (model.H - model.padT - model.padB) / 2;
@@ -691,5 +925,5 @@
     });
   }
 
-  UI.chart = { cashChart, attach, isNarrow };
+  UI.chart = { cashChart, attach, isNarrow, stats: { movingAverage, linearTrend } };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

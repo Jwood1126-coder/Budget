@@ -39,13 +39,24 @@
   const DEFAULT_PEOPLE_NAMES = ['Partner A', 'Partner B'];
   const FREQUENCIES = ['weekly', 'biweekly', 'semimonthly', 'monthly'];
   const TXN_KINDS = ['spend', 'income', 'transfer', 'card_payment', 'debt_payment'];
+  /** The plan screen's dials (BudgetEngine.timeline): money in per person and other, money out by how adjustable it is. */
+  const DIAL_KEYS = ['p1', 'p2', 'inOther', 'essentials', 'flexible', 'irregular', 'savings', 'other'];
+  /** Card and bank spending were dials before spending was grouped by how adjustable it is; now they are derived. */
+  const RETIRED_DIALS = ['card', 'bank'];
+  const SPEND_GROUPS = ['essentials', 'flexible'];
+  const CHANGE_KINDS = ['oneTime', 'monthly'];
+  const CHANGE_GROUPS = ['income', 'essentials', 'flexible', 'irregular', 'savings'];
+  /** Monthly series the plan screen's Trends chart can draw (BudgetEngine.timeline series keys). */
+  const TREND_SERIES = ['in-p1', 'in-p2', 'in-other', 'in-total', 'card', 'bank', 'essentials', 'flexible', 'irregular',
+    'other-out', 'out-total', 'to-savings', 'from-savings', 'net', 'combined-change'];
 
   const LIMITS = Object.freeze({
     label: 80, note: 500, categoryKey: 80, id: 80, txnId: 200, datasetId: 200, route: 1000,
     scenarios: 20, events: 200, incomes: 12, bills: 60, savings: 30, debts: 30, personal: 2,
     compareIds: 3, targets: 200, references: 100, checklist: 200, dismissed: 500,
     ledgerEdits: 50000, history: 200, splits: 50, migrationNotes: 200, balanceAccounts: 30,
-    planDials: 20, planRows: 500, planHidden: 40,
+    planDials: 20, planRows: 500, planHidden: 40, planGroups: 300, groupKey: 120, planIrregular: 1000,
+    planChanges: 100, planTrendSeries: 16,
     legacySnapshot: 200000, workbookChars: 25000000
   });
 
@@ -277,6 +288,23 @@
     ['updatedAt', ISO_TIME]
   ];
 
+  // Planned changes on the plan screen (BudgetEngine.timeline): a dated one-time or monthly amount
+  // added to one group from startMonth (monthly: through endMonth when set). cents null = the
+  // amount is not known yet (listed, never applied as $0); accepted false = listed only.
+  // personId only for income (null: "other money in").
+  const CHANGE_FIELDS = [
+    ['label', label('Planned change')],
+    ['kind', oneOf(CHANGE_KINDS, 'monthly')],
+    ['group', oneOf(CHANGE_GROUPS, 'flexible')],
+    ['personId', oneOf(PEOPLE, null, { nullable: true })],
+    ['startMonth', START_MONTH],
+    ['endMonth', MONTH],
+    ['cents', SIGNED_CENTS],
+    ['accepted', bool(false)],
+    ['template', REF],
+    ['note', NOTE]
+  ];
+
   // A recurring change may have an unknown start (e.g. childcare not arranged yet): startMonth
   // null means "timing unknown", which the forecast must report as missing, never as "now".
   const EVENT_FIELDS = {
@@ -328,27 +356,43 @@
   //   baselineMonths: how many recent complete months the dial baselines average ('all' = every one).
   //   horizon: months planned ahead (from the first month without complete data).
   //   past: months of history shown before the plan.
-  //   mode: the main chart shows balances or money in and out each month.
+  //   mode: the main chart shows balances, money in and out each month, or trends (chosen series as lines).
   //   coverFromSavings: in projected months, move a checking shortfall from savings (per account only).
-  //   dials: { [dialKey]: signed cents } set directly (p1, p2, inOther, card, bank, savings, other).
-  //     Signed on purpose: a savings drawdown is negative and must survive every save.
-  //   rows: { [rowId]: { included?, cents? } } changes to the card/bank drill-down rows.
+  //   dials: { [dialKey]: signed cents } set directly (DIAL_KEYS: p1, p2, inOther, essentials,
+  //     flexible, irregular, savings, other). Signed on purpose: a savings drawdown is negative and
+  //     must survive every save. Card and bank spending are derived, never set (RETIRED_DIALS).
+  //   rows: { [rowId]: { included?, cents? } } changes to the essentials/flexible drill-down rows.
   //   hidden: chart series the household switched off; null = never chosen (the screen picks).
+  //   groups: { [categoryName | 'merchant:' + merchant]: 'essentials'|'flexible' } the household's
+  //     own grouping (the taxonomy's `essential` flag otherwise).
+  //   irregularOff: { [txnId]: true } one-time costs left out of the irregular allowance.
+  //   trends: the Trends chart: which series (TREND_SERIES), a moving average of 0/3/6 months, and a trend line.
   const PLAN_ROW_FIELDS = [['included', optional(rule('bool', {}))], ['cents', optional(rule('cents', { signed: true }))]];
   const PLAN_ROW_RULE = rule('object', { fields: PLAN_ROW_FIELDS });
+  const SPEND_GROUP_RULE = oneOf(SPEND_GROUPS, null);
+  const TRENDS_FIELDS = [
+    ['series', rule('keylist', { max: LIMITS.planTrendSeries, def: ['card'], values: TREND_SERIES })],
+    ['ma', oneOf([0, 3, 6], 3)],
+    ['trend', bool(true)]
+  ];
+  const TRENDS_DEFAULT = { series: ['card'], ma: 3, trend: true };
   const PLAN_UI_FIELDS = [
     ['baselineMonths', oneOf([3, 6, 12, 'all'], 12)],
     ['horizon', oneOf([6, 12, 24, 60], 12)],
     ['past', oneOf([6, 12, 'all'], 12)],
-    ['mode', oneOf(['balance', 'flows'], 'balance')],
+    ['mode', oneOf(['balance', 'flows', 'trends'], 'balance')],
     ['coverFromSavings', bool(true)],
-    ['dials', rule('centsmap', { max: LIMITS.planDials, def: {}, noun: 'plan amounts' })],
+    ['dials', rule('centsmap', { max: LIMITS.planDials, def: {}, noun: 'plan amounts', keys: DIAL_KEYS })],
     ['rows', rule('rowmap', { max: LIMITS.planRows, def: {} })],
-    ['hidden', rule('keylist', { max: LIMITS.planHidden, def: null, nullable: true })]
+    ['hidden', rule('keylist', { max: LIMITS.planHidden, def: null, nullable: true })],
+    ['groups', rule('enummap', { max: LIMITS.planGroups, keyMax: LIMITS.groupKey, values: SPEND_GROUPS, def: {}, noun: 'spending groups' })],
+    ['irregularOff', rule('boolmap', { max: LIMITS.planIrregular, keyMax: LIMITS.txnId, def: {} })],
+    ['trends', rule('object', { fields: TRENDS_FIELDS, def: TRENDS_DEFAULT })]
   ];
-  const PLAN_UI_DEFAULT = { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null };
-  /** Where each earlier Home amount (ui.home, removed) goes in ui.plan.dials. */
-  const HOME_TO_DIALS = { p1InCents: 'p1', p2InCents: 'p2', cardCents: 'card', bankCents: 'bank', savedCents: 'savings' };
+  const PLAN_UI_DEFAULT = { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null,
+    groups: {}, irregularOff: {}, trends: TRENDS_DEFAULT };
+  /** Where each earlier Home amount (ui.home, removed) goes in ui.plan.dials (card and bank are no longer dials). */
+  const HOME_TO_DIALS = { p1InCents: 'p1', p2InCents: 'p2', savedCents: 'savings' };
 
   const UI_FIELDS = [
     ['scope', oneOf(['joint', 'household'], 'joint')],
@@ -383,6 +427,7 @@
     assumedPerMonthIfUnknown: 'Paychecks assumed per month', loanCount: 'Number of loans', promo: 'Promotion',
     goal: 'Savings goal', annualReturnPct: 'Annual return', costGrowthPct: 'Cost growth', incomeGrowthPct: 'Income growth',
     incomeTiming: 'Income timing', planningBaseline: 'Planning baseline', comparisonWindow: 'Comparison window',
+    cents: 'Amount', accepted: 'Accepted', template: 'Template', group: 'Group',
     scope: 'View', lastRoute: 'Last page'
   };
   const fieldName = k => lookup(FIELD_NAMES, k) || k;
@@ -467,7 +512,7 @@
         for (const [k, v] of Object.entries(value)) {
           const key = k.trim();
           const okValue = v === null || (Number.isSafeInteger(v) && Math.abs(v) <= E.money.MAX_INPUT_CENTS);
-          if (!isValidId(key) || !okValue || Object.keys(out).length >= r.max) { dropped.push(k); continue; }
+          if (!isValidId(key) || (r.keys && !r.keys.includes(key)) || !okValue || Object.keys(out).length >= r.max) { dropped.push(k); continue; }
           out[key] = v;
         }
         if (dropped.length && strict) return bad(r.noun ? 'Every entry needs a short name and an amount in whole cents.' : 'Every balance needs an account and an amount in whole cents.');
@@ -506,22 +551,40 @@
       case 'keylist': {
         if (!Array.isArray(value)) return bad('Expected a list of names.');
         const list = [];
-        for (const k of value) if (typeof k === 'string' && isValidId(k.trim()) && !list.includes(k.trim()) && list.length < r.max) list.push(k.trim());
+        for (const k of value) {
+          if (typeof k !== 'string') continue;
+          const key = k.trim();
+          if (isValidId(key) && (!r.values || r.values.includes(key)) && !list.includes(key) && list.length < r.max) list.push(key);
+        }
         const changed = list.length !== value.length || list.some((k, i) => k !== value[i]);
-        if (changed && strict) return bad('Use up to ' + r.max + ' different short names.');
-        return ok(list, changed ? 'cleaned (names that were not valid, repeated or over ' + r.max + ' removed)' : null);
+        if (changed && strict) return bad(r.values ? 'Choose up to ' + r.max + ' different series from: ' + r.values.join(', ') + '.' : 'Use up to ' + r.max + ' different short names.');
+        return ok(list, changed ? 'cleaned (names that were not valid, ' + (r.values ? 'not known, ' : '') + 'repeated or over ' + r.max + ' removed)' : null);
       }
       case 'boolmap': {
         if (!isObj(value)) return bad('Expected a set of yes/no settings.');
         const out = {};
         const dropped = [];
+        const keyMax = r.keyMax || LIMITS.label;
         for (const [k, v] of Object.entries(value)) {
           const key = k.trim();
-          if (!key || key.length > LIMITS.label || !isSafeKey(key) || typeof v !== 'boolean' || Object.keys(out).length >= r.max) { dropped.push(k); continue; }
+          if (!key || key.length > keyMax || !isSafeKey(key) || typeof v !== 'boolean' || Object.keys(out).length >= r.max) { dropped.push(k); continue; }
           out[key] = v;
         }
         if (dropped.length && strict) return bad('Every entry needs a short name and a yes/no value.');
         return ok(out, dropped.length ? 'dropped entries that were not yes/no settings (' + dropped.slice(0, 5).map(k => JSON.stringify(k)).join(', ') + ')' : null);
+      }
+      case 'enummap': {
+        const noun = r.noun || 'choices';
+        if (!isObj(value)) return bad('Expected a list of ' + noun + '.');
+        const out = {};
+        const dropped = [];
+        for (const [k, v] of Object.entries(value)) {
+          const key = k.trim();
+          if (!key || key.length > r.keyMax || !isSafeKey(key) || !r.values.includes(v) || Object.keys(out).length >= r.max) { dropped.push(k); continue; }
+          out[key] = v;
+        }
+        if (dropped.length && strict) return bad('Every entry needs a name (up to ' + r.keyMax + ' characters) and one of: ' + r.values.join(', ') + '.');
+        return ok(out, dropped.length ? 'dropped ' + noun + ' that were not valid (' + dropped.slice(0, 5).map(k => JSON.stringify(k)).join(', ') + ')' : null);
       }
       case 'strings': {
         if (!Array.isArray(value)) return bad('Expected a list of notes.');
@@ -739,11 +802,31 @@
       people: clone(people),
       incomes: [], bills: [], debts: [], targets: {}, savings: [], personalSpending: [],
       balances: { jointCashCents: null, asOf: null, note: '', accounts: {}, accountsAsOf: null, accountDates: {} },
-      settings: { incomeTiming: 'conservative', planningBaseline: 'actual', comparisonWindow: 3 }
+      settings: { incomeTiming: 'conservative', planningBaseline: 'actual', comparisonWindow: 3 },
+      changes: []
     };
   }
 
-  const PLAN_KEYS = ['people', 'incomes', 'bills', 'debts', 'targets', 'savings', 'personalSpending', 'balances', 'settings'];
+  const PLAN_KEYS = ['people', 'incomes', 'bills', 'debts', 'targets', 'savings', 'personalSpending', 'balances', 'settings', 'changes'];
+
+  /**
+   * A planned change's fields that only fit some kinds: an end month only on a monthly change, a
+   * person only on an income change. Strict mode rejects the mismatch; lenient mode clears it.
+   */
+  function changeOrder(item, path, o) {
+    startEndOrder(item, path, o);
+    if (item.kind === 'oneTime' && item.endMonth !== null && item.endMonth !== undefined) {
+      if (o.strict) fail('A one-time change happens in its start month only: it has no end month.', 'endMonth');
+      o.ctx.note(path + '.endMonth: a one-time change has no end month; ' + item.endMonth + ' was cleared.');
+      item.endMonth = null;
+    }
+    if (item.group !== 'income' && item.personId !== null && item.personId !== undefined) {
+      if (o.strict) fail('Only an income change belongs to a person.', 'personId');
+      o.ctx.note(path + '.personId: only an income change belongs to a person; ' + item.personId + ' was cleared.');
+      item.personId = null;
+    }
+    return true;
+  }
 
   function cleanPlan(raw, base, ctx, path) {
     if (raw === undefined) return clone(base);
@@ -757,7 +840,9 @@
       savings: cleanList(raw.savings, GOAL_FIELDS, { path: path + '.savings', ctx, max: LIMITS.savings, prefix: 'goal', fallback: base.savings }),
       personalSpending: cleanPersonal(raw.personalSpending, base.personalSpending, path + '.personalSpending', ctx),
       balances: cleanGroup(raw.balances, BALANCE_FIELDS, base.balances, path + '.balances', ctx),
-      settings: cleanGroup(raw.settings, SETTINGS_FIELDS, base.settings, path + '.settings', ctx)
+      settings: cleanGroup(raw.settings, SETTINGS_FIELDS, base.settings, path + '.settings', ctx),
+      // Absent in budgets saved before planned changes existed: none yet.
+      changes: cleanList(raw.changes, CHANGE_FIELDS, { path: path + '.changes', ctx, max: LIMITS.planChanges, prefix: 'change', fallback: Array.isArray(base.changes) ? base.changes : [], after: changeOrder })
     };
     for (const k of Object.keys(raw)) {
       if (!PLAN_KEYS.includes(k)) ctx.note(path + '.' + k + ': not part of the saved budget format; dropped (it was ' + preview(raw[k]) + ').');
@@ -1089,12 +1174,14 @@
     else if (!isObj(raw.ui)) { ctx.note('ui: not readable (' + preview(raw.ui) + '); reset.'); ui = clone(base.ui); }
     else {
       const moved = has(raw.ui, 'home') ? migrateHome(raw.ui) : null;
-      ui = cleanFields(moved ? moved.ui : raw.ui, UI_FIELDS, { path: 'ui', ctx, strict: false, defaults: base.ui });
-      if (moved) {
-        ctx.note(moved.note);
+      const retired = migratePlanDials(moved ? moved.ui : raw.ui);
+      ui = cleanFields(retired ? retired.ui : moved ? moved.ui : raw.ui, UI_FIELDS, { path: 'ui', ctx, strict: false, defaults: base.ui });
+      for (const m of [moved, retired]) {
+        if (!m) continue;
+        ctx.note(m.note);
         // Recorded like the other migrations, so the household can see what moved where.
         const notes = Array.isArray(meta.migrationNotes) ? meta.migrationNotes : [];
-        if (!notes.includes(moved.note)) meta.migrationNotes = notes.concat([moved.note.slice(0, LIMITS.note)]).slice(-LIMITS.migrationNotes);
+        if (!notes.includes(m.note)) meta.migrationNotes = notes.concat([m.note.slice(0, LIMITS.note)]).slice(-LIMITS.migrationNotes);
       }
     }
 
@@ -1133,10 +1220,32 @@
     ui.plan = plan;
     const left = [];
     if (Number.isSafeInteger(home.inCents)) left.push('all money into joint (' + money(home.inCents) + '): the plan now sets each partner’s money in separately');
-    if (Number.isSafeInteger(home.outCents)) left.push('the earlier single spending amount (' + money(home.outCents) + '): card and bank spending are set separately');
+    const spent = [['outCents', 'the earlier single spending amount'], ['cardCents', 'card spending'], ['bankCents', 'bank spending']]
+      .filter(([k]) => Number.isSafeInteger(home[k])).map(([k, what]) => what + ' (' + money(home[k]) + ')');
+    if (spent.length) left.push(spent.join(', ') + ': spending is now set as essentials, flexible and irregular');
     const note = 'ui.home: the Home settings moved to the plan screen (ui.plan)' + (moved.length ? ': ' + moved.join(', ') : '') + '.'
       + (kept.length ? ' The plan screen already had its own ' + kept.join(', ') + ', which were kept.' : '')
       + (left.length ? ' Not carried over: ' + left.join('; ') + '.' : '');
+    return { ui, note };
+  }
+
+  /**
+   * Card and bank spending were dials set directly; spending is now planned as essentials,
+   * flexible and irregular, and card and bank are worked out from those. An amount set for card or
+   * bank says nothing about how it splits between the new groups, so it cannot be carried over: it
+   * is removed and the note says what it was. Returns { ui, note } or null when there is none.
+   */
+  function migratePlanDials(rawUi) {
+    if (!isObj(rawUi) || !isObj(rawUi.plan) || !isObj(rawUi.plan.dials)) return null;
+    const found = RETIRED_DIALS.filter(k => has(rawUi.plan.dials, k));
+    if (!found.length) return null;
+    const dials = Object.assign({}, rawUi.plan.dials);
+    for (const k of found) delete dials[k];
+    const ui = Object.assign({}, rawUi, { plan: Object.assign({}, rawUi.plan, { dials }) });
+    const said = found.map(k => k + ' spending ' + (Number.isSafeInteger(rawUi.plan.dials[k]) ? money(rawUi.plan.dials[k]) : preview(rawUi.plan.dials[k])));
+    const note = 'ui.plan.dials: ' + said.join(' and ') + ' set on the plan screen ' + (found.length > 1 ? 'were' : 'was') + ' removed. '
+      + 'Spending is now planned as essentials, flexible and irregular, and card and bank spending are worked out from those, so '
+      + (found.length > 1 ? 'these amounts' : 'this amount') + ' could not be carried over. Set the new dials on the plan screen.';
     return { ui, note };
   }
 
@@ -2212,11 +2321,12 @@
     incomes: { fields: INCOME_FIELDS, max: LIMITS.incomes, prefix: 'income', noun: 'income streams', label: 'New income', after: startEndOrder },
     bills: { fields: BILL_FIELDS, max: LIMITS.bills, prefix: 'bill', noun: 'bills', label: 'New bill', after: startEndOrder },
     savings: { fields: GOAL_FIELDS, max: LIMITS.savings, prefix: 'goal', noun: 'savings goals', label: 'New savings goal' },
-    debts: { fields: DEBT_FIELDS, max: LIMITS.debts, prefix: 'debt', noun: 'debts', label: 'New debt' }
+    debts: { fields: DEBT_FIELDS, max: LIMITS.debts, prefix: 'debt', noun: 'debts', label: 'New debt' },
+    changes: { fields: CHANGE_FIELDS, max: LIMITS.planChanges, prefix: 'change', noun: 'planned changes', label: 'Planned change', after: changeOrder }
   };
 
   function listSpec(list) {
-    if (!has(PLAN_LISTS, list)) fail('Items can be added to incomes, bills, savings or debts (not "' + list + '").', 'list');
+    if (!has(PLAN_LISTS, list)) fail('Items can be added to incomes, bills, savings or debts, and to planned changes (not "' + list + '").', 'list');
     return PLAN_LISTS[list];
   }
 
@@ -2245,6 +2355,31 @@
     }
     const plan = Object.assign({}, state.plan, { [list]: current.concat([Object.assign({ id }, body)]) });
     const next = Object.assign({}, state, { plan });
+    if (opts && isIso(opts.now) && isObj(state.meta)) next.meta = Object.assign({}, state.meta, { updatedAt: opts.now });
+    return next;
+  }
+
+  /**
+   * Change several fields of one plan list item at once (an income stream, bill, savings goal,
+   * debt or planned change). `patch` is merged over the item (undefined removes a field, which
+   * then gets its default); the result is validated strictly like a new item, so fields that
+   * depend on each other (a change's kind and end month) can change together. The id is kept.
+   */
+  function updateItem(state, list, id, patch, opts) {
+    const spec = listSpec(list);
+    if (!isObj(state) || !isObj(state.plan)) fail('The budget is not loaded yet.');
+    if (!isObj(patch)) fail('Nothing to change.');
+    const current = Array.isArray(state.plan[list]) ? state.plan[list] : [];
+    const at = current.findIndex(x => x && x.id === id);
+    if (at === -1) fail('That item no longer exists.', 'id');
+    const merged = Object.assign({}, current[at], patch);
+    for (const k of Object.keys(merged)) if (merged[k] === undefined) delete merged[k];
+    delete merged.id;
+    const body = cleanFields(merged, spec.fields, { path: 'plan.' + list, ctx: makeCtx(), strict: true });
+    if (spec.after) spec.after(body, 'plan.' + list, { strict: true, ctx: makeCtx() });
+    const items = current.slice();
+    items[at] = Object.assign({ id }, body);
+    const next = Object.assign({}, state, { plan: Object.assign({}, state.plan, { [list]: items }) });
     if (opts && isIso(opts.now) && isObj(state.meta)) next.meta = Object.assign({}, state.meta, { updatedAt: opts.now });
     return next;
   }
@@ -2283,7 +2418,8 @@
     obj: children => ({ kind: 'obj', children }),
     item: (fields, children, after) => ({ kind: 'item', rules: new Map(fields), children: children || {}, after: after || null }),
     list: (sel, item, extra) => Object.assign({ kind: 'list', sel, item }, extra || {}),
-    map: (valueRule, max) => ({ kind: 'map', rule: valueRule, max }),
+    // keys: the only keys allowed (with keysMessage when another is written); keyMax: key length.
+    map: (valueRule, max, extra) => Object.assign({ kind: 'map', rule: valueRule, max }, extra || {}),
     leaf: r => ({ kind: 'leaf', rule: r }),
     event: () => ({ kind: 'event' })
   };
@@ -2300,14 +2436,24 @@
       }),
       targets: N.map(CENTS, LIMITS.targets),
       balances: N.item(BALANCE_FIELDS, { accounts: N.map(SIGNED_CENTS, LIMITS.balanceAccounts), accountDates: N.map(DATE, LIMITS.balanceAccounts) }),
-      settings: N.item(SETTINGS_FIELDS)
+      settings: N.item(SETTINGS_FIELDS),
+      changes: N.list('id', N.item(CHANGE_FIELDS, null, changeOrder))
     }),
     scenarios: N.list('id', N.item(SCENARIO_FIELDS, { assumptions: N.item(ASSUMPTION_FIELDS), events: N.list('id', N.event()) })),
     compareIds: N.leaf(rule('compareIds')),
     checklist: N.map(STRICT_BOOL, LIMITS.checklist),
     ui: N.item(UI_FIELDS, {
       whatIf: N.item(WHATIF_FIELDS),
-      plan: N.item(PLAN_UI_FIELDS, { dials: N.map(SIGNED_CENTS, LIMITS.planDials), rows: N.map(PLAN_ROW_RULE, LIMITS.planRows) }),
+      plan: N.item(PLAN_UI_FIELDS, {
+        dials: N.map(SIGNED_CENTS, LIMITS.planDials, {
+          keys: DIAL_KEYS,
+          keysMessage: 'Plan amounts can be set for: ' + DIAL_KEYS.join(', ') + '. Card and bank spending are worked out from essentials, flexible and irregular spending, not set directly.'
+        }),
+        rows: N.map(PLAN_ROW_RULE, LIMITS.planRows),
+        groups: N.map(SPEND_GROUP_RULE, LIMITS.planGroups, { keyMax: LIMITS.groupKey }),
+        irregularOff: N.map(STRICT_BOOL, LIMITS.planIrregular, { keyMax: LIMITS.txnId }),
+        trends: N.item(TRENDS_FIELDS)
+      }),
       dismissed: N.map(STRICT_BOOL, LIMITS.dismissed)
     }),
     meta: N.item([['createdAt', ISO_TIME], ['updatedAt', ISO_TIME], ['migrationNotes', NOTES_RULE]])
@@ -2344,7 +2490,8 @@
     return badPath(path);
   }
 
-  function readMapKey(path, pos) {
+  function readMapKey(path, pos, keyMax) {
+    const max = keyMax || LIMITS.categoryKey;
     let key;
     if (path[pos] === '[') {
       if (path[path.length - 1] !== ']') badPath(path);
@@ -2357,7 +2504,7 @@
     }
     key = key.trim();
     if (!isSafeKey(key)) badPath(path);
-    if (!key || key.length > LIMITS.categoryKey) fail('Names here need 1 to ' + LIMITS.categoryKey + ' characters.', 'path');
+    if (!key || key.length > max) fail('Names here need 1 to ' + max + ' characters.', 'path');
     return key;
   }
 
@@ -2453,9 +2600,10 @@
         return arr;
       }
       case 'map': {
-        const key = readMapKey(path, pos);
+        const key = readMapKey(path, pos, n.keyMax);
         const copy = Object.assign({}, isObj(current) ? current : {});
         if (value === undefined) { delete copy[key]; return copy; }
+        if (n.keys && !n.keys.includes(key)) fail(n.keysMessage || 'There is no field "' + path + '" in the saved budget.', 'path');
         if (!has(copy, key) && n.max && Object.keys(copy).length >= n.max) fail('There is no room for more entries here (up to ' + n.max + ').', 'path');
         copy[key] = strictValue(n.rule, value, null);
         return copy;
@@ -2527,7 +2675,7 @@
           break;
         }
         case 'map': {
-          const key = readMapKey(p, pos);
+          const key = readMapKey(p, pos, n.keyMax);
           cur = isObj(cur) && has(cur, key) ? cur[key] : undefined;
           pos = p.length;
           break;
@@ -2711,7 +2859,8 @@
     exportWorkbook, importWorkbook, extractEmbeddedState,
     addScenario, renameScenario, deleteScenario, removeScenario: deleteScenario,
     addEvent, updateEvent, removeEvent, validateEvent,
-    getPath, setPath, addItem, removeItem,
+    DIAL_KEYS, RETIRED_DIALS, SPEND_GROUPS, CHANGE_KINDS, CHANGE_GROUPS, TREND_SERIES,
+    getPath, setPath, addItem, updateItem, removeItem,
     loadFromStorage, saveToStorage
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

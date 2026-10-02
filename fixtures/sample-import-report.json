@@ -16,6 +16,9 @@
     {"id":"joint-card","label":"Joint rewards card","type":"credit_card","coverage":[{"start":"2025-01-01","end":"2026-09-30"}],"transactions":634},
     {"id":"joint-savings","label":"Joint savings","type":"savings","coverage":[{"start":"2025-06-01","end":"2026-09-30"}],"transactions":32}
   ],
+  "balances": [
+    {"accountId":"joint-checking","date":"2026-09-30","cents":6990114,"source":"bank","note":"Running balance after the last row (2026-09-25, checking-2025-11-to-2026-09.csv); no later rows through 2026-09-30."}
+  ],
   "totalsByKind": {
     "spend": {
       "count": 745,

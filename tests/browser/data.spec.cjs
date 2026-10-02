@@ -107,6 +107,57 @@ async function importSample(t, { dsid = 'alex-sam-test', rules = true } = {}) {
   await page.waitForSelector('#dp-csv-use');
 }
 
+const NEWER_NAME = 'checking-2026-09-to-2026-10.csv';
+const money = cents => '$' + (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/**
+ * An invented newer checking export, newest first like the sample's: the sample's September rows
+ * again (already in the data) and new October rows, with a running balance that continues the
+ * sample's.
+ */
+function newerChecking() {
+  const E = loadEngine();
+  const [header, ...rows] = E.importer.parseCSV(fs.readFileSync(path.join(RAW, 'checking-2025-11-to-2026-09.csv'), 'utf8'));
+  const september = rows.filter(r => /^09\/\d\d\/2026$/.test(r[0]));
+  let cents = E.money.parseAmount(september[0][3]);
+  const october = [['10/01/2026', 'SAMPLE MORTGAGE SERVICER PMT', -141256], ['10/02/2026', 'SAMPLE EMPLOYER PAYROLL DIR DEP', 188000],
+    ['10/09/2026', 'LANTERN BAKERY', -1425], ['10/16/2026', 'SAMPLE EMPLOYER PAYROLL DIR DEP', 188000], ['10/20/2026', 'SAMPLE GAS UTILITY', -6130]]
+    .map(([d, desc, amt]) => { cents += amt; return [d, desc, (amt / 100).toFixed(2), (cents / 100).toFixed(2)]; });
+  const lines = [header].concat(october.reverse(), september).map(r => r.join(','));
+  return { text: lines.join('\n') + '\n', added: october.length, overlap: september.length, endCents: cents };
+}
+
+/** Mark the checking row with this date and description as a duplicate (not counted); returns its id. */
+async function excludeRow(page, date, description) {
+  let id;
+  await waitForRender(page, async () => {
+    id = await page.evaluate(([d, desc]) => {
+      const H = window.HouseholdBudget;
+      const txn = H.getDataset().transactions.find(x => x.accountId === 'joint-checking' && x.date === d && x.description === desc);
+      const edit = H.engine.review.editRecord(null, 'duplicate', 'exclude', 'Test: same purchase twice', '2026-10-01T12:00:00.000Z');
+      const s = H.getState();
+      H.setState({ ...s, ledgerEdits: { ...s.ledgerEdits, [txn.id]: edit } });
+      return txn.id;
+    }, [date, description]);
+  });
+  return id;
+}
+
+/** Add the newer export to the sample through the page (add mode), ending on the reloaded hub. */
+async function mergeNewer(t, newer) {
+  const { page } = t;
+  await page.setInputFiles('#dp-pick-csv', [textFile(NEWER_NAME, newer.text, 'text/csv')]);
+  await page.waitForSelector('#dp-csv-mode-add');
+  await waitForRender(page, () => page.check('#dp-csv-mode-add'));
+  const [block] = await page.$$eval('.dp-fileblock', els => els.map(e => e.id));
+  await page.fill(`#${block}-cs`, '2026-09-01');
+  await page.fill(`#${block}-ce`, '2026-10-31');
+  await page.waitForFunction(id => document.getElementById(id + '-ce').value === '2026-10-31', block);
+  await page.click('#dp-csv-check-btn');
+  await page.waitForSelector('#dp-merge-apply');
+  await Promise.all([page.waitForNavigation({ waitUntil: 'load' }), page.click('#dp-merge-apply')]);
+  await page.waitForSelector('#dp-using');
+}
+
 module.exports = [
   {
     name: 'hub shows what the page is using, with accounts, coverage, import log and every section',
@@ -777,6 +828,194 @@ module.exports = [
       const preview = await text(page, '#dp-workbook-file');
       t.assert.ok(preview.includes('Made for different data') && preview.includes('“other-data”') && preview.includes('“sample”'), 'the mismatch is explained');
       t.assert.ok(preview.includes('Budget workbook, exported Sep 15, 2026'));
+    },
+  },
+  {
+    name: 'adding a newer export: summary first, only new rows added, corrections and ids kept, saved across reloads',
+    async run(t) {
+      const { page } = t;
+      await t.open('#/data');
+      const newer = newerChecking();
+      // A correction on a September row that the newer export repeats.
+      const edited = await excludeRow(page, '2026-09-22', 'SAMPLE WIRELESS');
+      const editsBefore = Object.keys((await state(page)).ledgerEdits);
+      await page.setInputFiles('#dp-pick-csv', [textFile(NEWER_NAME, newer.text, 'text/csv')]);
+      await page.waitForFunction(() => document.querySelectorAll('.dp-fileblock').length === 1);
+      const [block] = await page.$$eval('.dp-fileblock', els => els.map(e => e.id));
+      t.assert.equal(await page.$eval(`#${block}-acct`, s => s.value), 'joint-checking', 'the account is taken from the file name');
+      // The fictional sample is replaced by default; adding to it is one choice away.
+      t.assert.ok(await page.isChecked('#dp-csv-mode-replace'), 'the sample is replaced by default');
+      await waitForRender(page, () => page.check('#dp-csv-mode-add'));
+      t.assert.ok(await page.isChecked('#dp-csv-mode-add'));
+      t.assert.equal(await page.$('#dp-csv-dsid'), null, 'adding keeps the data set name: no name to choose');
+      t.assert.ok((await text(page, '#dp-csv-dsid-status')).includes('every transaction keeps its id'));
+      await page.fill(`#${block}-cs`, '2026-09-01');
+      await page.fill(`#${block}-ce`, '2026-10-31');
+      await page.waitForFunction(id => document.getElementById(id + '-ce').value === '2026-10-31', block);
+      await page.setInputFiles('#dp-pick-rules', textFile('sample-rules.json', fs.readFileSync(path.join(ROOT, 'fixtures/sample-rules.json'), 'utf8')));
+      await page.waitForSelector('#dp-rules-remove');
+      t.assert.equal(await text(page, '#dp-csv-check-btn'), 'Check what will be added');
+      await page.click('#dp-csv-check-btn');
+      await page.waitForSelector('#dp-merge-apply');
+      await assertStructure(t, 'the summary of what will be added');
+
+      const line = `${newer.added} new, ${newer.overlap} already present, coverage now to Oct 31, 2026, 1 balance added.`;
+      t.assert.equal(await text(page, '#dp-merge-line'), line, 'one line says what will happen');
+      const metrics = Object.fromEntries(await page.$$eval('.dp-metrics .metric', els => els.map(e => [e.querySelector('.metric-label').textContent, e.querySelector('.metric-value').textContent])));
+      t.assert.deepEqual(metrics, { 'New transactions': String(newer.added), 'Already in your data': String(newer.overlap), 'Covered to': 'Oct 31, 2026', 'Rows skipped': '0' });
+      const accounts = await text(page, '#dp-merge-accounts');
+      t.assert.ok(accounts.includes('Joint checking') && accounts.includes('Oct 1, 2024 – Oct 31, 2026') && accounts.includes('Before: Oct 1, 2024 – Sep 30, 2026'), 'coverage before and after');
+      t.assert.ok(!accounts.includes('Joint rewards card'), 'accounts without new files are left out of the table');
+      const balances = await text(page, '#dp-merge-balances');
+      t.assert.ok(balances.includes('Oct 31, 2026') && balances.includes(money(newer.endCents)) && balances.includes('running balance'), 'the export’s closing balance is added');
+      await page.click('#dp-merge-present > summary');
+      t.assert.equal(await page.$$eval('#dp-merge-present tbody tr', trs => trs.length), newer.overlap, 'every row already in the data is listed');
+      t.assert.equal(await page.evaluate(() => window.HouseholdBudget.getDataset().transactions.length), 959, 'nothing changes before Add');
+      await t.shot('data-merge-summary');
+
+      await Promise.all([page.waitForNavigation({ waitUntil: 'load' }), page.click('#dp-merge-apply')]);
+      await page.waitForSelector('#dp-using');
+      t.assert.equal(await text(page, '#dp-merged-line'), line, 'the confirmation repeats what was added');
+      const after = await page.evaluate(() => window.HouseholdBudget.getDataset());
+      t.assert.equal(after.transactions.length, 959 + newer.added, 'only the new rows are added');
+      t.assert.equal(after.datasetId, 'sample', 'the data set keeps its name, so the saved budget stays');
+      t.assert.deepEqual(after.balances.filter(b => b.date === '2026-10-31'), [{ accountId: 'joint-checking', date: '2026-10-31', cents: newer.endCents, source: 'bank', note: after.balances.find(b => b.date === '2026-10-31').note }]);
+      t.assert.ok(after.transactions.some(x => x.id === edited), 'the corrected row keeps its id');
+      t.assert.deepEqual(Object.keys((await state(page)).ledgerEdits), editsBefore, 'corrections are kept');
+      t.assert.equal(await page.evaluate(id => window.HouseholdBudget.context().txns.find(x => x.id === id).excluded, edited), 'duplicate', 'and still apply');
+      t.assert.ok((await text(page, '#dp-using')).includes('from the built-in fictional sample plus 1 CSV file'), 'the hub says what was added to what');
+      t.assert.ok((await text(page, '#dp-using table')).includes('Oct 1, 2024 – Oct 31, 2026'), 'coverage extended');
+
+      await page.reload();
+      await page.waitForSelector('#dp-using');
+      t.assert.equal(await page.evaluate(() => window.HouseholdBudget.getDataset().transactions.length), 959 + newer.added, 'the added rows are kept after a reload');
+      t.assert.equal(await page.evaluate(id => window.HouseholdBudget.context().txns.find(x => x.id === id).excluded, edited), 'duplicate');
+
+      // Loading the same export again adds nothing.
+      await page.setInputFiles('#dp-pick-csv', [textFile(NEWER_NAME, newer.text, 'text/csv')]);
+      await page.waitForSelector('#dp-csv-mode-add:checked');
+      const [again] = await page.$$eval('.dp-fileblock', els => els.map(e => e.id));
+      await page.fill(`#${again}-cs`, '2026-09-01');
+      await page.fill(`#${again}-ce`, '2026-10-31');
+      await page.waitForFunction(id => document.getElementById(id + '-ce').value === '2026-10-31', again);
+      await page.click('#dp-csv-check-btn');
+      await page.waitForSelector('#dp-merge-apply');
+      t.assert.equal(await text(page, '#dp-merge-line'), `0 new, ${newer.overlap + newer.added} already present, coverage now to Oct 31, 2026.`, 'household data is added to by default, and a repeat adds nothing');
+    },
+  },
+  {
+    name: 'adding to the data: the data file and a workbook round-trip the added rows, their balances and corrections',
+    async run(t) {
+      const { page } = t;
+      await t.open('#/data');
+      const newer = newerChecking();
+      await mergeNewer(t, newer);
+      // A correction on a row that exists only since the export was added.
+      const fresh = await excludeRow(page, '2026-10-09', 'LANTERN BAKERY');
+      const [wbDl] = await Promise.all([page.waitForEvent('download'), page.click('#dp-export-wb')]);
+      const workbook = fs.readFileSync(await wbDl.path(), 'utf8');
+      const [dataDl] = await Promise.all([page.waitForEvent('download'), page.click('#dp-export-data')]);
+      t.assert.match(dataDl.suggestedFilename(), /^household-budget-data-\d{4}-\d{2}-\d{2}\.json$/);
+      const dataText = fs.readFileSync(await dataDl.path(), 'utf8');
+      const merged = await page.evaluate(() => window.HouseholdBudget.getDataset());
+      t.assert.deepEqual(JSON.parse(dataText), merged, 'the data file is the data in use');
+
+      // Back to the built-in sample: the correction no longer has its row.
+      await page.click('#dp-forget');
+      await page.waitForSelector('#dialog[open]');
+      await Promise.all([page.waitForNavigation({ waitUntil: 'load' }), page.click('#dialog button[value="ok"]')]);
+      await page.waitForSelector('#dp-using');
+      t.assert.equal(await page.evaluate(() => window.HouseholdBudget.getDataset().transactions.length), 959);
+
+      // The data file brings back the same rows, ids and balances, and the corrections find them.
+      await page.setInputFiles('#dp-pick-dataset', textFile(dataDl.suggestedFilename(), dataText));
+      await page.waitForSelector('#dp-dataset-use');
+      t.assert.ok((await text(page, '#dp-dataset-file')).includes(`${959 + newer.added} transactions`));
+      t.assert.ok((await text(page, '#dp-dataset-file')).includes('2 balances'), 'the data file carries its balances');
+      await Promise.all([page.waitForNavigation({ waitUntil: 'load' }), page.click('#dp-dataset-use')]);
+      await page.waitForSelector('#dp-using');
+      const back = await page.evaluate(() => window.HouseholdBudget.getDataset());
+      t.assert.deepEqual(back.transactions.map(x => x.id), merged.transactions.map(x => x.id), 'same ids');
+      t.assert.deepEqual(back.balances, merged.balances, 'same balances');
+      t.assert.equal(await page.evaluate(id => window.HouseholdBudget.context().txns.find(x => x.id === id).excluded, fresh), 'duplicate', 'the saved correction applies again');
+
+      // A workbook made after the merge re-imports with every correction matching a transaction.
+      await page.setInputFiles('#dp-pick-workbook', textFile(wbDl.suggestedFilename(), workbook));
+      await page.waitForSelector('#dp-wb-apply');
+      const edits = Object.keys(JSON.parse(workbook).state.ledgerEdits).length;
+      t.assert.ok((await text(page, '#dp-workbook-file')).includes(`${edits} now → ${edits} in the file (${edits} match transactions in the data used now)`), 'every correction in the workbook matches');
+    },
+  },
+  {
+    name: 'Replace instead asks first, then uses only the chosen files',
+    async run(t) {
+      const { page } = t;
+      await t.open('#/data');
+      const newer = newerChecking();
+      await page.setInputFiles('#dp-pick-csv', [textFile(NEWER_NAME, newer.text, 'text/csv')]);
+      await page.waitForSelector('#dp-csv-mode-add');
+      await waitForRender(page, () => page.check('#dp-csv-mode-add'));
+      await page.click('#dp-csv-check-btn');
+      await page.waitForSelector('#dp-merge-replace');
+      await page.click('#dp-merge-replace');
+      await page.waitForSelector('#dialog[open]');
+      const body = await text(page, '#dialog');
+      t.assert.ok(body.includes(`only the ${newer.added + newer.overlap} transactions in these files`) && body.includes('959 transactions it uses now'), 'the confirmation gives both counts');
+      await page.click('#dialog button[value="cancel"]');
+      await page.waitForFunction(() => !document.querySelector('#dialog[open]'));
+      t.assert.equal(await page.evaluate(() => window.HouseholdBudget.getDataset().transactions.length), 959, 'Cancel changes nothing');
+      t.assert.ok(await page.isVisible('#dp-merge-apply'), 'the summary stays');
+
+      await page.click('#dp-merge-replace');
+      await page.waitForSelector('#dialog[open]');
+      await Promise.all([page.waitForNavigation({ waitUntil: 'load' }), page.click('#dialog button[value="ok"]')]);
+      await page.waitForSelector('#dp-using');
+      const ds = await page.evaluate(() => window.HouseholdBudget.getDataset());
+      t.assert.equal(ds.transactions.length, newer.added + newer.overlap, 'only the chosen file');
+      t.assert.equal(ds.datasetId, 'household', 'the sample’s reserved name is not reused');
+      t.assert.deepEqual(ds.accounts.map(a => a.id), ['joint-checking']);
+      t.assert.ok((await text(page, '#view')).includes('Your data is loaded.'));
+    },
+  },
+  {
+    name: 'a balances file adds statement balances, listed in Data & privacy',
+    viewport: 'both',
+    async run(t) {
+      const { page } = t;
+      await t.open('#/data');
+      const balances = 'Account,Date,Balance,Note\nJoint checking,10/15/2026,"70,123.45",October statement\njoint-savings,2026-09-30,12000.00,\nOther bank,2026-09-30,5.00,\n';
+      await page.setInputFiles('#dp-pick-csv', [textFile('balances.csv', balances, 'text/csv')]);
+      await page.waitForSelector('.dp-balblock');
+      t.assert.equal(await page.$$eval('.dp-fileblock', els => els.length), 0, 'not taken for a bank export');
+      const block = await text(page, '.dp-balblock');
+      t.assert.ok(block.includes('2 balances') && block.includes('1 row will be skipped (1 unknown account)'), 'balances read, unknown account named');
+      t.assert.ok(block.includes('Joint checking: $70,123.45 at the end of Oct 15, 2026'));
+      // On the sample, replacing is the default, and balances alone cannot replace the data.
+      await page.click('#dp-csv-check-btn');
+      await page.waitForSelector('#dp-csv-error');
+      t.assert.ok((await text(page, '#dp-csv-error')).includes('A balances file needs transactions to go with it'));
+      await waitForRender(page, () => page.check('#dp-csv-mode-add'));
+      await page.click('#dp-csv-check-btn');
+      await page.waitForSelector('#dp-merge-apply');
+      t.assert.equal(await text(page, '#dp-merge-line'), '0 new, 0 already present, coverage now to Sep 30, 2026, 2 balances added.');
+      t.assert.equal(await page.$('#dp-merge-replace'), null, 'nothing to replace the data with');
+      await page.click('#dp-merge-balskipped > summary');
+      t.assert.ok((await text(page, '#dp-merge-balances')).includes('balances.csv, line 4: unknown account "Other bank"'));
+      await assertStructure(t, 'the balances summary');
+      await Promise.all([page.waitForNavigation({ waitUntil: 'load' }), page.click('#dp-merge-apply')]);
+      await page.waitForSelector('#dp-using');
+      const ds = await page.evaluate(() => window.HouseholdBudget.getDataset());
+      t.assert.equal(ds.transactions.length, 959);
+      t.assert.deepEqual(ds.balances.filter(b => b.source === 'statement'), [
+        { accountId: 'joint-checking', date: '2026-10-15', cents: 7012345, source: 'statement', note: 'October statement' },
+        { accountId: 'joint-savings', date: '2026-09-30', cents: 1200000, source: 'statement' },
+      ]);
+      const fact = await text(page, '#dp-balances-fact');
+      t.assert.ok(fact.includes('Joint checking: $70,123.45 at the end of Oct 15, 2026 (statement)') && fact.includes('Joint savings: $12,000.00'), 'the latest balance per account is shown');
+      await page.click('#dp-balances > summary');
+      t.assert.equal(await page.$$eval('#dp-balances tbody tr', trs => trs.length), 3, 'statement balances and the export’s own');
+      await assertStructure(t, 'the hub with balances');
+      await t.shot('data-balances');
     },
   },
 ];

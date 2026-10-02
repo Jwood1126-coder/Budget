@@ -4,7 +4,10 @@
  * user corrections may introduce new ones; unknown names fall into the 'Other' group.
  * `seasonal` marks categories whose normal level depends on the time of year (heating,
  * cooling). Comparisons judge those against the same month last year instead of the
- * trailing average.
+ * trailing average. `essential` marks spending that is hard to cut (housing, utilities,
+ * groceries, fuel, insurance, routine health, car upkeep, childcare, debt payments): the plan
+ * screen groups it as "essentials" and everything else as "flexible" (dining, shopping,
+ * entertainment, subscriptions, home improvement, travel, gifts, personal care, pets...).
  */
 (function (root) {
   const E = root.BudgetEngine || (root.BudgetEngine = {});
@@ -38,9 +41,9 @@
     { name: 'Vision', group: 'Health', essential: true },
     { name: 'Home insurance', group: 'Insurance', essential: true },
     { name: 'Life insurance', group: 'Insurance', essential: true },
-    { name: 'Other insurance', group: 'Insurance' },
+    { name: 'Other insurance', group: 'Insurance', essential: true },
     { name: 'Baby & childcare', group: 'Family', essential: true },
-    { name: 'Pets', group: 'Family', essential: true },
+    { name: 'Pets', group: 'Family' },
     { name: 'Personal care', group: 'Family' },
     { name: 'Education', group: 'Family' },
     { name: 'Entertainment', group: 'Leisure' },
@@ -63,7 +66,9 @@
     if (Array.isArray(extraSeasonal) && extraSeasonal.includes(name)) return true;
     return !!byName.get(name)?.seasonal;
   }
-  function isEssential(name) { return !!byName.get(name)?.essential; }
+  /** Names outside the spending taxonomy that are still essential (a debt payment recorded as spending). */
+  const ESSENTIAL_EXTRA = new Set(['Debt payment']);
+  function isEssential(name) { return !!byName.get(name)?.essential || ESSENTIAL_EXTRA.has(name); }
   function names() { return DEFAULT.map(c => c.name); }
   /** Sort category names by group order then by the taxonomy order; unknown names last, alphabetically. */
   function sortNames(list) {

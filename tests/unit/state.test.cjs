@@ -96,7 +96,7 @@ test('defaults: compares the baseline with the first other scenario', () => {
 
 test('defaults: joint scope, overview route, what-ifs off and epoch timestamps', () => {
   const st = base();
-  assert.deepEqual(st.ui, { scope: 'joint', lastRoute: '#/overview', whatIf: { excludePendingReimbursements: false, excludeBusinessCandidates: false }, plan: { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null }, dismissed: {} });
+  assert.deepEqual(st.ui, { scope: 'joint', lastRoute: '#/overview', whatIf: { excludePendingReimbursements: false, excludeBusinessCandidates: false }, plan: { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null, groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true } }, dismissed: {} });
   assert.deepEqual(st.meta, { createdAt: '1970-01-01T00:00:00.000Z', updatedAt: '1970-01-01T00:00:00.000Z', migratedFrom: null, migrationNotes: [], legacySnapshot: null });
   assert.equal(st.scenarios[1].createdAt, '1970-01-01T00:00:00.000Z');
 });
@@ -640,7 +640,7 @@ test('sanitize: references, checklist, ui and meta are validated', () => {
   const r = S.sanitize(raw, profile(), DS);
   assert.deepEqual(r.state.references.map(x => x.id), ['q3']);
   assert.deepEqual(r.state.checklist, { balances: true });
-  assert.deepEqual(r.state.ui, { scope: 'household', lastRoute: '#/forecast?horizon=36', whatIf: { excludePendingReimbursements: true, excludeBusinessCandidates: false }, plan: { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null }, dismissed: { tip1: true } });
+  assert.deepEqual(r.state.ui, { scope: 'household', lastRoute: '#/forecast?horizon=36', whatIf: { excludePendingReimbursements: true, excludeBusinessCandidates: false }, plan: { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null, groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true } }, dismissed: { tip1: true } });
   assert.equal(r.state.meta.createdAt, NOW);
   assert.equal(r.state.meta.updatedAt, '1970-01-01T00:00:00.000Z');
   assert.equal(r.state.meta.migratedFrom, null);
@@ -2003,11 +2003,11 @@ test('Plan settings: dials keep signed cents through saving, loading and unrelat
   let st = base();
   st = S.setPath(st, 'ui.plan.dials.savings', -123648);
   assert.equal(st.ui.plan.dials.savings, -123648, 'a negative net savings amount is a drawdown, not an error');
-  st = S.setPath(st, 'ui.plan.dials.card', 234567);
-  st = S.setPath(st, 'ui.plan.dials.bank', 0);
+  st = S.setPath(st, 'ui.plan.dials.essentials', 234567);
+  st = S.setPath(st, 'ui.plan.dials.flexible', 0);
   st = S.setPath(st, 'ui.plan.dials.p1', 398800);
-  st = S.setPath(st, 'ui.plan.rows.card-m-x1y2', { included: false });
-  st = S.setPath(st, 'ui.plan.rows.card-r-z9', { cents: 12345 });
+  st = S.setPath(st, 'ui.plan.rows.essentials-m-x1y2', { included: false });
+  st = S.setPath(st, 'ui.plan.rows.flexible-r-z9', { cents: 12345 });
   st = S.setPath(st, 'ui.plan.baselineMonths', 'all');
   st = S.setPath(st, 'ui.plan.horizon', '60');
   st = S.setPath(st, 'ui.plan.past', 6);
@@ -2015,9 +2015,10 @@ test('Plan settings: dials keep signed cents through saving, loading and unrelat
   st = S.setPath(st, 'ui.plan.coverFromSavings', false);
   st = S.setPath(st, 'ui.plan.hidden', ['p2', 'combined']);
   assert.equal(st.ui.plan.dials.savings, -123648, 'unrelated edits keep it');
-  assert.equal(st.ui.plan.dials.bank, 0, 'zero is an amount, not "use the baseline"');
+  assert.equal(st.ui.plan.dials.flexible, 0, 'zero is an amount, not "use the baseline"');
   assert.deepEqual(st.ui.plan, { baselineMonths: 'all', horizon: 60, past: 6, mode: 'flows', coverFromSavings: false,
-    dials: { savings: -123648, card: 234567, bank: 0, p1: 398800 }, rows: { 'card-m-x1y2': { included: false }, 'card-r-z9': { cents: 12345 } }, hidden: ['p2', 'combined'] });
+    dials: { savings: -123648, essentials: 234567, flexible: 0, p1: 398800 }, rows: { 'essentials-m-x1y2': { included: false }, 'flexible-r-z9': { cents: 12345 } }, hidden: ['p2', 'combined'],
+    groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true } });
   // Through storage and back.
   const store = new Map();
   const storage = { getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k), key: i => Array.from(store.keys())[i] ?? null, get length() { return store.size; } };
@@ -2025,17 +2026,19 @@ test('Plan settings: dials keep signed cents through saving, loading and unrelat
   const loaded = S.loadFromStorage(storage, st.datasetId, profile(), DS).state;
   assert.deepEqual(loaded.ui.plan, st.ui.plan);
   // Removing: undefined clears a dial or a row change.
-  const cleared = S.setPath(S.setPath(st, 'ui.plan.dials.card', undefined), 'ui.plan.rows.card-r-z9', undefined);
-  assert.deepEqual(cleared.ui.plan.dials, { savings: -123648, bank: 0, p1: 398800 });
-  assert.deepEqual(Object.keys(cleared.ui.plan.rows), ['card-m-x1y2']);
-  // Choices and amounts are checked.
+  const cleared = S.setPath(S.setPath(st, 'ui.plan.dials.essentials', undefined), 'ui.plan.rows.flexible-r-z9', undefined);
+  assert.deepEqual(cleared.ui.plan.dials, { savings: -123648, flexible: 0, p1: 398800 });
+  assert.deepEqual(Object.keys(cleared.ui.plan.rows), ['essentials-m-x1y2']);
+  // Choices and amounts are checked; card and bank are not dials any more.
   assert.throws(() => S.setPath(st, 'ui.plan.horizon', 36), isValidationError());
   assert.throws(() => S.setPath(st, 'ui.plan.baselineMonths', 5), isValidationError());
   assert.throws(() => S.setPath(st, 'ui.plan.past', 'some'), isValidationError());
   assert.throws(() => S.setPath(st, 'ui.plan.mode', 'chart'), isValidationError());
-  assert.throws(() => S.setPath(st, 'ui.plan.dials.card', 1.5), isValidationError(/whole cents/));
-  assert.throws(() => S.setPath(st, 'ui.plan.rows.card-m-x1y2', { included: 'no' }), isValidationError());
-  assert.throws(() => S.setPath(st, 'ui.plan.rows.card-m-x1y2', { cents: 0.5 }), isValidationError(/whole cents/));
+  assert.throws(() => S.setPath(st, 'ui.plan.dials.essentials', 1.5), isValidationError(/whole cents/));
+  assert.throws(() => S.setPath(st, 'ui.plan.dials.card', 1000), isValidationError(/Card and bank spending are worked out/));
+  assert.throws(() => S.setPath(st, 'ui.plan.dials.mystery', 1000), isValidationError(/Plan amounts can be set for: p1, p2, inOther, essentials, flexible, irregular, savings, other/));
+  assert.throws(() => S.setPath(st, 'ui.plan.rows.essentials-m-x1y2', { included: 'no' }), isValidationError());
+  assert.throws(() => S.setPath(st, 'ui.plan.rows.essentials-m-x1y2', { cents: 0.5 }), isValidationError(/whole cents/));
   assert.throws(() => S.setPath(st, 'ui.plan.hidden', ['ok', 'not ok!']), isValidationError());
   // hidden: null until the household chooses; an empty list is a choice and is kept.
   assert.equal(base().ui.plan.hidden, null);
@@ -2046,23 +2049,25 @@ test('Plan settings: dials keep signed cents through saving, loading and unrelat
   assert.throws(() => S.setPath(st, 'ui.home.cardCents', 100), isValidationError(/no field/), 'ui.home is gone');
   // A damaged saved copy keeps what is valid and says what was dropped.
   const raw = JSON.parse(JSON.stringify(st));
-  raw.ui.plan = { baselineMonths: 7, horizon: 24, dials: { card: 'lots', bank: 5000, 'bad key!': 1 }, rows: { 'card-m-a': { included: 'x' }, 'card-m-b': { cents: -250 }, 'card-m-c': { cents: 1, extra: true } }, hidden: 'p1' };
+  raw.ui.plan = { baselineMonths: 7, horizon: 24, dials: { essentials: 'lots', flexible: 5000, 'bad key!': 1, mystery: 2 }, rows: { 'essentials-m-a': { included: 'x' }, 'essentials-m-b': { cents: -250 }, 'essentials-m-c': { cents: 1, extra: true } }, hidden: 'p1' };
   const r = S.sanitize(raw, profile(), DS);
-  assert.deepEqual(r.state.ui.plan, { baselineMonths: 12, horizon: 24, past: 12, mode: 'balance', coverFromSavings: true, dials: { bank: 5000 }, rows: { 'card-m-b': { cents: -250 } }, hidden: null });
-  for (const re of [/ui\.plan\.baselineMonths/, /ui\.plan\.dials: dropped plan amounts/, /ui\.plan\.rows: dropped plan row changes/, /ui\.plan\.hidden/]) assert.ok(hasNote(r.notes, re), String(re));
+  assert.deepEqual(r.state.ui.plan, { baselineMonths: 12, horizon: 24, past: 12, mode: 'balance', coverFromSavings: true, dials: { flexible: 5000 }, rows: { 'essentials-m-b': { cents: -250 } }, hidden: null,
+    groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true } });
+  for (const re of [/ui\.plan\.baselineMonths/, /ui\.plan\.dials: dropped plan amounts.*"mystery"/, /ui\.plan\.rows: dropped plan row changes/, /ui\.plan\.hidden/]) assert.ok(hasNote(r.notes, re), String(re));
 });
 
-test('Plan settings: the earlier Home settings (ui.home) move to ui.plan once, losslessly, and the move is noted in meta', () => {
+test('Plan settings: the earlier Home settings (ui.home) move to ui.plan once, losslessly where they can, and the move is noted in meta', () => {
   const raw = JSON.parse(JSON.stringify(base()));
   delete raw.ui.plan;
   raw.ui.home = { inCents: 410000, p1InCents: 300000, p2InCents: null, outCents: 450000, savedCents: -5075, cardCents: 0, bankCents: 187612, baselineMonths: 6, fundingWho: 'p2', chartView: 'balances', horizon: 60 };
   const r = S.sanitize(raw, profile(), DS);
   assert.equal(r.state.ui.home, undefined, 'ui.home is dropped');
-  assert.deepEqual(r.state.ui.plan, { baselineMonths: 6, horizon: 60, past: 12, mode: 'balance', coverFromSavings: true, dials: { p1: 300000, card: 0, bank: 187612, savings: -5075 }, rows: {}, hidden: null });
+  assert.deepEqual(r.state.ui.plan, { baselineMonths: 6, horizon: 60, past: 12, mode: 'balance', coverFromSavings: true, dials: { p1: 300000, savings: -5075 }, rows: {}, hidden: null,
+    groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true } });
   const note = r.notes.find(n => /^ui\.home: /.test(n));
   assert.ok(note, 'noted');
-  assert.match(note, /p1 \$3,000\.00, card \$0\.00, bank \$1,876\.12, savings −\$50\.75, baselineMonths 6, horizon 60/);
-  assert.match(note, /Not carried over: all money into joint \(\$4,100\.00\).*earlier single spending amount \(\$4,500\.00\)/);
+  assert.match(note, /p1 \$3,000\.00, savings −\$50\.75, baselineMonths 6, horizon 60/);
+  assert.match(note, /Not carried over: all money into joint \(\$4,100\.00\).*; the earlier single spending amount \(\$4,500\.00\), card spending \(\$0\.00\), bank spending \(\$1,876\.12\): spending is now set as essentials, flexible and irregular\.$/);
   assert.ok(r.state.meta.migrationNotes.includes(note), 'kept in meta like other migrations');
   // Idempotent: a second pass finds nothing to move and changes nothing.
   const again = S.sanitize(r.state, profile(), DS);
@@ -2070,12 +2075,12 @@ test('Plan settings: the earlier Home settings (ui.home) move to ui.plan once, l
   assert.deepEqual(again.notes, []);
   // A copy holding both (an older tab saved ui.home again): what ui.plan already has wins.
   const both = JSON.parse(JSON.stringify(r.state));
-  both.ui.home = { cardCents: 99900, bankCents: null, savedCents: 1000, baselineMonths: 3 };
-  both.ui.plan.dials = { card: 120000 };
+  both.ui.home = { cardCents: 99900, bankCents: null, savedCents: 1000, p1InCents: 5, baselineMonths: 3 };
+  both.ui.plan.dials = { p1: 120000 };
   const b = S.sanitize(both, profile(), DS);
-  assert.deepEqual(b.state.ui.plan.dials, { card: 120000, savings: 1000 });
+  assert.deepEqual(b.state.ui.plan.dials, { p1: 120000, savings: 1000 });
   assert.equal(b.state.ui.plan.baselineMonths, 6, 'the plan’s own setting is kept');
-  assert.ok(hasNote(b.notes, /already had its own card, which were kept/));
+  assert.ok(hasNote(b.notes, /already had its own p1, which were kept/));
   // A blank Home (nothing set) moves its two settings and creates no dials.
   const blank = JSON.parse(JSON.stringify(base()));
   delete blank.ui.plan;
@@ -2083,6 +2088,102 @@ test('Plan settings: the earlier Home settings (ui.home) move to ui.plan once, l
   const bl = S.sanitize(blank, profile(), DS);
   assert.deepEqual(bl.state.ui.plan.dials, {});
   assert.equal(bl.state.ui.plan.horizon, 24);
+});
+
+test('Plan settings: card and bank amounts set before spending was grouped are removed once, with a migration note', () => {
+  const raw = JSON.parse(JSON.stringify(base()));
+  raw.ui.plan.dials = { card: 88000, bank: -1500, savings: 2500, p2: 1 };
+  const r = S.sanitize(raw, profile(), DS);
+  assert.deepEqual(r.state.ui.plan.dials, { savings: 2500, p2: 1 }, 'the other dials stay');
+  const note = r.notes.find(n => /^ui\.plan\.dials: /.test(n));
+  assert.equal(note, 'ui.plan.dials: card spending $880.00 and bank spending −$15.00 set on the plan screen were removed. Spending is now planned as essentials, flexible and irregular, and card and bank spending are worked out from those, so these amounts could not be carried over. Set the new dials on the plan screen.');
+  assert.ok(r.state.meta.migrationNotes.includes(note), 'kept in meta');
+  const again = S.sanitize(r.state, profile(), DS);
+  assert.deepEqual(again.state, r.state, 'once only');
+  assert.deepEqual(again.notes, []);
+  const one = JSON.parse(JSON.stringify(base()));
+  one.ui.plan.dials = { bank: 0 };
+  assert.ok(hasNote(S.sanitize(one, profile(), DS).notes, /^ui\.plan\.dials: bank spending \$0\.00 set on the plan screen was removed\..*this amount could not be carried over/));
+});
+
+test('Plan settings: groups, one-time costs left out and the Trends chart are saved and validated', () => {
+  let st = base();
+  st = S.setPath(st, 'ui.plan.groups.Pets', 'essentials');
+  st = S.setPath(st, 'ui.plan.groups.merchant:Bayside Warehouse Club', 'essentials');
+  st = S.setPath(st, 'ui.plan.groups.Gas & heating', 'flexible');
+  st = S.setPath(st, 'ui.plan.irregularOff.tx-abc123', true);
+  st = S.setPath(st, 'ui.plan.mode', 'trends');
+  st = S.setPath(st, 'ui.plan.trends.series', ['essentials', 'in-p2', 'combined-change']);
+  st = S.setPath(st, 'ui.plan.trends.ma', '6');
+  st = S.setPath(st, 'ui.plan.trends.trend', false);
+  assert.deepEqual([st.ui.plan.groups, st.ui.plan.irregularOff, st.ui.plan.mode, st.ui.plan.trends], [
+    { Pets: 'essentials', 'merchant:Bayside Warehouse Club': 'essentials', 'Gas & heating': 'flexible' }, { 'tx-abc123': true }, 'trends',
+    { series: ['essentials', 'in-p2', 'combined-change'], ma: 6, trend: false }]);
+  assert.deepEqual(S.sanitize(JSON.parse(JSON.stringify(st)), profile(), DS).state.ui.plan, st.ui.plan, 'kept through a save');
+  assert.throws(() => S.setPath(st, 'ui.plan.groups.Pets', 'sometimes'), isValidationError());
+  assert.throws(() => S.setPath(st, 'ui.plan.trends.series', ['card', 'weather']), isValidationError(/Choose up to 16 different series/));
+  assert.throws(() => S.setPath(st, 'ui.plan.trends.ma', 4), isValidationError());
+  assert.throws(() => S.setPath(st, 'ui.plan.irregularOff.' + 'x'.repeat(201), true), isValidationError(/1 to 200 characters/));
+  assert.deepEqual(S.setPath(st, 'ui.plan.groups.Pets', undefined).ui.plan.groups, { 'merchant:Bayside Warehouse Club': 'essentials', 'Gas & heating': 'flexible' });
+  // A damaged copy: unknown series, groups and flags are dropped and named; the rest stays.
+  const raw = JSON.parse(JSON.stringify(st));
+  raw.ui.plan.groups = { Pets: 'essentials', Travel: 'sometimes', '': 'flexible' };
+  raw.ui.plan.irregularOff = { a1: true, a2: 'yes' };
+  raw.ui.plan.trends = { series: ['card', 'weather', 'card', 7], ma: 5, extra: 1 };
+  raw.ui.plan.mode = 'pie';
+  const r = S.sanitize(raw, profile(), DS);
+  assert.deepEqual([r.state.ui.plan.groups, r.state.ui.plan.irregularOff, r.state.ui.plan.trends, r.state.ui.plan.mode], [{ Pets: 'essentials' }, { a1: true }, { series: ['card'], ma: 3, trend: true }, 'balance']);
+  for (const re of [/ui\.plan\.groups: dropped spending groups/, /ui\.plan\.irregularOff: dropped entries/, /ui\.plan\.trends\.series: cleaned/, /ui\.plan\.trends\.ma/, /ui\.plan\.trends\.extra: not part of the saved budget format/, /ui\.plan\.mode/]) assert.ok(hasNote(r.notes, re), String(re));
+  // Saved before these existed: defaults, quietly.
+  const older = JSON.parse(JSON.stringify(base()));
+  delete older.ui.plan.groups; delete older.ui.plan.irregularOff; delete older.ui.plan.trends;
+  const o = S.sanitize(older, profile(), DS);
+  assert.deepEqual([o.state.ui.plan.groups, o.state.ui.plan.irregularOff, o.state.ui.plan.trends], [{}, {}, { series: ['card'], ma: 3, trend: true }]);
+  assert.deepEqual(o.notes, []);
+});
+
+test('plan.changes: absent in older budgets becomes [] quietly; entries are validated, bounded and kept in order', () => {
+  const older = JSON.parse(JSON.stringify(base()));
+  delete older.plan.changes;
+  const o = S.sanitize(older, profile(), DS);
+  assert.deepEqual(o.state.plan.changes, []);
+  assert.deepEqual(o.notes, []);
+  assert.deepEqual(S.defaults(null, DS).plan.changes, []);
+  const raw = JSON.parse(JSON.stringify(base()));
+  raw.plan.changes = [
+    { id: 'car', label: 'Car seat', kind: 'oneTime', group: 'irregular', startMonth: '2028-03', endMonth: '2028-05', cents: 25000, accepted: false, template: 'baby', note: 'Estimate' },
+    { id: 'leave', label: 'Leave', kind: 'monthly', group: 'income', personId: 'p1', startMonth: '2028-05', endMonth: '2028-07', cents: null, accepted: true, template: 'baby', note: '' },
+    { id: 'gym', label: 'Gym', kind: 'monthly', group: 'flexible', personId: 'p2', startMonth: '2026-11', cents: -1500 },
+    { id: 'bad', label: 'No start', kind: 'monthly', group: 'flexible', cents: 1 },
+    { id: 'odd', label: 'Odd group', kind: 'monthly', group: 'vacation', startMonth: '2026-11', cents: 1 },
+    'nonsense',
+  ];
+  const r = S.sanitize(raw, profile(), DS);
+  assert.deepEqual(r.state.plan.changes, [
+    { id: 'car', label: 'Car seat', kind: 'oneTime', group: 'irregular', personId: null, startMonth: '2028-03', endMonth: null, cents: 25000, accepted: false, template: 'baby', note: 'Estimate' },
+    { id: 'leave', label: 'Leave', kind: 'monthly', group: 'income', personId: 'p1', startMonth: '2028-05', endMonth: '2028-07', cents: null, accepted: true, template: 'baby', note: '' },
+    { id: 'gym', label: 'Gym', kind: 'monthly', group: 'flexible', personId: null, startMonth: '2026-11', endMonth: null, cents: -1500, accepted: false, template: null, note: '' },
+    { id: 'odd', label: 'Odd group', kind: 'monthly', group: 'flexible', personId: null, startMonth: '2026-11', endMonth: null, cents: 1, accepted: false, template: null, note: '' },
+  ]);
+  for (const re of [/plan\.changes\[id=car\]\.endMonth: a one-time change has no end month/, /plan\.changes\[id=gym\]\.personId: only an income change belongs to a person/, /plan\.changes\[id=bad\] \("No start"\): start month is missing/, /plan\.changes\[id=odd\]\.group/, /plan\.changes\[5\]: not a valid entry/]) assert.ok(hasNote(r.notes, re), String(re));
+  assert.deepEqual(S.sanitize(r.state, profile(), DS).state, r.state, 'sanitizing again changes nothing');
+  // Bounded: up to LIMITS.planChanges.
+  const many = JSON.parse(JSON.stringify(base()));
+  many.plan.changes = Array.from({ length: S.LIMITS.planChanges + 3 }, (_, i) => ({ id: 'c' + i, label: 'C' + i, kind: 'monthly', group: 'flexible', startMonth: '2026-11', cents: i }));
+  const m = S.sanitize(many, profile(), DS);
+  assert.equal(m.state.plan.changes.length, S.LIMITS.planChanges);
+  assert.ok(hasNote(m.notes, /plan\.changes: only 100 entries can be kept; 3 more were dropped/));
+  // Through paths and list operations, strictly.
+  let st = S.addItem(base(), 'changes', { label: 'Crib', kind: 'oneTime', group: 'irregular', startMonth: '2027-07', cents: 35000 });
+  const id = st.plan.changes[0].id;
+  st = S.setPath(st, 'plan.changes[id=' + id + '].accepted', true);
+  assert.equal(st.plan.changes[0].accepted, true);
+  assert.throws(() => S.setPath(st, 'plan.changes[id=' + id + '].endMonth', '2027-09'), isValidationError(/no end month/));
+  assert.throws(() => S.setPath(st, 'plan.changes[id=' + id + '].personId', 'p1'), isValidationError(/Only an income change/));
+  st = S.updateItem(st, 'changes', id, { kind: 'monthly', endMonth: '2027-09' });
+  assert.deepEqual([st.plan.changes[0].kind, st.plan.changes[0].endMonth], ['monthly', '2027-09']);
+  assert.throws(() => S.updateItem(st, 'changes', 'missing', { cents: 1 }), isValidationError(/no longer exists/));
+  assert.deepEqual(S.removeItem(st, 'changes', id).plan.changes, []);
 });
 
 test('ledger edits: whose money a deposit is (p1, p2 or none) is kept; anything else is dropped with a note', () => {

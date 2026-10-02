@@ -416,3 +416,338 @@ test('attach is safe without a DOM and is exposed for app.js', () => {
   assert.doesNotThrow(() => attach(null));
   assert.doesNotThrow(() => attach({}));
 });
+
+// ------------------------------------------------------------------ baseline plan (ghost line)
+const ghostVals = MONTHS.map((m, i) => (m >= '2026-09' ? 420000 + i * 20000 : null)); // known from today on
+const withGhost = (extra = {}) => cashChart({
+  ...base, mode: 'balance',
+  lines: [...base.lines, { key: 'baseline', role: 'ghost', points: MONTHS.map((m, i) => ({ month: m, cents: ghostVals[i] })) }],
+  ...extra,
+});
+
+test('baseline plan: a thin muted dashed line behind the others, with no dots or end label', () => {
+  const html = withGhost();
+  const svg = svgOf(html);
+  const model = modelOf(html);
+  assert.match(svg, /<g class="cc-series series-ghost cc-ghost" data-cc-series="baseline">/);
+  const ghost = pathsWith(html, 'cc-ghost-line');
+  assert.equal(ghost.length, 1);
+  assert.equal(ghost[0].cls, 'line cc-ghost-line series-ghost');
+  // Nothing drawn where the baseline has no value: the path starts at today.
+  const pts = pointsOf(ghost[0].d);
+  const todayIdx = MONTHS.indexOf('2026-09');
+  assert.equal(pts[0][0], model.months[todayIdx].x);
+  assert.equal(pts.length, MONTHS.length - todayIdx);
+  // Behind every other line.
+  assert.ok(svg.indexOf('data-cc-series="baseline"') < svg.indexOf('data-cc-series="checking"'));
+  assert.ok(svg.indexOf('data-cc-series="baseline"') < svg.indexOf('data-cc-series="combined"'));
+  // No dots, no end label, no hover dot.
+  const group = svg.match(/<g class="cc-series series-ghost cc-ghost" data-cc-series="baseline">([\s\S]*?)<\/g>/)[1];
+  assert.doesNotMatch(group, /<circle|<text/);
+  assert.doesNotMatch(svg, /cc-dot[^>]*data-cc-series="baseline"/);
+  assert.equal(model.dots.baseline, undefined);
+  assert.equal((svg.match(/class="end-label cc-end-label"/g) || []).length, 3, 'end labels only on the three real lines');
+  // The real lines keep their colours (the ghost takes none).
+  assert.match(html, /<g class="cc-series series-2 cc-line-series" data-cc-series="checking">/);
+  assert.match(html, /<g class="cc-series series-3 cc-line-series" data-cc-series="savings">/);
+});
+
+test('baseline plan: legend chip, readout row in plan months only, table column', () => {
+  const html = withGhost();
+  const model = modelOf(html);
+  assert.match(html, /data-cc-key="baseline" aria-pressed="true"><span class="key key-line series-ghost" aria-hidden="true"><\/span><span class="cc-chip-name">Baseline plan<\/span>/);
+  // Toggleable like any series.
+  const hidden = withGhost({ hidden: ['baseline'] });
+  assert.match(hidden, /<g class="cc-series series-ghost cc-ghost is-hidden" data-cc-series="baseline">/);
+  assert.match(hidden, /data-cc-key="baseline" aria-pressed="false"/);
+  // Readout: right under the combined row, only in projected months.
+  const planIdx = MONTHS.indexOf(PLAN);
+  const rows = model.months[planIdx].rows;
+  assert.deepEqual(rows.slice(0, 2).map(r => r.k), ['combined', 'baseline']);
+  assert.deepEqual(rows[1], { k: 'baseline', g: 'ghost', n: 'Baseline plan', v: '$' + (ghostVals[planIdx] / 100).toLocaleString('en-US'), c: 'key-line series-ghost' });
+  const todayIdx = MONTHS.indexOf('2026-09');
+  assert.ok(!model.months[todayIdx].rows.some(r => r.k === 'baseline'), 'not in an actual month, even with a value');
+  assert.ok(!model.months[0].rows.some(r => r.k === 'baseline'));
+  assert.equal(model.groups.baseline, 'ghost');
+  // Table twin: its own column, a dash where it has no value.
+  assert.match(html, /<th scope="col" class="num ">Baseline plan<\/th>/);
+  assert.match(html, /<th scope="row" class=" ">Oct 2025<\/th><td class=" ">Recorded<\/td><td class="num ">\$3,000<\/td><td class="num ">\$1,000<\/td><td class="num ">\$2,000<\/td><td class="num ">—<\/td><\/tr>/);
+  assert.match(html, new RegExp(`<th scope="row" class=" ">Oct 2026</th><td class=" ">Projected</td>(<td class="num ">[^<]*</td>){3}<td class="num ">\\$${(ghostVals[planIdx] / 100).toLocaleString('en-US')}</td></tr>`));
+});
+
+test('baseline plan: widens the scale to its own values only; zero emphasis, low point and summary ignore it', () => {
+  const months = monthsFrom('2026-05', 8);
+  const real = [120000, 90000, 80000, 70000, 60000, 50000, 40000, 30000];
+  const ghost = [null, null, null, 70000, 20000, -40000, -90000, -150000];
+  const spec = ghostLine => ({
+    id: 'gz', title: 'Ghost below zero', mode: 'balance', months, todayMonth: '2026-08', planStart: '2026-09',
+    lines: [
+      { key: 'combined', name: 'Combined cash', role: 'combined', points: months.map((m, i) => ({ month: m, cents: real[i], status: m >= '2026-09' ? 'projected' : 'recorded' })) },
+      ...(ghostLine ? [{ key: 'ghost', role: 'ghost', name: 'Baseline plan', points: months.map((m, i) => ({ month: m, cents: ghost[i] })) }] : []),
+    ],
+  });
+  const html = cashChart(spec(true));
+  const plain = cashChart(spec(false));
+  // The scale reaches the baseline's lowest value...
+  assert.ok(yTicks(html).some(t => t.startsWith('−$')), 'axis reaches below zero for the baseline');
+  const ys = pathsWith(html, 'cc-ghost-line').flatMap(p => pointsOf(p.d)).map(p => p[1]);
+  const plotBottom = Number(html.match(/<line class="crosshair cc-crosshair"[^>]*y2="([\d.]+)"/)[1]);
+  assert.ok(Math.max(...ys) <= plotBottom + 0.1, 'the baseline stays inside the plot');
+  // ...but only the real lines decide the zero emphasis, the low point and the summary.
+  assert.doesNotMatch(html, /is-emph|cc-zero-over|cc-low-label/);
+  const label = h => h.match(/role="img" aria-label="([^"]*)"/)[1];
+  assert.equal(label(html), label(plain));
+  assert.match(label(html), /lowest \$300 projected in Dec 2026/);
+});
+
+// ------------------------------------------------------------------ change markers
+const MARKERS = [
+  { month: '2026-11', label: 'Car seat', cents: -25000, kind: 'oneTime' },
+  { month: '2026-11', label: 'Stroller', cents: -18000, kind: 'oneTime' },
+  { month: '2027-01', label: 'Daycare', cents: -120000, kind: 'monthly' },
+  { month: '2026-12', label: 'Raise', cents: 30000, kind: 'monthly' },
+  { month: '2031-01', label: 'Out of range', kind: 'oneTime' },
+];
+
+test('change markers: a triangle for one-time, a tick and a faint band for monthly, one glyph with a count per month', () => {
+  const html = cashChart({ ...base, mode: 'balance', markers: MARKERS });
+  const svg = svgOf(html);
+  const model = modelOf(html);
+  const x = m => model.months[MONTHS.indexOf(m)].x;
+  const bottom = Number(html.match(/<line class="crosshair cc-crosshair"[^>]*y2="([\d.]+)"/)[1]);
+  // Two one-time changes in November: one triangle on the bottom axis line, count 2.
+  const nov = svg.match(/<g class="cc-change is-once" data-cc-change="2026-11">([\s\S]*?)<\/g>/);
+  assert.ok(nov, 'november carries one glyph');
+  const tri = pointsOf(nov[1].match(/d="([^"]*)"/)[1].replace(/L/g, ' L').replace(/z$/, ''));
+  assert.equal(tri.length, 3);
+  assert.equal(tri[1][0], x('2026-11'), 'apex at the month');
+  assert.ok(tri[1][1] < bottom && tri[0][1] === bottom && tri[2][1] === bottom, 'points up from the bottom line');
+  assert.match(nov[1], /<text class="cc-change-count"[^>]*>2<\/text>/);
+  assert.equal((svg.match(/data-cc-change="2026-11"/g) || []).length, 1);
+  // Monthly starts: a tick each, no count when alone, and one band from the first start to the right edge.
+  for (const m of ['2026-12', '2027-01']) {
+    const g = svg.match(new RegExp(`<g class="cc-change is-monthly" data-cc-change="${m}">([\\s\\S]*?)</g>`));
+    assert.ok(g, m);
+    assert.match(g[1], new RegExp(`<line class="cc-change-monthly" x1="${x(m).toFixed(1)}" x2="${x(m).toFixed(1)}"`));
+    assert.doesNotMatch(g[1], /cc-change-count/);
+  }
+  const bands = [...svg.matchAll(/<rect class="cc-change-band" x="([\d.]+)" y="[\d.]+" width="([\d.]+)"/g)];
+  assert.equal(bands.length, 1);
+  assert.equal(Number(bands[0][1]), x('2026-12'));
+  assert.ok(Math.abs(Number(bands[0][1]) + Number(bands[0][2]) - (model.W - model.padR)) < 0.2, 'band runs to the right edge');
+  // Out-of-range markers are ignored; the legend explains both glyphs.
+  assert.doesNotMatch(html, /Out of range/);
+  assert.match(html, /<span class="key cc-key-once" aria-hidden="true"><\/span>One-time change/);
+  assert.match(html, /<span class="key cc-key-monthly" aria-hidden="true"><\/span>Monthly change/);
+  // Presentation only: scale and series model unchanged; without markers nothing is drawn.
+  const plain = cashChart({ ...base, mode: 'balance' });
+  assert.deepEqual(yTicks(html), yTicks(plain));
+  assert.deepEqual(modelOf(html).months.map(m => m.rows), modelOf(plain).months.map(m => m.rows));
+  assert.doesNotMatch(plain, /cc-change|Planned changes|One-time change/);
+});
+
+test('change markers: readout lines, a Planned changes table column and a count in the summary, in every mode', () => {
+  for (const mode of ['balance', 'flows']) {
+    const html = cashChart({ ...base, mode, markers: MARKERS });
+    const model = modelOf(html);
+    assert.deepEqual(model.months[MONTHS.indexOf('2026-11')].pc, ['Planned: Car seat −$250 (one-time)', 'Planned: Stroller −$180 (one-time)'], mode);
+    assert.deepEqual(model.months[MONTHS.indexOf('2026-12')].pc, ['Planned: Raise +$300 (monthly)']);
+    assert.equal(model.months[0].pc, undefined);
+    assert.match(html, /<th scope="col" class=" ">Planned changes<\/th>/);
+    assert.match(html, /<td class=" ">Car seat −\$250 \(one-time\); Stroller −\$180 \(one-time\)<\/td><\/tr>/);
+    assert.match(html, /4 planned changes are marked on the timeline\./);
+    assert.match(svgOf(html), /data-cc-change="2027-01"/);
+  }
+  // A marker without an amount shows its label alone.
+  const bare = modelOf(cashChart({ ...base, mode: 'balance', markers: [{ month: '2026-10', label: 'New phone plan', kind: 'monthly' }] }));
+  assert.deepEqual(bare.months[MONTHS.indexOf('2026-10')].pc, ['Planned: New phone plan (monthly)']);
+});
+
+// ------------------------------------------------------------------ series colours
+test('six distinct series colours: five out-flows (four coloured + Other) beside two in-flows, and series-6 in both themes', () => {
+  const v = n => MONTHS.map(() => n);
+  const flows = cashChart({ ...base, mode: 'flows', columns: {
+    in: [{ key: 'p1', name: 'Rowan → joint', values: v(300000) }, { key: 'p2', name: 'Quinn → joint', values: v(250000) }],
+    out: [
+      { key: 'essentials', name: 'Essentials', values: v(200000) },
+      { key: 'flexible', name: 'Flexible', values: v(120000) },
+      { key: 'irregular', name: 'Irregular', values: v(50000) },
+      { key: 'to-savings', name: 'To savings', values: v(60000) },
+      { key: 'out-other', name: 'Other', values: v(20000) },
+    ],
+  } });
+  const clsOf = key => flows.match(new RegExp(`<g class="cc-series (series-[\\w]+) cc-col-series" data-cc-series="${key}">`))[1];
+  const outCls = ['essentials', 'flexible', 'irregular', 'to-savings'].map(clsOf);
+  assert.deepEqual(outCls, ['series-5', 'series-4', 'series-3', 'series-6'], 'existing defaults kept; the fourth coloured out-flow takes series-6');
+  assert.equal(clsOf('out-other'), 'series-muted');
+  const all = [clsOf('p1'), clsOf('p2'), ...outCls];
+  assert.equal(new Set(all).size, 6, 'six distinct colours: ' + all.join(', '));
+  // Explicit classes win (the recommended mapping keeps To savings on series-3, like From savings).
+  const explicit = cashChart({ ...base, mode: 'flows', columns: { in: [], out: [
+    { key: 'essentials', name: 'Essentials', cls: 'series-5', values: v(1) }, { key: 'flexible', name: 'Flexible', cls: 'series-4', values: v(1) },
+    { key: 'irregular', name: 'Irregular', cls: 'series-6', values: v(1) }, { key: 'to-savings', name: 'To savings', cls: 'series-3', values: v(1) },
+    { key: 'out-other', name: 'Other', cls: 'series-muted', values: v(1) },
+  ] } });
+  assert.match(explicit, /<g class="cc-series series-6 cc-col-series" data-cc-series="irregular">/);
+  assert.match(explicit, /data-cc-key="irregular" aria-pressed="true"><span class="key key-swatch series-6"/);
+  // Trends lines follow the categorical order, one colour each.
+  const six = ['a', 'b', 'c', 'd', 'e', 'f'].map((k, i) => ({ key: k, name: k.toUpperCase(), values: v(10000 * (i + 1)) }));
+  const trends = cashChart({ ...base, mode: 'trends', trends: { series: six } });
+  assert.deepEqual(six.map(s => trends.match(new RegExp(`<g class="cc-series (series-\\d) cc-trend-series" data-cc-series="${s.key}">`))[1]), ['series-1', 'series-2', 'series-3', 'series-4', 'series-5', 'series-6']);
+  // The token and its uses exist in both themes.
+  const css = require('node:fs').readFileSync(path.join(SRC, 'styles/chart.css'), 'utf8');
+  assert.match(css, /^:root \{[^}]*--series-6: #[0-9a-f]{6};/m);
+  assert.match(css, /prefers-color-scheme: dark\)[\s\S]*?:root:where\(:not\(\[data-theme="light"\]\)\) \{[^}]*--series-6: #[0-9a-f]{6};/);
+  for (const sel of ['.key-line.series-6', '.key-swatch.series-6', '.chart .line.series-6', '.chart .end-dot.series-6', '.chart .seg.series-6']) assert.ok(css.includes(sel + ' {'), sel);
+});
+
+// ------------------------------------------------------------------ trends mode
+const { movingAverage, linearTrend } = UI.chart.stats;
+const reEsc = s => String(s).replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-9, `${msg || ''} ${a} != ${b}`);
+
+test('stats.movingAverage: trailing mean over n positions, nulls skipped, null before n positions', () => {
+  assert.deepEqual(movingAverage([100, 200, 300, 400, 500], 3), [null, null, 200, 300, 400]);
+  assert.deepEqual(movingAverage([100, null, 300, 500], 2), [null, 100, 300, 400], 'a null is skipped, not counted as zero');
+  assert.deepEqual(movingAverage([null, null, 700], 2), [null, null, 700]);
+  assert.deepEqual(movingAverage([5, null, null, 9], 2), [null, 5, null, 9], 'a window with no known value is null');
+  assert.deepEqual(movingAverage([1, 2, 4], 6), [null, null, null], 'fewer than n months: all null');
+  assert.deepEqual(movingAverage([1, 2, 4], 0), [null, null, null]);
+  assert.deepEqual(movingAverage([1, 2], 1), [1, 2]);
+  near(movingAverage([100, 101, 103], 3)[2], 304 / 3, 'unrounded number out');
+  assert.deepEqual(movingAverage(null, 3), []);
+});
+
+test('stats.linearTrend: least squares over the known values, fitted at every position', () => {
+  const exact = linearTrend([100, 200, 300, 400]);
+  near(exact.slope, 100); near(exact.intercept, 100);
+  assert.deepEqual(exact.fit.map(v => Math.round(v * 1e6) / 1e6), [100, 200, 300, 400]);
+  // Nulls are ignored, and the fit still extends across them and past the end.
+  const gappy = linearTrend([1000, null, 1400, 1300, null]);
+  near(gappy.slope, 800 / 7, 'slope');
+  near(gappy.intercept, 7300 / 7, 'intercept');
+  assert.equal(gappy.fit.length, 5);
+  near(gappy.fit[1], 7300 / 7 + 800 / 7);
+  near(gappy.fit[4], 7300 / 7 + 4 * 800 / 7);
+  const flat = linearTrend([5000, 5000, 5000]);
+  near(flat.slope, 0); near(flat.intercept, 5000);
+  for (const few of [[], [null, 7], [3]]) {
+    const t = linearTrend(few);
+    assert.equal(t.slope, null); assert.equal(t.intercept, null);
+    assert.deepEqual(t.fit, few.map(() => null));
+  }
+});
+
+const TREND_MONTHS = monthsFrom('2026-03', 10); // Mar 2026 .. Dec 2026; plan from Oct
+const groceries = [60000, 64000, 62000, 70000, 68000, 74000, 72000, 80000, 82000, 84000];
+const dining = [30000, 28000, null, 26000, 25000, 24000, 23000, 22000, 21000, 20000];
+const trendSpec = (extra = {}) => ({
+  id: 'tr', title: 'Spending by month', mode: 'trends', months: TREND_MONTHS, todayMonth: '2026-09', planStart: '2026-10',
+  trends: { ma: 3, trend: true, series: [{ key: 'groc', name: 'Groceries', values: groceries }, { key: 'din', name: 'Dining', values: dining }] },
+  ...extra,
+});
+
+test('trends mode: series, moving-average and trend lines with their own classes; plan months dashed', () => {
+  const html = cashChart(trendSpec());
+  const model = modelOf(html);
+  const xs = model.months.map(m => m.x);
+  const planIdx = TREND_MONTHS.indexOf('2026-10'), lastActual = planIdx - 1;
+  assert.match(html, /Monthly, \$ per month/);
+  assert.equal(model.mode, 'trends');
+  assert.match(html, /<g class="cc-series series-1 cc-trend-series" data-cc-series="groc">/);
+  const of = (cls, series) => pathsWith(html, cls).filter(p => new RegExp(`\\b${series}\\b`).test(p.cls));
+  const main = pathsWith(html, 'series-1').filter(p => !/cc-ma-line|cc-trend-line/.test(p.cls));
+  // Series: solid through the actual months, dashed from the last actual point.
+  const solid = main.filter(p => !/is-projected/.test(p.cls)), dashed = main.filter(p => /is-projected/.test(p.cls));
+  assert.equal(solid.length, 1); assert.equal(dashed.length, 1);
+  assert.deepEqual(pointsOf(solid[0].d).map(p => p[0]), xs.slice(0, planIdx));
+  assert.deepEqual(pointsOf(dashed[0].d).map(p => p[0]), xs.slice(lastActual));
+  // Moving average: own class, starts at the third month, actual months only.
+  const ma = of('cc-ma-line', 'series-1');
+  assert.equal(ma.length, 1);
+  assert.deepEqual(pointsOf(ma[0].d).map(p => p[0]), xs.slice(2, planIdx));
+  assert.equal(ma[0].cls, 'line cc-ma-line series-1');
+  // Trend: thin solid across the actual months, dotted across the plan.
+  const trend = of('cc-trend-line', 'series-1');
+  assert.deepEqual(trend.map(p => p.cls), ['line cc-trend-line series-1', 'line cc-trend-line is-extended series-1']);
+  assert.deepEqual(pointsOf(trend[0].d).map(p => p[0]), [xs[0], xs[lastActual]]);
+  assert.deepEqual(pointsOf(trend[1].d).map(p => p[0]), [xs[lastActual], xs[TREND_MONTHS.length - 1]]);
+  // The fitted line is straight: equal steps per month on screen.
+  const y0 = pointsOf(trend[0].d)[0][1], y1 = pointsOf(trend[0].d)[1][1], y2 = pointsOf(trend[1].d)[1][1];
+  near(Math.round(((y1 - y0) / lastActual) * 10), Math.round(((y2 - y1) / (TREND_MONTHS.length - 1 - lastActual)) * 10));
+  // A null month breaks the series line (no bridge) and the dining average skips it.
+  const din = pathsWith(html, 'series-2').filter(p => !/cc-ma-line|cc-trend-line|is-projected/.test(p.cls));
+  assert.ok(!din.flatMap(p => pointsOf(p.d)).some(p => p[0] === xs[2]), 'nothing drawn at the unknown month');
+  // Legend: one chip per series (slope in its tooltip), and the MA and Trend keys.
+  const slope = linearTrend(groceries.slice(0, planIdx)).slope;
+  const slopeText = '+$' + Math.round(slope / 100) + '/mo';
+  assert.match(html, new RegExp(`data-cc-key="groc" aria-pressed="true" title="Trend ${reEsc(slopeText)}"><span class="key key-line series-1"`));
+  assert.match(html, /<span class="key key-line cc-key-ma cc-key-ink" aria-hidden="true"><\/span>MA 3<\/span>/);
+  assert.match(html, /<span class="key key-line cc-key-trend cc-key-ink" aria-hidden="true"><\/span>Trend<\/span>/);
+  assert.match(html, /<span class="key key-line key-dashed" aria-hidden="true"><\/span>Plan \(projected\)/);
+  // Same timeline as the other modes.
+  const bal = modelOf(cashChart({ ...trendSpec(), mode: 'balance', lines: [{ key: 'c', name: 'C', role: 'combined', points: TREND_MONTHS.map((m, i) => ({ month: m, cents: groceries[i] })) }] }));
+  assert.deepEqual(xs, bal.months.map(m => m.x));
+});
+
+test('trends mode: readout lists value, average and fit with the slope; table gets MA and trend columns', () => {
+  const html = cashChart(trendSpec());
+  const model = modelOf(html);
+  const planIdx = TREND_MONTHS.indexOf('2026-10');
+  const t = linearTrend(groceries.map((v, i) => (i < planIdx ? v : null)));
+  const slopeText = '+$' + Math.round(t.slope / 100) + '/mo';
+  const money = c => '$' + Math.round(c / 100).toLocaleString('en-US');
+  // May (index 2): the first month with a 3-month average.
+  const may = model.months[2].rows.filter(r => r.k === 'groc');
+  assert.deepEqual(may.map(r => [r.g || 'value', r.n, r.v]), [
+    ['value', 'Groceries', money(groceries[2])],
+    ['ma', 'MA 3', money((groceries[0] + groceries[1] + groceries[2]) / 3)],
+    ['trend', 'Trend', money(t.fit[2])],
+  ]);
+  assert.equal(may[0].s, 'trend ' + slopeText);
+  // Before three months exist there is no average row.
+  for (const i of [0, 1]) assert.ok(!model.months[i].rows.some(r => r.g === 'ma'), 'no MA in month ' + i);
+  // Plan months: value and fit, no average (it uses actual months only).
+  const dec = model.months[TREND_MONTHS.length - 1].rows.filter(r => r.k === 'groc');
+  assert.deepEqual(dec.map(r => r.g || 'value'), ['value', 'trend']);
+  assert.equal(dec[1].v, money(t.fit[TREND_MONTHS.length - 1]));
+  assert.equal(model.months[TREND_MONTHS.length - 1].p, 'Plan');
+  // Dining's slope is negative and says so.
+  const dSlope = linearTrend(dining.map((v, i) => (i < planIdx ? v : null))).slope;
+  assert.ok(dSlope < 0);
+  assert.equal(model.months[0].rows.find(r => r.k === 'din').s, 'trend −$' + Math.abs(Math.round(dSlope / 100)) + '/mo');
+  // Table twin.
+  assert.match(html, /<th scope="col" class="num ">Groceries<\/th><th scope="col" class="num ">Groceries MA 3<\/th><th scope="col" class="num ">Groceries trend \(\+\$\d+\/mo\)<\/th><th scope="col" class="num ">Dining<\/th>/);
+  assert.match(html, new RegExp(`<th scope="row" class=" ">Mar 2026</th><td class=" ">Recorded</td><td class="num ">${reEsc(money(groceries[0]))}</td><td class="num ">—</td><td class="num ">${reEsc(money(t.fit[0]))}</td>`));
+  assert.equal(tbodyRows(html), TREND_MONTHS.length);
+  // Summary.
+  assert.match(html, new RegExp(`In actual months, Groceries averaged \\$[\\d,]+ a month \\(trend ${reEsc(slopeText)}\\); Dining averaged`));
+  // Hiding a series hides its average and trend with it (one group), and changes nothing else.
+  const hidden = cashChart(trendSpec({ hidden: ['groc'] }));
+  assert.match(hidden, /<g class="cc-series series-1 cc-trend-series is-hidden" data-cc-series="groc">/);
+  assert.deepEqual(modelOf(hidden), model);
+});
+
+test('trends mode: average and trend are optional; nothing extra drawn without them', () => {
+  const html = cashChart(trendSpec({ trends: { series: [{ key: 'groc', name: 'Groceries', values: groceries }] } }));
+  assert.doesNotMatch(html, /cc-ma-line|cc-trend-line|MA 3|>Trend<| title="Trend/);
+  assert.doesNotMatch(html, /Groceries MA|Groceries trend/);
+  assert.deepEqual(modelOf(html).months[5].rows.map(r => r.g || 'value'), ['value']);
+  // MA 6 over ten months with plan from October: defined only for August and September.
+  const six = modelOf(cashChart(trendSpec({ trends: { ma: 6, series: [{ key: 'groc', name: 'Groceries', values: groceries }] } })));
+  assert.deepEqual(six.months.map(m => m.rows.some(r => r.g === 'ma')), [false, false, false, false, false, true, true, false, false, false]);
+  // Empty or missing series: the empty state, never a broken chart.
+  assert.match(cashChart(trendSpec({ trends: { series: [] } })), /Not enough known values/);
+  assert.match(cashChart(trendSpec({ trends: null })), /Not enough known values/);
+});
+
+test('new options never print NaN or undefined', () => {
+  const cases = [
+    cashChart(trendSpec({ markers: MARKERS })),
+    cashChart(trendSpec({ trends: { ma: 3, trend: true, series: [{ key: 'one', name: 'One point', values: [5000] }, { key: 'bad', name: 'Bad', values: [NaN, 'x', Infinity] }] } })),
+    cashChart(trendSpec({ planStart: null, todayMonth: null })),
+    withGhost({ markers: [{ month: '2026-01', label: '' }, null, { month: 'nope' }, { month: '2026-02', label: 'X', cents: NaN, kind: 'weird' }] }),
+    cashChart({ ...base, mode: 'balance', lines: [{ key: 'g', role: 'ghost', points: [{ month: '2026-01', cents: null }] }] }),
+  ];
+  for (const html of cases) assert.doesNotMatch(html, /NaN|undefined|Infinity/);
+});

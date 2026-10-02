@@ -18,6 +18,8 @@
   };
   const ACCOUNT_TYPES = ['checking', 'savings', 'credit_card', 'loan', 'other'];
   const SCOPES = ['joint', 'personal'];
+  /** Sources of a posted balance in `dataset.balances`, by precedence (a statement beats the bank). */
+  const BALANCE_RANK = { bank: 1, statement: 2 };
   const CONFIDENCE = ['high', 'medium', 'low'];
   const COVERAGE_STATUS = ['full', 'partial', 'none'];
   const EXCLUSION_REASONS = ['duplicate', 'reimbursed', 'business', 'what_if'];
@@ -280,6 +282,14 @@
       }
     }
 
+    if (ds.balances !== undefined && ds.balances !== null) {
+      if (!Array.isArray(ds.balances)) warnings.push('balances is not a list; ignored.');
+      else {
+        const kept = normalizeBalances(ds.balances, accountIds).length;
+        if (kept < ds.balances.length) warnings.push((ds.balances.length - kept) + ' of ' + ds.balances.length + ' posted balances were left out (unknown account, bad date or amount, unknown source, or a second balance for the same account and date).');
+      }
+    }
+
     if (ds.references !== undefined && ds.references !== null) {
       if (!Array.isArray(ds.references)) errors.push('references must be a list.');
       else ds.references.forEach((r, i) => {
@@ -292,6 +302,30 @@
       });
     }
     return { errors, warnings };
+  }
+
+  /**
+   * Posted balances supplied with the data (`dataset.balances`, section 2):
+   * [{ accountId, date, cents, source: 'statement'|'bank', note? }], each true at the END of `date`.
+   * Entries with an unknown account, a bad date, non-integer cents or an unknown source are dropped;
+   * one entry per account and date is kept (a statement beats the bank's running balance; between
+   * equals the later one in the list wins). Sorted by account id, then date. Never throws.
+   * @param {any} list
+   * @param {Iterable<string>} accountIds
+   * @returns {object[]}
+   */
+  function normalizeBalances(list, accountIds) {
+    const known = accountIds instanceof Set ? accountIds : new Set(accountIds || []);
+    const byKey = new Map();
+    for (const b of Array.isArray(list) ? list : []) {
+      if (!isObj(b) || !known.has(b.accountId) || !E.dates.isDate(b.date) || !Number.isSafeInteger(b.cents) || !BALANCE_RANK[b.source]) continue;
+      const entry = { accountId: b.accountId, date: b.date, cents: b.cents, source: b.source };
+      if (typeof b.note === 'string' && b.note.trim()) entry.note = b.note.trim().slice(0, 500);
+      const key = b.accountId + '|' + b.date;
+      const prev = byKey.get(key);
+      if (!prev || BALANCE_RANK[entry.source] >= BALANCE_RANK[prev.source]) byKey.set(key, entry);
+    }
+    return [...byKey.values()].sort((a, b) => (a.accountId < b.accountId ? -1 : a.accountId > b.accountId ? 1 : a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   }
 
   /**
@@ -378,6 +412,7 @@
       generatedAt: E.dates.isDate(src.generatedAt) ? src.generatedAt : null,
       currency: nonEmpty(src.currency) ? src.currency : 'USD',
       accounts: src.accounts.map(normalizeAccount),
+      balances: normalizeBalances(src.balances, src.accounts.map(a => a.id)),
       transactions: src.transactions.map(normalizeTxn).sort(byDateThenId),
       coverageOverrides: overrides,
       importLog: Array.isArray(src.importLog) ? src.importLog : [],
@@ -941,7 +976,7 @@
   E.ledger = {
     KINDS, SUBTYPES, ACCOUNT_TYPES, SCOPES, EXCLUSION_REASONS, REIMBURSEMENT_STATUS, BUSINESS_STATUS,
     SPENDING_ACCOUNT_TYPES, KNOWN_FLAGS,
-    isLegacy, normalizeDataset, validateDataset, applyEdits, measure, summarize, filter, group,
+    isLegacy, normalizeDataset, normalizeBalances, validateDataset, applyEdits, measure, summarize, filter, group,
     months, coverage, coverageMap, latestCompleteMonth,
     partsOf, checkSplits, reimbursementLinks
   };

@@ -718,7 +718,7 @@ module.exports = [
       }
       t.assert.ok(found, 'the Groceries target is reachable with Tab');
       const id = await t.page.evaluate(() => document.activeElement.id);
-      await t.page.keyboard.press('Control+A');
+      await t.page.keyboard.press(`${t.mod}+A`); // select all: Cmd+A on macOS, Ctrl+A elsewhere
       await t.page.keyboard.type('640');
       await t.page.keyboard.press('Enter');
       await t.page.waitForFunction(() => window.HouseholdBudget.getState().plan.targets.Groceries === 64000);

@@ -5,6 +5,9 @@
  * History: the balance of each joint cash account (checking, savings) at the end of every month.
  *   - "bank": the export's running-balance column gives the balance at the end of each day that
  *     has rows; other days follow from the transactions in between.
+ *   - "statement" / "bank" supplied with the data (dataset.balances: [{ accountId, date, cents,
+ *     source: 'statement'|'bank', note? }]): a posted balance at the end of that day, used like a
+ *     running-balance figure (and preferred to it on the same day).
  *   - "entered": one balance the household typed in (plan.balances.accounts, true at the end of
  *     its own date: plan.balances.accountDates, else accountsAsOf). It is used at exactly that
  *     date, never moved. Days between the end of the account's export and that date (or between
@@ -30,6 +33,16 @@
 
   const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
   const isCents = v => Number.isSafeInteger(v);
+
+  /**
+   * Balances supplied with the data (dataset.balances), checked: [{ accountId, date, cents,
+   * source: 'statement'|'bank', note }]. Entries that are not usable are skipped; absent = [].
+   */
+  function suppliedBalances(dataset) {
+    const list = dataset && Array.isArray(dataset.balances) ? dataset.balances : [];
+    return list.filter(b => isObj(b) && typeof b.accountId === 'string' && b.accountId && E.dates.isDate(b.date) && isCents(b.cents))
+      .map(b => ({ accountId: b.accountId, date: b.date, cents: b.cents, source: b.source === 'statement' ? 'statement' : 'bank', note: typeof b.note === 'string' && b.note.trim() ? b.note.trim() : null }));
+  }
 
   /** Joint cash accounts in the data (cards and loans are not balances you can spend from). */
   function cashAccounts(dataset) {
@@ -83,11 +96,13 @@
 
   /**
    * Known balances of one account: [{ day, cents, source, gap? }] sorted by day.
-   * The export's running balances come first. An entered balance is used at exactly its date
-   * when the export has no running balance, or when it is dated after the last one (a newer
-   * fact); otherwise the export's own figure is used. `rows` need a `day` (dates.dayNumber).
+   * The export's running balances come first, with the balances supplied with the data
+   * (`supplied`: [{ date, cents, source: 'statement'|'bank' }], the supplied figure wins on the
+   * same day). An entered balance is used at exactly its date when there is no such figure, or
+   * when it is dated after the last one (a newer fact); otherwise the bank's own figure is used.
+   * `rows` need a `day` (dates.dayNumber).
    */
-  function anchorsFor(account, rows, entered, asOf) {
+  function anchorsFor(account, rows, entered, asOf, supplied) {
     const out = [];
     const withBalance = rows.filter(t => isCents(t.balanceCents));
     if (withBalance.length) {
@@ -110,6 +125,14 @@
         byDay.get(d).push({ balanceCents: t.balanceCents, amountCents: t.amountCents, sourceRow: t.sourceRow, newestFirst: newest.get(t.sourceFile || '') });
       }
       for (const [day, list] of byDay) out.push({ day, cents: endOfDay(list), source: 'bank' });
+    }
+    for (const b of Array.isArray(supplied) ? supplied : []) {
+      if (!E.dates.isDate(b.date) || !isCents(b.cents)) continue;
+      const day = E.dates.dayNumber(b.date);
+      const same = out.findIndex(x => x.day === day);
+      const anchor = { day, cents: b.cents, source: b.source === 'statement' ? 'statement' : 'bank', supplied: true };
+      if (same === -1) out.push(anchor);
+      else out[same] = anchor;
     }
     if (isCents(entered) && E.dates.isDate(asOf)) {
       const day = E.dates.dayNumber(asOf);
@@ -155,14 +178,16 @@
     const months = opts.months || E.ledger.months(dataset);
     const entered = isObj(opts.entered) ? opts.entered : {};
     const dates = isObj(opts.enteredAsOf) ? opts.enteredAsOf : {};
+    const supplied = suppliedBalances(dataset);
     const accounts = cashAccounts(dataset).map(a => {
       // Rows marked as duplicate copies were never real money; everything else moved the balance.
       const rows = txns.filter(t => t.accountId === a.id && t.excluded !== 'duplicate')
         .map(t => ({ ...t, day: E.dates.dayNumber(t.date) }))
         .sort((x, y) => x.day - y.day);
       const asOf = E.dates.isDate(dates[a.id]) ? dates[a.id] : opts.asOf;
-      const anchors = anchorsFor(a, rows, entered[a.id], asOf);
-      let source = anchors.length ? anchors[0].source : 'change';
+      const anchors = anchorsFor(a, rows, entered[a.id], asOf, supplied.filter(b => b.accountId === a.id));
+      // A balance supplied as a statement figure is a bank figure for everything below.
+      let source = anchors.length ? (anchors[0].source === 'statement' ? 'bank' : anchors[0].source) : 'change';
       let base = anchors;
       if (!anchors.length) {
         // No known balance: measure the change from the start of the account's first covered day.
@@ -217,8 +242,16 @@
       const latest = anchors.length ? anchors[anchors.length - 1] : null;
       const bankAndEntered = source === 'bank' && enteredAnchor;
       const ignoredEntered = source === 'bank' && !enteredAnchor && isCents(entered[a.id]) && E.dates.isDate(asOf);
+      const fromSupplied = anchors.filter(x => x.supplied);
+      const fromRunning = anchors.some(x => x.source === 'bank' && !x.supplied);
+      const lastSupplied = fromSupplied.length ? fromSupplied[fromSupplied.length - 1] : null;
+      const suppliedText = lastSupplied ? (lastSupplied.source === 'statement' ? 'the statement balance' : 'the bank balance') + ' supplied with your data for ' + E.dates.label(E.dates.fromDayNumber(lastSupplied.day)) : '';
+      const bankText = fromRunning ? 'From the running balance in the bank export' + (lastSupplied ? ' and ' + suppliedText : '') : 'From ' + suppliedText;
+      const runningOnly = fromRunning && !lastSupplied;
+      const lastBankText = runningOnly ? 'the export’s last running balance' : 'the last balance from your bank';
+      const ownText = runningOnly ? 'the export’s own figure' : 'the bank’s own figure';
       const note = source === 'bank'
-        ? 'From the running balance in the bank export' + (bankAndEntered ? ', and the balance you entered for ' + E.dates.label(asOf) + ' after it.' : ignoredEntered ? '. The balance you entered for ' + E.dates.label(asOf) + ' is not newer than the export’s last running balance, so the export’s own figure is used.' : '.')
+        ? bankText + (bankAndEntered ? ', and the balance you entered for ' + E.dates.label(asOf) + ' after it.' : ignoredEntered ? '. The balance you entered for ' + E.dates.label(asOf) + ' is not newer than ' + lastBankText + ', so ' + ownText + ' is used.' : '.')
         : source === 'entered' ? 'From the balance you entered for ' + E.dates.label(asOf) + ', worked back and forward with the transactions.'
         : 'No balance known: shows the change since ' + (base.length ? E.dates.label(E.dates.fromDayNumber(base[0].day + 1)) : 'the first export') + ', not the balance.';
       return {
@@ -467,5 +500,5 @@
     };
   }
 
-  E.balances = { CASH_TYPES, GROUPS, cashAccounts, coveredBetween, endOfDay, anchorsFor, gapFor, history, incomeAttribution, monthlyFlows, usual, comfortable, project };
+  E.balances = { CASH_TYPES, GROUPS, cashAccounts, suppliedBalances, coveredBetween, endOfDay, anchorsFor, gapFor, history, incomeAttribution, monthlyFlows, usual, comfortable, project };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

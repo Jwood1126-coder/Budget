@@ -870,6 +870,21 @@
   }
   const covers = (ranges, date) => (ranges || []).some(r => r.start <= date && date <= r.end);
 
+  /**
+   * The notes pairTransfers gives an unpaired row (exact wording, by situation). Named so that
+   * mergeDataset can take a stale one off a row that is paired, or whose situation changed, later.
+   */
+  const UNPAIRED_NOTE = {
+    cardCovered: days => 'No matching payment on the card account(s) in the data within ' + days + ' days: confirm this pays a card and is not a bill. ' +
+      'If it pays a card whose export is not in the data, that card\'s purchases (the spending) are missing.',
+    noCard: () => 'No card account in the data covers this date: the purchases this payment covers are not in the data, so that card\'s spending is missing (the payment itself is excluded).',
+    cardSide: days => 'No matching payment found in the data within ' + days + ' days: paid from an account that is not in the data?',
+    loan: days => 'Payment received on the loan with no matching payment from a household account in the data within ' + days + ' days: paid from an account that is not in the data?',
+    transferIn: days => 'No matching outbound transfer in the data within ' + days + ' days: confirm where this money came from.',
+    transferOut: days => 'No matching inbound transfer in the data within ' + days + ' days: confirm where this money went.'
+  };
+  const unpairedNotes = days => Object.values(UNPAIRED_NOTE).map(f => f(days));
+
   // ------------------------------------------------------------------ transfer pairing
 
   /**
@@ -989,21 +1004,15 @@
         addFlag(t, 'unpaired_transfer');
         if (t.amountCents < 0 && typeOf(t) !== 'credit_card') {
           const cardCovered = cards.some(c => covers(coverageById.get(c.id), t.date));
-          addNote(t, cardCovered
-            ? 'No matching payment on the card account(s) in the data within ' + days + ' days: confirm this pays a card and is not a bill. ' +
-              'If it pays a card whose export is not in the data, that card\'s purchases (the spending) are missing.'
-            : 'No card account in the data covers this date: the purchases this payment covers are not in the data, so that card\'s spending is missing (the payment itself is excluded).');
+          addNote(t, cardCovered ? UNPAIRED_NOTE.cardCovered(days) : UNPAIRED_NOTE.noCard());
         } else {
-          addNote(t, 'No matching payment found in the data within ' + days + ' days: paid from an account that is not in the data?');
+          addNote(t, UNPAIRED_NOTE.cardSide(days));
         }
       } else if (t.kind === 'transfer' && t.subtype !== 'contribution' && t.subtype !== 'investment') {
         // Contributions come from a partner's personal account outside the data: expected unpaired.
         addFlag(t, 'unpaired_transfer');
-        addNote(t, typeOf(t) === 'loan' && t.amountCents > 0
-          ? 'Payment received on the loan with no matching payment from a household account in the data within ' + days + ' days: paid from an account that is not in the data?'
-          : t.amountCents > 0
-          ? 'No matching outbound transfer in the data within ' + days + ' days: confirm where this money came from.'
-          : 'No matching inbound transfer in the data within ' + days + ' days: confirm where this money went.');
+        addNote(t, typeOf(t) === 'loan' && t.amountCents > 0 ? UNPAIRED_NOTE.loan(days)
+          : t.amountCents > 0 ? UNPAIRED_NOTE.transferIn(days) : UNPAIRED_NOTE.transferOut(days));
       }
     }
     return out;
@@ -1019,6 +1028,11 @@
    * and a charge already refunded on its own account is not offered as a candidate.
    * @returns {object[]} new transaction objects
    */
+  const REIMBURSEMENT_NOTE = {
+    deposit: (dep, charge) => 'Equals the ' + money(dep.amountCents) + ' charge on ' + charge.date + ' (' + charge.merchant + '): possibly a reimbursement — confirm in Review.',
+    charge: dep => 'A deposit of the same amount arrived on ' + dep.date + ': possibly reimbursed — confirm in Review.'
+  };
+
   function markReimbursementCandidates(txns, { days = 120, minCents = 2500, accounts } = {}) {
     const out = (txns || []).map(copyTxn);
     const cardIds = new Set((accounts || []).filter(a => a.type === 'credit_card' || a.type === 'loan').map(a => a.id));
@@ -1056,8 +1070,8 @@
       addFlag(dep, 'reimbursement_candidate'); addFlag(best, 'reimbursement_candidate');
       if (!dep.matchIds.includes(best.id)) dep.matchIds.push(best.id);
       if (!best.matchIds.includes(dep.id)) best.matchIds.push(dep.id);
-      addNote(dep, 'Equals the ' + money(dep.amountCents) + ' charge on ' + best.date + ' (' + best.merchant + '): possibly a reimbursement — confirm in Review.');
-      addNote(best, 'A deposit of the same amount arrived on ' + dep.date + ': possibly reimbursed — confirm in Review.');
+      addNote(dep, REIMBURSEMENT_NOTE.deposit(dep, best));
+      addNote(best, REIMBURSEMENT_NOTE.charge(dep));
     }
     return out;
   }
@@ -1179,24 +1193,236 @@
     return totals;
   }
 
-  /**
-   * Run the whole pipeline over a set of exports.
-   * @param {{files: {name, text, accountId, mapping?, coverageStart?, coverageEnd?}[], accounts: object[], rules?: object,
-   *          datasetId: string, isSynthetic?: boolean, generatedAt: string, coverageOverrides?: object,
-   *          references?: object[], notes?: string[], pairDays?: number, reimbursementDays?: number}} input
-   * @returns {{dataset: object, report: object}}
-   */
-  function buildDataset(input) {
-    const opts = input || {};
-    if (typeof opts.datasetId !== 'string' || !opts.datasetId.trim()) throw fail('datasetId is required.');
-    if (!E.dates.isDate(opts.generatedAt)) throw fail('generatedAt must be a YYYY-MM-DD date (the importer never reads the clock).');
-    if (!Array.isArray(opts.files) || !opts.files.length) throw fail('At least one file is required.');
-    const accounts = normalizeAccounts(opts.accounts);
-    const accountById = new Map(accounts.map(a => [a.id, a]));
-    const warnings = [];
-    const names = new Set();
+  // ------------------------------------------------------------------ balances supplied with the data
 
-    const fileResults = opts.files.map((f, i) => {
+  /*
+   * Posted balances travel with the data as `dataset.balances`:
+   *   [{ accountId, date: 'YYYY-MM-DD', cents, source: 'statement'|'bank', note? }]
+   * Each is the account's balance at the END of `date`. 'statement': supplied by the household (the
+   * import config's `balances`, or a balances.csv loaded in the browser). 'bank': the running balance
+   * an export prints, taken at the account's last covered day. One entry per account and date (a
+   * statement beats the bank's figure); sorted by account id, then date.
+   */
+  const BALANCE_SOURCES = ['statement', 'bank'];
+  const BALANCE_RANK = { bank: 1, statement: 2 };
+  const BALANCE_NOTE_MAX = 500;
+  const balanceKey = b => b.accountId + '|' + b.date;
+  const byAccountThenDate = (a, b) => (a.accountId < b.accountId ? -1 : a.accountId > b.accountId ? 1 : a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+  function balanceEntry(accountId, date, cents, source, note) {
+    const out = { accountId, date, cents, source };
+    if (typeof note === 'string' && note.trim()) out.note = note.trim().replace(/\s+/g, ' ').slice(0, BALANCE_NOTE_MAX);
+    return out;
+  }
+  const accountName = (byId, id) => (byId.get(id) && byId.get(id).label) || id;
+
+  /**
+   * Validate the balances given with an import (the config's `balances`) -> sorted entries.
+   * Item: { accountId, date, cents } or { accountId, date, amount: '1,234.56' }; optional source
+   * ('statement' by default, or 'bank') and note. Throws ValidationError naming the item.
+   */
+  function statementBalances(list, accounts) {
+    if (list === undefined || list === null) return [];
+    if (!Array.isArray(list)) throw fail('"balances" must be a list of { accountId, date, cents } (or "amount": "1,234.56" instead of cents).');
+    const byId = new Map((accounts || []).map(a => [a.id, a]));
+    const seen = new Map();
+    return list.map((b, i) => {
+      const label = 'Balance #' + (i + 1);
+      if (!isObj(b)) throw fail(label + ' must be an object with accountId, date and cents (or amount).');
+      if (!byId.has(b.accountId)) throw fail(label + ': unknown account ' + JSON.stringify(b.accountId ?? null) + (byId.size ? ' (the accounts are ' + [...byId.keys()].join(', ') + ')' : '') + '.');
+      const where = label + ' (' + b.accountId + (E.dates.isDate(b.date) ? ' ' + b.date : '') + ')';
+      if (!E.dates.isDate(b.date)) throw fail(where + ': date must be a YYYY-MM-DD date (got ' + JSON.stringify(b.date ?? null) + ').');
+      const hasCents = b.cents !== undefined && b.cents !== null;
+      const hasAmount = b.amount !== undefined && b.amount !== null && String(b.amount).trim() !== '';
+      let cents;
+      if (hasCents) {
+        if (!Number.isSafeInteger(b.cents)) throw fail(where + ': cents must be a whole number of cents, such as 123456 for $1,234.56.');
+        cents = b.cents;
+      }
+      if (hasAmount) {
+        let parsed = null;
+        try { parsed = E.money.parseAmount(b.amount); } catch { parsed = null; }
+        if (parsed === null || !Number.isSafeInteger(parsed)) throw fail(where + ': amount ' + JSON.stringify(b.amount) + ' is not an amount such as "1,234.56".');
+        if (hasCents && parsed !== cents) throw fail(where + ': "cents" and "amount" disagree; give one of them.');
+        cents = parsed;
+      }
+      if (cents === undefined) throw fail(where + ': give the balance as "cents" (whole cents) or "amount" ("1,234.56").');
+      if (Math.abs(cents) > E.money.MAX_INPUT_CENTS) throw fail(where + ': the amount is too large to be a balance.');
+      const source = b.source === undefined || b.source === null ? 'statement' : b.source;
+      if (!BALANCE_SOURCES.includes(source)) throw fail(where + ': source must be "statement" or "bank".');
+      if (b.note !== undefined && b.note !== null && typeof b.note !== 'string') throw fail(where + ': note must be text.');
+      const key = b.accountId + '|' + b.date;
+      if (seen.has(key)) throw fail(label + ': ' + accountName(byId, b.accountId) + ' already has a balance on ' + b.date + ' (balance #' + seen.get(key) + '). Give one balance per account and date.');
+      seen.set(key, i + 1);
+      return balanceEntry(b.accountId, b.date, cents, source, b.note);
+    }).sort(byAccountThenDate);
+  }
+
+  /** The balance at the end of a day from that day's rows (the rule balances.endOfDay uses). */
+  function endOfDayBalance(rows) {
+    if (rows.length === 1) return rows[0].balanceCents;
+    const before = new Set(rows.map(r => r.balanceCents - r.amountCents));
+    const ends = rows.filter(r => !before.has(r.balanceCents));
+    if (ends.length === 1) return ends[0].balanceCents;
+    const pool = ends.length ? ends : rows;
+    // Exports list newest first or oldest first; follow the file's own order for that day.
+    const byRow = pool.filter(r => Number.isInteger(r.sourceRow)).sort((a, b) => a.sourceRow - b.sourceRow);
+    if (!byRow.length) return pool[pool.length - 1].balanceCents;
+    return byRow[0].newestFirst ? byRow[0].balanceCents : byRow[byRow.length - 1].balanceCents;
+  }
+
+  /**
+   * The bank's running balance at each cash account's last covered day ('bank' entries): the
+   * end-of-day balance of the account's last row, when every row that day prints one and that row
+   * lies in the account's last coverage range (so no unseen day sits between it and the end of the
+   * coverage). Card and loan accounts are left out: their "balance" is what is owed.
+   */
+  function bankBalances(transactions, accounts) {
+    const txns = transactions || [];
+    const fileRows = new Map();
+    for (const t of txns) {
+      if (!Number.isSafeInteger(t.balanceCents) || !Number.isInteger(t.sourceRow)) continue;
+      const k = t.sourceFile || '';
+      if (!fileRows.has(k)) fileRows.set(k, []);
+      fileRows.get(k).push(t);
+    }
+    const newestFirst = new Map();
+    for (const [k, list] of fileRows) {
+      const sorted = list.slice().sort((a, b) => a.sourceRow - b.sourceRow);
+      newestFirst.set(k, sorted.length > 1 && sorted[0].date > sorted[sorted.length - 1].date);
+    }
+    const out = [];
+    for (const a of accounts || []) {
+      if (a.type === 'credit_card' || a.type === 'loan') continue;
+      const ranges = mergeRanges(a.coverage);
+      if (!ranges.length) continue;
+      const last = ranges[ranges.length - 1];
+      let lastDate = null;
+      for (const t of txns) if (t.accountId === a.id && t.date <= last.end && (lastDate === null || t.date > lastDate)) lastDate = t.date;
+      if (lastDate === null || lastDate < last.start) continue;
+      const day = txns.filter(t => t.accountId === a.id && t.date === lastDate);
+      if (!day.every(t => Number.isSafeInteger(t.balanceCents))) continue;
+      const cents = endOfDayBalance(day.map(t => ({ balanceCents: t.balanceCents, amountCents: t.amountCents, sourceRow: t.sourceRow, newestFirst: newestFirst.get(t.sourceFile || '') })));
+      const files = [...new Set(day.map(t => t.sourceFile).filter(Boolean))];
+      out.push(balanceEntry(a.id, last.end, cents, 'bank', 'Running balance after the last row (' + [lastDate].concat(files).join(', ') + ')' +
+        (lastDate < last.end ? '; no later rows through ' + last.end : '') + '.'));
+    }
+    return out.sort(byAccountThenDate);
+  }
+
+  /**
+   * Add balances to a list, one entry per account and date: an incoming entry replaces an existing
+   * one of the same or a lower rank (statement > bank), so a bank figure never replaces a statement.
+   * @returns {{balances: object[], added: object[], replaced: {from, to}[], ignored: {entry, kept}[], unchanged: number}}
+   */
+  function mergeBalances(existing, incoming) {
+    const byKey = new Map();
+    for (const b of existing || []) byKey.set(balanceKey(b), b);
+    const added = [], replaced = [], ignored = [];
+    let unchanged = 0;
+    for (const b of incoming || []) {
+      const k = balanceKey(b);
+      const prev = byKey.get(k);
+      if (!prev) { byKey.set(k, b); added.push(b); continue; }
+      if (prev.cents === b.cents && prev.source === b.source && (prev.note || '') === (b.note || '')) { unchanged += 1; continue; }
+      if ((BALANCE_RANK[b.source] || 0) >= (BALANCE_RANK[prev.source] || 0)) { byKey.set(k, b); replaced.push({ from: prev, to: b }); } else ignored.push({ entry: b, kept: prev });
+    }
+    return { balances: [...byKey.values()].map(b => ({ ...b })).sort(byAccountThenDate), added, replaced, ignored, unchanged };
+  }
+
+  /** A statement and the export's running balance disagreeing on the same day is worth a look. */
+  function balanceWarnings({ replaced, ignored }, accountById) {
+    const out = [];
+    const pairs = replaced.map(r => [r.to, r.from]).concat(ignored.map(r => [r.kept, r.entry]));
+    for (const [used, other] of pairs) {
+      if (used.source !== 'statement' || other.source !== 'bank' || used.cents === other.cents) continue;
+      out.push(accountName(accountById, used.accountId) + ', ' + used.date + ': the statement balance ' + money(used.cents) + ' differs from the running balance in the export (' +
+        money(other.cents) + '); the statement balance is used. Check for rows missing from the export.');
+    }
+    return out;
+  }
+
+  // ------------------------------------------------------------------ balances file (account, date, balance)
+
+  /** Header names of a balances file. */
+  const BALANCE_FILE_COLUMNS = {
+    account: ['account', 'account id', 'account name', 'acct'],
+    date: ['date', 'as of', 'as of date', 'balance date', 'statement date', 'closing date', 'ending date'],
+    balance: ['balance', 'statement balance', 'ending balance', 'closing balance', 'balance usd'],
+    note: ['note', 'notes', 'memo', 'comment']
+  };
+
+  /**
+   * Column positions of a balances file's header ({ account, date, balance, note? }), or null when
+   * the row is not one: a transaction export (a description or amount column) is never taken for it.
+   */
+  function detectBalancesHeader(header) {
+    if (!Array.isArray(header) || !header.length) return null;
+    const h = header.map(x => norm(x));
+    const cols = {};
+    for (const [key, names] of Object.entries(BALANCE_FILE_COLUMNS)) {
+      cols[key] = -1;
+      for (const n of names) { const i = h.indexOf(n); if (i >= 0) { cols[key] = i; break; } }
+    }
+    if (cols.account < 0 || cols.date < 0 || cols.balance < 0) return null;
+    const txnColumns = [].concat(COLUMN_SYNONYMS.description, COLUMN_SYNONYMS.amount, COLUMN_SYNONYMS.debit, COLUMN_SYNONYMS.credit);
+    if (h.some((x, i) => i !== cols.note && txnColumns.includes(x))) return null;
+    if (cols.note < 0) delete cols.note;
+    return cols;
+  }
+
+  /**
+   * Read a balances file -> statement entries. The account column holds an account id or label
+   * (any case); dates as in exports (year-first always works); amounts like "1,234.56". Rows that
+   * cannot be used are skipped with a reason; a second balance for the same account and date is
+   * skipped (the first is used).
+   * @returns {{balances: object[], skipped: {row, reason}[], rows: number}}
+   */
+  function parseBalancesCSV(text, accounts, { name = 'balances.csv', dateFormat = 'MDY' } = {}) {
+    if (!DATE_FORMATS.includes(dateFormat)) throw fail('dateFormat must be one of ' + DATE_FORMATS.join(', ') + '.');
+    const records = parseCSVRecords(text);
+    const cols = records.length ? detectBalancesHeader(records[0].fields) : null;
+    if (!cols) throw fail('"' + name + '" is not a balances file: its first line must name the columns account, date and balance.', { code: 'NOT_BALANCES' });
+    const list = accounts || [];
+    const byId = new Map(list.map(a => [a.id, a]));
+    const byName = new Map(); // normalized label or id -> account (null when two accounts share it)
+    for (const a of list) {
+      for (const k of new Set([norm(a.label || a.id), norm(a.id)])) byName.set(k, byName.has(k) && byName.get(k) !== a ? null : a);
+    }
+    const out = new Map();
+    const skipped = [];
+    let rows = 0;
+    for (let r = 1; r < records.length; r++) {
+      const { fields, line } = records[r];
+      if (fields.every(f => f.trim() === '')) continue;
+      rows += 1;
+      const get = key => (cols[key] === undefined ? '' : String(fields[cols[key]] ?? '').trim());
+      const acctText = get('account');
+      if (!acctText) { skipped.push({ row: line, reason: 'missing account' }); continue; }
+      const account = byId.get(acctText) || byName.get(norm(acctText));
+      if (!account) {
+        skipped.push({ row: line, reason: byName.get(norm(acctText)) === null ? 'account "' + acctText + '" matches more than one account: use its id' : 'unknown account "' + acctText + '"' });
+        continue;
+      }
+      const dateText = get('date');
+      const date = dateText ? parseDate(dateText, dateFormat) : null;
+      if (!date) { skipped.push({ row: line, reason: dateText ? 'invalid date "' + dateText + '"' : 'missing date' }); continue; }
+      let cents;
+      try { cents = E.money.parseAmount(get('balance')); } catch { cents = undefined; }
+      if (cents === null) { skipped.push({ row: line, reason: 'missing balance' }); continue; }
+      if (cents === undefined || !Number.isSafeInteger(cents) || Math.abs(cents) > E.money.MAX_INPUT_CENTS) { skipped.push({ row: line, reason: 'invalid balance "' + get('balance') + '"' }); continue; }
+      const key = account.id + '|' + date;
+      if (out.has(key)) { skipped.push({ row: line, reason: 'a second balance for ' + (account.label || account.id) + ' on ' + date + ' (the first is used)' }); continue; }
+      out.set(key, balanceEntry(account.id, date, cents, 'statement', get('note')));
+    }
+    return { balances: [...out.values()].sort(byAccountThenDate), skipped, rows };
+  }
+
+  // ------------------------------------------------------------------ building the dataset
+
+  /** Read and normalize each export of an import (unique names, known accounts, valid periods). */
+  function readFiles(files, accountById, warnings) {
+    const names = new Set();
+    return files.map((f, i) => {
       if (!isObj(f) || typeof f.name !== 'string' || !f.name) throw fail('File #' + (i + 1) + ' needs a name.');
       if (names.has(f.name)) throw fail('Two files are both named "' + f.name + '"; give each file a distinct name.');
       names.add(f.name);
@@ -1220,18 +1446,107 @@
       }
       return { file: f, account, res, coverageStart, coverageEnd };
     });
+  }
 
-    // Coverage: declared or observed ranges per account, merged when they overlap or touch.
+  /** Extend each account's coverage with the periods its files cover (merged when they overlap or touch). */
+  function extendCoverage(accounts, fileResults) {
     const rangesById = new Map(accounts.map(a => [a.id, a.coverage.slice()]));
     for (const fr of fileResults) {
       if (fr.coverageStart && fr.coverageEnd) rangesById.get(fr.account.id).push({ start: fr.coverageStart, end: fr.coverageEnd });
     }
-    for (const a of accounts) {
-      a.coverage = mergeRanges(rangesById.get(a.id));
-      for (let k = 1; k < a.coverage.length; k++) {
-        warnings.push(a.label + ': no export covers ' + E.dates.addDays(a.coverage[k - 1].end, 1) + ' – ' + E.dates.addDays(a.coverage[k].start, -1) + '.');
-      }
+    for (const a of accounts) a.coverage = mergeRanges(rangesById.get(a.id));
+  }
+
+  function gapWarnings(a) {
+    const out = [];
+    for (let k = 1; k < a.coverage.length; k++) {
+      out.push(a.label + ': no export covers ' + E.dates.addDays(a.coverage[k - 1].end, 1) + ' – ' + E.dates.addDays(a.coverage[k].start, -1) + '.');
     }
+    return out;
+  }
+
+  /** Per-file report rows. `present` (merges only) counts rows the data already had. */
+  function fileReportsFor(fileResults, keptByFile, removedByFile, present) {
+    return fileResults.map(fr => {
+      const skippedReasons = {};
+      for (const s of fr.res.skipped) {
+        const key = s.reason.replace(/\s*".*$/, '');
+        skippedReasons[key] = (skippedReasons[key] || 0) + 1;
+      }
+      const name = fr.file.name;
+      const already = present ? present.get(name) || 0 : 0;
+      const row = {
+        name, accountId: fr.account.id, profile: fr.res.mapping ? fr.res.mapping.profile || 'custom' : null,
+        rows: fr.res.rows, imported: keptByFile.get(name) || 0, skipped: fr.res.skipped.length, skippedReasons,
+        duplicatesRemoved: (removedByFile.get(name) || 0) + already, start: fr.res.start, end: fr.res.end,
+        coverageStart: fr.coverageStart || null, coverageEnd: fr.coverageEnd || null, signConvention: fr.res.signConvention
+      };
+      if (present) row.alreadyPresent = already;
+      return row;
+    });
+  }
+
+  const importLogOf = fileReports => fileReports.map(f => ({
+    file: f.name, accountId: f.accountId, profile: f.profile, rows: f.rows, imported: f.imported, skipped: f.skipped,
+    duplicatesRemoved: f.duplicatesRemoved, start: f.start, end: f.end, coverageStart: f.coverageStart, coverageEnd: f.coverageEnd,
+    signConvention: f.signConvention
+  }));
+
+  /** Every unmatched card payment from a cash account points at card spending that may be missing. */
+  function unpairedPaymentWarnings(transactions, accountById) {
+    const out = [];
+    const unpairedPayments = transactions.filter(t => t.kind === 'card_payment' && !t.pairId && t.amountCents < 0 &&
+      (accountById.get(t.accountId) || {}).type !== 'credit_card');
+    const unpairedNoCard = unpairedPayments.filter(t => /No card account in the data covers/.test(t.note));
+    const unpairedOther = unpairedPayments.filter(t => !unpairedNoCard.includes(t));
+    const total = list => money(-list.reduce((s, t) => s + t.amountCents, 0));
+    if (unpairedNoCard.length) {
+      out.push(unpairedNoCard.length + ' card payment(s) totalling ' + total(unpairedNoCard) +
+        ' fall on dates no card export covers: those cards\' purchases are missing from spending for those months.');
+    }
+    if (unpairedOther.length) {
+      out.push(unpairedOther.length + ' card payment(s) totalling ' + total(unpairedOther) +
+        ' have no matching payment on a card account in the data: if they pay a card whose export is missing, that card\'s purchases are missing from spending; otherwise reclassify them (for example as a bill).');
+    }
+    return out;
+  }
+
+  function flagCountsOf(transactions) {
+    const counts = {};
+    for (const t of transactions) for (const f of t.flags) counts[f] = (counts[f] || 0) + 1;
+    return Object.fromEntries(Object.keys(counts).sort().map(k => [k, counts[k]]));
+  }
+
+  function spendingOf(transactions) {
+    const spend = transactions.filter(t => t.kind === 'spend');
+    const purchasesCents = spend.reduce((s, t) => s + (t.amountCents < 0 ? -t.amountCents : 0), 0);
+    const refundsCents = spend.reduce((s, t) => s + (t.amountCents > 0 ? t.amountCents : 0), 0);
+    return { purchasesCents, refundsCents, netCents: purchasesCents - refundsCents };
+  }
+
+  /**
+   * Run the whole pipeline over a set of exports.
+   * @param {{files: {name, text, accountId, mapping?, coverageStart?, coverageEnd?}[], accounts: object[], rules?: object,
+   *          datasetId: string, isSynthetic?: boolean, generatedAt: string, coverageOverrides?: object,
+   *          references?: object[], notes?: string[], balances?: object[], pairDays?: number, reimbursementDays?: number}} input
+   *        balances: posted balances supplied with the import (see statementBalances); the bank's
+   *        running balances are added as 'bank' entries (see bankBalances).
+   * @returns {{dataset: object, report: object}}
+   */
+  function buildDataset(input) {
+    const opts = input || {};
+    if (typeof opts.datasetId !== 'string' || !opts.datasetId.trim()) throw fail('datasetId is required.');
+    if (!E.dates.isDate(opts.generatedAt)) throw fail('generatedAt must be a YYYY-MM-DD date (the importer never reads the clock).');
+    if (!Array.isArray(opts.files) || !opts.files.length) throw fail('At least one file is required.');
+    const accounts = normalizeAccounts(opts.accounts);
+    const accountById = new Map(accounts.map(a => [a.id, a]));
+    const statement = statementBalances(opts.balances, accounts);
+    const warnings = [];
+
+    const fileResults = readFiles(opts.files, accountById, warnings);
+    // Coverage: declared or observed ranges per account, merged when they overlap or touch.
+    extendCoverage(accounts, fileResults);
+    for (const a of accounts) warnings.push(...gapWarnings(a));
 
     const all = [].concat(...fileResults.map(fr => fr.res.txns));
     const { kept, removed } = dedupe(all);
@@ -1244,35 +1559,11 @@
     for (const r of removed) removedByFile.set(r.file, (removedByFile.get(r.file) || 0) + 1);
     const keptByFile = new Map();
     for (const t of transactions) keptByFile.set(t.sourceFile, (keptByFile.get(t.sourceFile) || 0) + 1);
+    const fileReports = fileReportsFor(fileResults, keptByFile, removedByFile);
 
-    const fileReports = fileResults.map(fr => {
-      const skippedReasons = {};
-      for (const s of fr.res.skipped) {
-        const key = s.reason.replace(/\s*".*$/, '');
-        skippedReasons[key] = (skippedReasons[key] || 0) + 1;
-      }
-      return {
-        name: fr.file.name, accountId: fr.account.id, profile: fr.res.mapping ? fr.res.mapping.profile || 'custom' : null,
-        rows: fr.res.rows, imported: keptByFile.get(fr.file.name) || 0, skipped: fr.res.skipped.length, skippedReasons,
-        duplicatesRemoved: removedByFile.get(fr.file.name) || 0, start: fr.res.start, end: fr.res.end,
-        coverageStart: fr.coverageStart || null, coverageEnd: fr.coverageEnd || null, signConvention: fr.res.signConvention
-      };
-    });
-
-    // Every unmatched card payment from a cash account points at card spending that may be missing.
-    const unpairedPayments = transactions.filter(t => t.kind === 'card_payment' && !t.pairId && t.amountCents < 0 &&
-      accountById.get(t.accountId).type !== 'credit_card');
-    const unpairedNoCard = unpairedPayments.filter(t => /No card account in the data covers/.test(t.note));
-    const unpairedOther = unpairedPayments.filter(t => !unpairedNoCard.includes(t));
-    const total = list => money(-list.reduce((s, t) => s + t.amountCents, 0));
-    if (unpairedNoCard.length) {
-      warnings.push(unpairedNoCard.length + ' card payment(s) totalling ' + total(unpairedNoCard) +
-        ' fall on dates no card export covers: those cards\' purchases are missing from spending for those months.');
-    }
-    if (unpairedOther.length) {
-      warnings.push(unpairedOther.length + ' card payment(s) totalling ' + total(unpairedOther) +
-        ' have no matching payment on a card account in the data: if they pay a card whose export is missing, that card\'s purchases are missing from spending; otherwise reclassify them (for example as a bill).');
-    }
+    warnings.push(...unpairedPaymentWarnings(transactions, accountById));
+    const balances = mergeBalances(bankBalances(transactions, accounts), statement);
+    warnings.push(...balanceWarnings(balances, accountById));
 
     const dataset = {
       schemaVersion: 2,
@@ -1281,22 +1572,14 @@
       generatedAt: opts.generatedAt,
       currency: 'USD',
       accounts,
+      balances: balances.balances,
       transactions,
       coverageOverrides: isObj(opts.coverageOverrides) ? E.util.clone(opts.coverageOverrides) : {},
-      importLog: fileReports.map(f => ({
-        file: f.name, accountId: f.accountId, profile: f.profile, rows: f.rows, imported: f.imported, skipped: f.skipped,
-        duplicatesRemoved: f.duplicatesRemoved, start: f.start, end: f.end, coverageStart: f.coverageStart, coverageEnd: f.coverageEnd,
-        signConvention: f.signConvention
-      })),
+      importLog: importLogOf(fileReports),
       references: Array.isArray(opts.references) ? E.util.clone(opts.references) : [],
       notes: Array.isArray(opts.notes) ? opts.notes.slice() : []
     };
 
-    const flagCounts = {};
-    for (const t of transactions) for (const f of t.flags) flagCounts[f] = (flagCounts[f] || 0) + 1;
-    const spend = transactions.filter(t => t.kind === 'spend');
-    const purchasesCents = spend.reduce((s, t) => s + (t.amountCents < 0 ? -t.amountCents : 0), 0);
-    const refundsCents = spend.reduce((s, t) => s + (t.amountCents > 0 ? t.amountCents : 0), 0);
     const report = {
       datasetId: dataset.datasetId,
       generatedAt: dataset.generatedAt,
@@ -1306,15 +1589,253 @@
       end: transactions.length ? transactions[transactions.length - 1].date : null,
       files: fileReports,
       accounts: accounts.map(a => ({ id: a.id, label: a.label, type: a.type, coverage: a.coverage.map(r => ({ ...r })), transactions: transactions.filter(t => t.accountId === a.id).length })),
+      balances: dataset.balances.map(b => ({ ...b })),
       totalsByKind: totalsByKind(transactions),
-      spending: { purchasesCents, refundsCents, netCents: purchasesCents - refundsCents },
-      flagCounts: Object.fromEntries(Object.keys(flagCounts).sort().map(k => [k, flagCounts[k]])),
+      spending: spendingOf(transactions),
+      flagCounts: flagCountsOf(transactions),
       months: monthlySummary(dataset),
       duplicatesRemoved: removed,
       skippedRows: [].concat(...fileResults.map(fr => fr.res.skipped.map(s => ({ file: fr.file.name, row: s.row, reason: s.reason })))),
       warnings
     };
     return { dataset, report };
+  }
+
+  // ------------------------------------------------------------------ adding exports to a dataset
+
+  /** Take every copy of the given note texts out of a note. */
+  function stripNotes(note, texts) {
+    let s = note || '';
+    for (const x of texts) s = s.split(x).join(' ');
+    return s.replace(/\s+/g, ' ').trim();
+  }
+
+  /**
+   * An existing row after a merge. It stays the very same object unless it paired with a new row
+   * (it then takes the paired classification, without its old unpaired note), matches a new row
+   * as a possible reimbursement, or its unpaired note no longer fits the merged coverage.
+   */
+  function adoptExisting(orig, merged, freshById, days) {
+    const texts = unpairedNotes(days);
+    if (!orig.pairId && merged.pairId) {
+      // Two existing rows that pair only now (data whose pairs were never recorded, such as
+      // converted v1 data) are left as the data has them: a merge changes rows for new rows only.
+      if (!freshById.has(merged.pairId)) return orig;
+      return {
+        ...orig, kind: merged.kind, subtype: merged.subtype, category: merged.category, categoryReason: merged.categoryReason,
+        confidence: merged.confidence, flags: merged.flags.slice(), pairId: merged.pairId, matchIds: merged.matchIds.slice(),
+        note: stripNotes(merged.note, texts)
+      };
+    }
+    let out = orig;
+    const own = () => {
+      if (out === orig) out = { ...orig, flags: (orig.flags || []).slice(), matchIds: (orig.matchIds || []).slice(), note: orig.note || '' };
+      return out;
+    };
+    const was = texts.filter(x => (orig.note || '').includes(x));
+    const now = texts.filter(x => (merged.note || '').includes(x));
+    if (was.length && was.join('\n') !== now.join('\n')) {
+      own().note = stripNotes(out.note, texts);
+      for (const x of now) addNote(out, x);
+    }
+    for (const id of merged.matchIds || []) {
+      const other = freshById.get(id);
+      if (!other || (orig.matchIds || []).includes(id)) continue;
+      own().matchIds.push(id);
+      addFlag(out, 'reimbursement_candidate');
+      addNote(out, orig.amountCents > 0 ? REIMBURSEMENT_NOTE.deposit(orig, other) : REIMBURSEMENT_NOTE.charge(other));
+    }
+    return out;
+  }
+
+  /** 'name (2).ext' style name not in `taken` (which is updated). */
+  function freeName(name, taken) {
+    const dot = name.lastIndexOf('.');
+    const stem = dot > 0 ? name.slice(0, dot) : name, ext = dot > 0 ? name.slice(dot) : '';
+    let n = 2;
+    while (taken.has(stem + ' (' + n + ')' + ext)) n++;
+    const out = stem + ' (' + n + ')' + ext;
+    taken.add(out);
+    return out;
+  }
+
+  /**
+   * Add exports and/or posted balances to an existing dataset, keeping every row it already has.
+   *
+   * - Files are read with the dataset's accounts (plus any `accounts` new in this import that a file
+   *   uses). A file name already used in the data gets a ' (2)' suffix so each row stays traceable.
+   * - Rows the data already has are not added again: same account, date, amount and normalized
+   *   description, counted as a multiset (like `dedupe`, with the existing data as one more file).
+   *   Existing rows keep their ids, so ledger edits keyed by id keep applying. New rows get the id a
+   *   fresh import of all the files would give them: occurrence numbers continue after the
+   *   existing copies ('tx-' + hash(account|date|amount|description|n)).
+   * - New rows are classified with `rules`; pairing and reimbursement matching run over all rows.
+   *   An existing row changes only when it pairs with, or matches, a new row (or its unpaired note no
+   *   longer fits the merged coverage).
+   * - Coverage is extended per account; new gaps are warned about.
+   * - Balances: the existing ones, the bank's running balance at each account's (new) last covered
+   *   day, then `balances` (statement entries, see statementBalances). Same account and date: a
+   *   statement beats the bank; between equals the later one wins.
+   *
+   * @param {object} base  a schema v2 dataset (ledger.normalizeDataset or buildDataset output)
+   * @param {{files?: object[], accounts?: object[], rules?: object, generatedAt: string, balances?: object[],
+   *          notes?: string[], isSynthetic?: boolean, pairDays?: number, reimbursementDays?: number}} input
+   * @returns {{dataset: object, report: object, summary: object}}
+   */
+  function mergeDataset(base, input) {
+    const opts = input || {};
+    if (!isObj(base) || !Array.isArray(base.accounts) || !Array.isArray(base.transactions)) throw fail('There is no data set to add these files to.');
+    if (!E.dates.isDate(opts.generatedAt)) throw fail('generatedAt must be a YYYY-MM-DD date (the importer never reads the clock).');
+    const files = Array.isArray(opts.files) ? opts.files : [];
+    if (!files.length && !(Array.isArray(opts.balances) && opts.balances.length)) throw fail('Choose at least one export or balance to add.');
+    const days = opts.pairDays ?? 5;
+
+    // Accounts: the data's own (only their coverage changes), then new ones a file uses.
+    const baseIds = new Set(base.accounts.map(a => a.id));
+    const usedIds = new Set(files.filter(isObj).map(f => f.accountId));
+    const extra = (Array.isArray(opts.accounts) ? opts.accounts : []).filter(a => isObj(a) && !baseIds.has(a.id) && usedIds.has(a.id));
+    const accounts = base.accounts.map(a => ({ ...a, coverage: mergeRanges(a.coverage) })).concat(extra.length ? normalizeAccounts(extra) : []);
+    const accountById = new Map(accounts.map(a => [a.id, a]));
+    const statement = statementBalances(opts.balances, accounts);
+    const warnings = [];
+
+    const taken = new Set([].concat((base.importLog || []).map(l => l && l.file), base.transactions.map(t => t.sourceFile)).filter(x => typeof x === 'string' && x));
+    const renamedFiles = [];
+    const named = files.map(f => {
+      if (!isObj(f) || typeof f.name !== 'string' || !taken.has(f.name)) return f;
+      const name = freeName(f.name, taken);
+      renamedFiles.push({ from: f.name, to: name });
+      return { ...f, name };
+    });
+    const fileResults = readFiles(named, accountById, warnings);
+
+    const coverageBefore = new Map(accounts.map(a => [a.id, a.coverage.map(r => ({ ...r }))]));
+    const oldGaps = new Set([].concat(...accounts.map(gapWarnings)));
+    extendCoverage(accounts, fileResults);
+    for (const a of accounts) for (const w of gapWarnings(a)) if (!oldGaps.has(w)) warnings.push(w);
+
+    // Rows: de-duplicate the new files among themselves, then leave out what the data already has.
+    const { kept, removed } = dedupe([].concat(...fileResults.map(fr => fr.res.txns)));
+    const baseByKey = new Map();
+    for (const t of base.transactions) {
+      const k = dedupeKey(t);
+      if (!baseByKey.has(k)) baseByKey.set(k, []);
+      baseByKey.get(k).push(t);
+    }
+    for (const list of baseByKey.values()) list.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const ids = new Set(base.transactions.map(t => t.id));
+    const occurrences = new Map();
+    const fresh = [], present = [];
+    for (const t of kept) {
+      const k = dedupeKey(t);
+      const n = occurrences.get(k) || 0;
+      occurrences.set(k, n + 1);
+      const have = baseByKey.get(k) || [];
+      if (n < have.length) { present.push({ row: t, twin: have[n] }); continue; }
+      let id = 'tx-' + E.util.hash(k + '|' + n);
+      for (let j = 2; ids.has(id); j++) id = 'tx-' + E.util.hash(k + '|' + n + '|' + j); // hash collision guard (as assignIds)
+      ids.add(id);
+      fresh.push({ ...t, id });
+    }
+
+    const classified = classify(fresh, opts.rules, accounts);
+    const freshIds = new Set(classified.map(t => t.id));
+    const paired = pairTransfers(base.transactions.map(copyTxn).concat(classified), accounts, { days });
+    const marked = markReimbursementCandidates(paired, { days: opts.reimbursementDays ?? 120, accounts });
+    const baseById = new Map(base.transactions.map(t => [t.id, t]));
+    const freshById = new Map(marked.filter(t => freshIds.has(t.id)).map(t => [t.id, t]));
+    let existingChanged = 0;
+    const transactions = marked.map(t => {
+      if (freshIds.has(t.id)) return finalizeTxn(t);
+      const orig = baseById.get(t.id);
+      const next = adoptExisting(orig, t, freshById, days);
+      if (next !== orig) existingChanged += 1;
+      return next;
+    }).sort(byDateThenId);
+    const added = transactions.filter(t => freshIds.has(t.id));
+
+    // Balances: what the data had, the bank's figure at each account's last covered day, then statements.
+    const known = (Array.isArray(base.balances) ? base.balances : [])
+      .filter(b => isObj(b) && accountById.has(b.accountId) && E.dates.isDate(b.date) && Number.isSafeInteger(b.cents) && BALANCE_SOURCES.includes(b.source))
+      .map(b => balanceEntry(b.accountId, b.date, b.cents, b.source, b.note));
+    const withBank = mergeBalances(mergeBalances([], known).balances, bankBalances(transactions, accounts));
+    const withStatements = mergeBalances(withBank.balances, statement);
+    warnings.push(...unpairedPaymentWarnings(added, accountById));
+    warnings.push(...balanceWarnings(withBank, accountById), ...balanceWarnings(withStatements, accountById));
+    const knownByKey = new Map(known.map(b => [balanceKey(b), b]));
+    const balancesAdded = [], balancesReplaced = [];
+    for (const b of withStatements.balances) {
+      const prev = knownByKey.get(balanceKey(b));
+      if (!prev) balancesAdded.push(b);
+      else if (prev.cents !== b.cents || prev.source !== b.source) balancesReplaced.push({ from: prev, to: b });
+    }
+
+    const removedByFile = new Map();
+    for (const r of removed) removedByFile.set(r.file, (removedByFile.get(r.file) || 0) + 1);
+    const presentByFile = new Map();
+    for (const p of present) presentByFile.set(p.row.sourceFile, (presentByFile.get(p.row.sourceFile) || 0) + 1);
+    const keptByFile = new Map();
+    for (const t of added) keptByFile.set(t.sourceFile, (keptByFile.get(t.sourceFile) || 0) + 1);
+    // A renamed file that adds no row (an export loaded again) keeps its own name in the log.
+    const nameBack = new Map(renamedFiles.filter(r => !keptByFile.has(r.to)).map(r => [r.to, r.from]));
+    const shown = name => nameBack.get(name) || name;
+    const fileReports = fileReportsFor(fileResults, keptByFile, removedByFile, presentByFile).map(f => ({ ...f, name: shown(f.name) }));
+
+    const dataset = {
+      schemaVersion: 2,
+      datasetId: base.datasetId,
+      isSynthetic: opts.isSynthetic === true,
+      generatedAt: opts.generatedAt,
+      currency: typeof base.currency === 'string' && base.currency ? base.currency : 'USD',
+      accounts,
+      balances: withStatements.balances,
+      transactions,
+      coverageOverrides: isObj(base.coverageOverrides) ? E.util.clone(base.coverageOverrides) : {},
+      importLog: (Array.isArray(base.importLog) ? base.importLog.map(x => (isObj(x) ? { ...x } : x)) : []).concat(importLogOf(fileReports)),
+      references: Array.isArray(base.references) ? E.util.clone(base.references) : [],
+      notes: (Array.isArray(base.notes) ? base.notes.slice() : []).concat(Array.isArray(opts.notes) ? opts.notes : [])
+    };
+
+    const lastEnd = ranges => (ranges.length ? ranges[ranges.length - 1].end : null);
+    const latest = list => list.reduce((m, d) => (d && (m === null || d > m) ? d : m), null);
+    const summary = {
+      transactionsBefore: base.transactions.length,
+      transactionsAfter: transactions.length,
+      added: added.length,
+      alreadyPresent: present.length,
+      duplicatesWithinFiles: removed.length,
+      skipped: fileResults.reduce((s, fr) => s + fr.res.skipped.length, 0),
+      existingChanged,
+      coverageEndBefore: latest([...coverageBefore.values()].map(lastEnd)),
+      coverageEnd: latest(accounts.map(a => lastEnd(a.coverage))),
+      accounts: accounts.map(a => ({
+        id: a.id, label: a.label, type: a.type, isNew: !baseIds.has(a.id),
+        added: added.filter(t => t.accountId === a.id).length,
+        alreadyPresent: present.filter(p => p.row.accountId === a.id).length,
+        coverageBefore: coverageBefore.get(a.id) || [],
+        coverageAfter: a.coverage.map(r => ({ ...r }))
+      })),
+      balances: { added: balancesAdded, replaced: balancesReplaced, ignored: withBank.ignored.concat(withStatements.ignored) },
+      renamedFiles: renamedFiles.filter(r => !nameBack.has(r.to))
+    };
+    const report = {
+      datasetId: dataset.datasetId,
+      generatedAt: dataset.generatedAt,
+      transactions: added.length,
+      start: added.length ? added[0].date : null,
+      end: added.length ? added[added.length - 1].date : null,
+      files: fileReports,
+      totalsByKind: totalsByKind(added),
+      spending: spendingOf(added),
+      flagCounts: flagCountsOf(added),
+      duplicatesRemoved: removed.map(r => ({ ...r, file: shown(r.file), keptFile: shown(r.keptFile) })),
+      alreadyPresent: present.map(({ row, twin }) => ({ file: shown(row.sourceFile), row: row.sourceRow, accountId: row.accountId, date: row.date, amountCents: row.amountCents,
+        description: row.description, keptId: twin.id, keptFile: twin.sourceFile ?? null, keptRow: twin.sourceRow ?? null })),
+      skippedRows: [].concat(...fileResults.map(fr => fr.res.skipped.map(s => ({ file: shown(fr.file.name), row: s.row, reason: s.reason })))),
+      balances: dataset.balances.map(b => ({ ...b })),
+      warnings
+    };
+    return { dataset, report, summary };
   }
 
   // ------------------------------------------------------------------ period breakdown
@@ -1409,6 +1930,7 @@
     PROFILES, DEFAULT_RULES, COLUMN_SYNONYMS,
     parseCSV, parseCSVRecords, detectMapping, parseDate, cleanMerchant, normalizeFile, inferCardSign,
     dedupe, assignIds, classify, prepareRules, pairTransfers, markReimbursementCandidates,
-    mergeRanges, monthlySummary, buildDataset, periodBreakdown
+    mergeRanges, monthlySummary, buildDataset, periodBreakdown,
+    BALANCE_SOURCES, statementBalances, bankBalances, mergeBalances, detectBalancesHeader, parseBalancesCSV, mergeDataset
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

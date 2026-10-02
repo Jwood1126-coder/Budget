@@ -345,6 +345,59 @@ test('v2: normalizing a normalized dataset is stable', () => {
   assert.deepEqual(L.normalizeDataset(ds), ds);
 });
 
+// ======================================================================= posted balances (dataset.balances)
+
+test('balances: absent or not a list gives [] (never undefined), legacy data included', () => {
+  assert.deepEqual(dataset([tx('2026-03-01', -100)]).balances, []);
+  assert.deepEqual(dataset([tx('2026-03-01', -100)], { balances: null }).balances, []);
+  assert.deepEqual(dataset([tx('2026-03-01', -100)], { balances: 'oops' }).balances, []);
+  assert.deepEqual(L.normalizeDataset(loadLegacy()).balances, []);
+});
+
+test('balances: bad entries and unknown accounts are dropped; the rest is sorted by account, then date', () => {
+  const ds = dataset([tx('2026-03-01', -100)], {
+    balances: [
+      { accountId: 'sav', date: '2026-09-30', cents: 1200000, source: 'statement', note: '  September statement  ' },
+      { accountId: 'chk', date: '2026-09-30', cents: 412345, source: 'bank' },
+      { accountId: 'chk', date: '2026-06-30', cents: 398700, source: 'statement' },
+      { accountId: 'nowhere', date: '2026-09-30', cents: 1, source: 'statement' },
+      { accountId: 'chk', date: '2026-02-30', cents: 1, source: 'statement' },
+      { accountId: 'chk', date: '2026-07-31', cents: 12.5, source: 'statement' },
+      { accountId: 'chk', date: '2026-07-31', cents: '100', source: 'statement' },
+      { accountId: 'chk', date: '2026-08-31', cents: 100, source: 'typed' },
+      { accountId: 'chk', date: '2026-08-31', cents: 100 },
+      null,
+      'chk 2026-08-31 100'
+    ]
+  });
+  assert.deepEqual(ds.balances, [
+    { accountId: 'chk', date: '2026-06-30', cents: 398700, source: 'statement' },
+    { accountId: 'chk', date: '2026-09-30', cents: 412345, source: 'bank' },
+    { accountId: 'sav', date: '2026-09-30', cents: 1200000, source: 'statement', note: 'September statement' }
+  ]);
+});
+
+test('balances: one per account and date — a statement beats the bank in either order; equals: the later wins', () => {
+  const statement = { accountId: 'chk', date: '2026-09-30', cents: 410000, source: 'statement' };
+  const bank = { accountId: 'chk', date: '2026-09-30', cents: 412345, source: 'bank' };
+  assert.deepEqual(L.normalizeBalances([statement, bank], ['chk']), [statement]);
+  assert.deepEqual(L.normalizeBalances([bank, statement], ['chk']), [statement]);
+  const later = { ...statement, cents: 409999 };
+  assert.deepEqual(L.normalizeBalances([statement, later], ['chk']), [later]);
+  assert.deepEqual(L.normalizeBalances([bank, { ...bank, cents: 1 }], new Set(['chk'])), [{ ...bank, cents: 1 }]);
+});
+
+test('balances: dropped entries are a validation warning, never an error; the input is not modified', () => {
+  const raw = deepFreeze(rawDataset([tx('2026-03-01', -100)], {
+    balances: [{ accountId: 'chk', date: '2026-09-30', cents: 1, source: 'statement' }, { accountId: 'nowhere', date: '2026-09-30', cents: 1, source: 'statement' }]
+  }));
+  const v = L.validateDataset(raw);
+  assert.deepEqual(v.errors, []);
+  assert.ok(v.warnings.some(w => /1 of 2 posted balances were left out/.test(w)));
+  assert.equal(L.normalizeDataset(raw).balances.length, 1);
+  assert.ok(L.validateDataset(rawDataset([], { balances: {} })).warnings.includes('balances is not a list; ignored.'));
+});
+
 // ======================================================================= applyEdits
 
 test('applyEdits returns new objects and never mutates the dataset or edits', () => {

@@ -1,6 +1,6 @@
 /* ==========================================================================
    Plan (#/overview, src/ui/views/overview.js): the chart card, balances, dials with their
-   drill-down, and More options. Base tokens only, so dark mode follows base.css.
+   drill-down, planned changes and More options. Base tokens only, so dark mode follows base.css.
    ========================================================================== */
 .plan { display: flex; flex-direction: column; gap: var(--space-4); }
 .plan-h { margin: 0 0 var(--space-3); font-size: 1rem; }
@@ -17,8 +17,37 @@
 .plan-ranges { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-5); margin-top: var(--space-3); }
 .plan-ranges .segmented { display: flex; align-items: center; gap: var(--space-2); }
 .plan-ranges .segmented-legend { float: left; margin: 0; font-size: .82rem; }
+.plan-ranges .plan-export { margin-left: auto; }
 .plan-chart-card .notice { margin-top: var(--space-3); }
 .plan-chart-card .notice-body strong { margin: 0; }
+@media (max-width: 599px) {
+  .plan-ranges .plan-export { margin-left: 0; }
+  /* No known balance: the prompt and the mode switch share one row, so the plot still starts high. */
+  .plan-chart-card .cc-controls:has(> .plan-prompt) { flex: 1 1 100%; flex-wrap: nowrap; align-items: center; justify-content: space-between; }
+  .plan-chart-card .plan-prompt { flex: 1 1 auto; min-width: 0; font-size: .9rem; line-height: 1.3; }
+  .plan-chart-card .cc-controls:has(> .plan-prompt) .segmented { flex: 0 0 auto; }
+}
+
+/* ---- Trends: the picker sits in its own row under the title; its chips are the legend */
+.plan-chart-card[data-mode="trends"] .cc-controls { display: contents; }
+.plan-chart-card[data-mode="trends"] .cc-legend { display: none; }
+.plan-trend-pick { flex: 1 0 100%; order: 3; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-5); min-width: 0; }
+.plan-trend-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.plan-trend-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; max-width: 100%; padding: 3px 8px 3px 10px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-size: .82rem; font-weight: 600; overflow-wrap: anywhere; text-align: left; }
+button.plan-trend-chip { cursor: pointer; }
+button.plan-trend-chip:hover { background: var(--surface-3); }
+.plan-trend-chip.is-only { padding-right: 10px; }
+.plan-trend-x { color: var(--text-3); font-size: .78rem; }
+.plan-trend-add select { min-height: 32px; max-width: 13rem; padding: 3px 8px; border: 1px dashed var(--border-strong); border-radius: 999px; background: var(--surface); color: var(--brand); font: inherit; font-size: .82rem; font-weight: 600; }
+.plan-trend-opts { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); }
+.plan-trend-opts .segmented { display: flex; align-items: center; gap: var(--space-2); }
+.plan-trend-opts .segmented-legend { float: left; margin: 0; font-size: .82rem; }
+.plan-trend-opts .segmented label { padding: 4px 10px; font-size: .82rem; }
+.plan-trend-line { align-items: center; min-height: 32px; font-size: .86rem; }
+.plan-trend-line input { margin-top: 0; }
+@media (max-width: 599px), (pointer: coarse) {
+  .plan-trend-chip, .plan-trend-add select, .plan-trend-line { min-height: 40px; }
+}
 
 /* ------------------------------------------------------------- 2. balances */
 .plan-balances { padding: var(--space-4) var(--space-5); }
@@ -28,10 +57,19 @@
 .plan-bal .plan-amount { grid-area: amt; }
 .plan-bal-asof { grid-area: asof; font-size: .86rem; color: var(--text-2); }
 .plan-bal .plan-date { grid-area: date; min-height: 40px; width: 100%; padding: 6px 8px; border: 1px solid var(--control-border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; }
-.plan-bal-src { grid-area: src; margin: 0; }
+.plan-bal-src { grid-area: src; display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--space-2); margin: 0; }
 .plan-bal-src:empty { display: none; }
-.plan-bal > .field-error:first-of-type { grid-area: err; }
-.plan-bal > .field-error:last-of-type { grid-area: derr; }
+.plan-bal-err { grid-area: err; }
+.plan-bal-derr { grid-area: derr; }
+.plan-bal-usedata { font-weight: 600; }
+/* A balance the data knows: its figure, where it comes from, and a way to enter a different one. */
+.plan-bal.is-data { grid-template-columns: auto auto; grid-template-areas: "name figure" "src src" "edit edit"; justify-content: start; column-gap: var(--space-3); }
+.plan-bal-figure { grid-area: figure; font-size: 1.15rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.plan-bal-edit { grid-area: edit; }
+.plan-bal-edit > summary { display: inline-flex; align-items: center; min-height: 32px; cursor: pointer; color: var(--brand); font-size: .86rem; font-weight: 600; }
+.plan-bal-editbody { display: grid; grid-template-columns: auto 9.5rem auto 10.5rem; grid-template-areas: "alabel amt asof date" ". err err err" ". derr derr derr"; align-items: center; column-gap: var(--space-2); row-gap: 2px; margin-top: var(--space-1); }
+.plan-bal-amtlabel { grid-area: alabel; font-size: .86rem; color: var(--text-2); }
+.plan-bal-editbody .plan-amount { grid-area: amt; }
 .plan-bal-total { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; min-height: 40px; margin: 0; color: var(--text-2); }
 .plan-bal-total strong { color: var(--text); font-variant-numeric: tabular-nums; }
 .plan-bal-notes { margin: var(--space-3) 0 0; }
@@ -42,6 +80,9 @@
   .plan-balances { padding: var(--space-4); }
   .plan-bal-list { flex-direction: column; align-items: stretch; gap: var(--space-4); }
   .plan-bal { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "name asof" "amt date" "src src" "err err" "derr derr"; column-gap: var(--space-3); }
+  .plan-bal.is-data { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name figure" "src src" "edit edit"; }
+  .plan-bal-editbody { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "alabel asof" "amt date" "err err" "derr derr"; column-gap: var(--space-3); }
+  .plan-bal-edit > summary { min-height: 40px; }
   .plan-bal-total { min-height: 0; }
 }
 
@@ -70,17 +111,21 @@
 .dial-tick { position: absolute; z-index: 0; top: 50%; left: calc(11px + (100% - 22px) * var(--f, 0)); width: 3px; height: 20px; margin-left: -1.5px; transform: translateY(-50%); border-radius: 2px; background: var(--text-2); pointer-events: none; }
 .dial-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-1) var(--space-3); }
 .dial-base { font-size: .84rem; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.dial-sub { margin: 0; font-size: .84rem; color: var(--text-2); }
 .dial-basis, .dial-hint { margin: 2px 0 0; font-size: .8rem; color: var(--text-3); }
 .dial-hint { color: var(--text-2); }
 .dial .field-error { margin: 2px 0 0; }
 
 .plan-sum-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); margin-top: var(--space-4); padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); background: var(--surface-2); border: 1px solid var(--border); }
-.plan-sum { margin: 0; flex: 1 1 320px; color: var(--text-2); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.plan-sum-terms { color: var(--text); }
-.plan-sum strong { font-size: 1.3rem; color: var(--text); white-space: nowrap; }
-.plan-sum strong.tone-bad { color: var(--bad); }
+.plan-sum { flex: 1 1 320px; min-width: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.plan-sum p { margin: 0; }
+.plan-headline { font-size: 1.05rem; font-weight: 600; color: var(--text); }
+.plan-headline strong { font-size: 1.3rem; white-space: nowrap; }
+.plan-headline strong.tone-warn { color: var(--warn); }
+.plan-checking { margin-top: 2px; color: var(--text-2); }
+.plan-addup { margin-top: var(--space-1); font-size: .8rem; color: var(--text-3); }
 
-/* ---- drill-down under card and bank spending */
+/* ---- drill-down under essentials, flexible and irregular */
 .plan-drill { margin-top: var(--space-2); }
 .plan-drill > summary { font-size: .9rem; padding-block: 10px; }
 .plan-drill > .disclosure-body { padding: var(--space-2) var(--space-3) var(--space-3); }
@@ -102,13 +147,25 @@
 .drill-kids { margin: 0 0 var(--space-2) 26px; }
 .drill-kids > summary { cursor: pointer; padding-block: 6px; color: var(--brand); font-size: .84rem; font-weight: 600; }
 .drill-kids-body { border-left: 2px solid var(--border); padding-left: var(--space-3); }
-.drill-onetime { margin-bottom: var(--space-3); padding-bottom: var(--space-2); border-bottom: 1px solid var(--border); }
 .drill-h { margin: 0; font-size: .86rem; font-weight: 700; color: var(--text-2); }
-.drill-onetime .fine { margin: 0; }
+.drill-pattern, .drill-paid { display: inline-flex; align-items: center; padding: 0 6px; border-radius: 999px; font-size: .72rem; font-weight: 650; line-height: 1.5; color: var(--text-2); background: var(--surface-3); }
+.drill-paid { padding: 0; background: none; font-weight: 500; color: var(--text-3); }
+.drill-pattern.is-bill { color: var(--text); }
+.drill-from { color: var(--text-3); }
+.drill-meta .drill-move { padding-left: 4px; padding-right: 4px; font-weight: 600; }
+.plan-drill .drill-meta .badge { font-size: .7rem; padding: 0 6px; }
+/* Irregular: one row per one-time cost (name and date, its share a month, then what to do with it). */
+.irr-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name amt" "meta meta"; border-top: 1px solid var(--border); }
+.irr-list > .irr-row:first-child { border-top: 0; }
+.irr-monthly { grid-area: amt; font-size: .86rem; font-weight: 650; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.irr-row .drill-name { font-weight: 500; }
+.irr-kept { margin-top: var(--space-3); padding-top: var(--space-2); border-top: 1px solid var(--border); }
+.irr-kept .drill-name { min-height: 32px; cursor: default; color: var(--text-2); }
 @media (max-width: 599px), (pointer: coarse) {
   .drill-amt input { min-height: 40px; }
   .drill-meta .btn { min-height: 40px; padding: 8px 10px; }
   .drill-kids > summary { padding-block: 10px; }
+  .irr-kept .drill-name { min-height: 40px; }
 }
 
 /* ---- who paid in: a quiet drawer under the money-in dials */
@@ -125,7 +182,60 @@
 .plan-dep-who select { min-height: 36px; max-width: 11rem; padding: 4px 6px; border: 1px solid var(--control-border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; font-size: .84rem; }
 @media (max-width: 599px), (pointer: coarse) { .plan-dep-who select { min-height: 40px; } }
 
-/* ------------------------------------------------------------- 4. more options, sample line */
+/* ------------------------------------------------------------- 4. planned changes */
+.plan-changes { background: var(--surface); }
+.plan-changes > summary { padding-block: 12px; }
+.plan-changes > .disclosure-body { display: flex; flex-direction: column; gap: var(--space-3); }
+.plan-changes .fine { margin: 0; }
+.plan-ch-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.plan-ch-item { display: flex; flex-direction: column; gap: 4px; padding: var(--space-2) var(--space-3); border-top: 1px solid var(--border); min-width: 0; }
+.plan-ch-item:first-child { border-top: 0; }
+.plan-ch-item.is-applied { background: var(--surface); }
+.plan-ch-item.is-notAccepted .plan-ch-label input, .plan-ch-item.is-outside .plan-ch-label input { color: var(--text-2); }
+.plan-ch-main { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.plan-ch-accept { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 36px; cursor: pointer; }
+.plan-ch-on { width: 20px; height: 20px; margin: 0; }
+.plan-ch-label { flex: 1 1 14rem; min-width: 0; }
+.plan-ch-label input { width: 100%; min-height: 36px; padding: 4px 8px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text); font: inherit; font-weight: 600; }
+.plan-ch-label input:hover, .plan-ch-label input:focus { border-color: var(--control-border); background: var(--surface); }
+.plan-ch-amt { flex: 0 0 8.5rem; }
+.plan-ch-amt input, .plan-ch-add input[type="text"], .plan-ch-add input[type="month"], .plan-ch-template input[type="date"], .plan-ch-add select, .plan-ch-when select, .plan-ch-when input { min-height: 36px; padding: 4px 8px; border: 1px solid var(--control-border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; font-size: .88rem; }
+.plan-ch-amt input { width: 100%; padding-left: 20px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.plan-ch-amt input::placeholder { font-weight: 400; color: var(--text-3); }
+.plan-ch-amt input[aria-invalid="true"], .plan-ch-when input[aria-invalid="true"], .plan-ch-add input[aria-invalid="true"] { border-color: var(--bad); box-shadow: 0 0 0 1px var(--bad); }
+.plan-ch-status { flex: 0 0 8.5rem; display: inline-flex; }
+.plan-ch-remove { flex: 0 0 auto; min-width: 36px; color: var(--text-2); }
+.plan-ch-when { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--space-2); padding-left: 28px; font-size: .86rem; }
+.plan-ch-word { color: var(--text-2); }
+.plan-ch-unset { margin: 0; padding-left: 28px; font-size: .82rem; font-weight: 600; color: var(--warn); }
+.plan-ch-note { padding-left: 28px; }
+.plan-ch-item .field-error { margin: 0 0 0 28px; }
+.plan-ch-bulk { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0; }
+.plan-ch-add, .plan-ch-template { display: flex; flex-direction: column; gap: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--border); }
+.plan-ch-addrow { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-2) var(--space-3); }
+.plan-ch-field { display: flex; flex-direction: column; gap: 2px; font-size: .8rem; font-weight: 600; color: var(--text-2); min-width: 0; }
+.plan-ch-field .input-money input { width: 8.5rem; padding-left: 20px; text-align: right; }
+.plan-ch-field input[name="label"] { width: 14rem; max-width: 100%; }
+.plan-ch-add .field-error, .plan-ch-template .field-error { margin: 0; }
+@media (max-width: 599px) {
+  .plan-ch-item { padding: var(--space-2); }
+  /* Name, then remove on the first line; amount and status on the next. */
+  .plan-ch-label { flex: 1 1 calc(100% - 96px); }
+  .plan-ch-remove { order: 1; }
+  .plan-ch-amt { order: 2; flex: 1 1 8rem; }
+  .plan-ch-status { order: 2; flex: 0 0 auto; }
+  .plan-ch-when, .plan-ch-unset, .plan-ch-note { padding-left: 0; }
+  .plan-ch-item .field-error { margin-left: 0; }
+  .plan-ch-field, .plan-ch-field input[name="label"], .plan-ch-field .input-money input { width: 100%; }
+  .plan-ch-addrow > .plan-ch-field { flex: 1 1 100%; }
+}
+@media (max-width: 599px), (pointer: coarse) {
+  .plan-ch-accept { min-width: 40px; min-height: 40px; margin-left: -8px; }
+  .plan-ch-on { width: 24px; height: 24px; }
+  .plan-ch-label input, .plan-ch-amt input, .plan-ch-when select, .plan-ch-when input, .plan-ch-add input[type], .plan-ch-add select, .plan-ch-template input[type], .plan-ch-remove { min-height: 40px; }
+}
+
+/* ------------------------------------------------------------- 5. more options, sample line */
 .plan-more { background: var(--surface); }
 .plan-more > summary { padding-block: 12px; }
 .plan-more .disclosure-body { display: flex; flex-direction: column; gap: var(--space-3); }

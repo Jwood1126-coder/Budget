@@ -9,6 +9,9 @@
     {"id":"joint-card","label":"Joint rewards card","type":"credit_card","scope":"joint","ownerId":null,"paidInFull":true,"coverage":[{"start":"2025-01-01","end":"2026-09-30"}]},
     {"id":"joint-savings","label":"Joint savings","type":"savings","scope":"joint","ownerId":null,"paidInFull":false,"coverage":[{"start":"2025-06-01","end":"2026-09-30"}]}
   ],
+  "balances": [
+    {"accountId":"joint-checking","date":"2026-09-30","cents":6990114,"source":"bank","note":"Running balance after the last row (2026-09-25, checking-2025-11-to-2026-09.csv); no later rows through 2026-09-30."}
+  ],
   "transactions": [
     {"id":"tx-1bep6cu8w49","accountId":"joint-checking","date":"2024-10-01","description":"SAMPLE MORTGAGE SERVICER PMT","merchant":"Sample Mortgage Servicer","amountCents":-141256,"kind":"spend","subtype":null,"category":"Mortgage","sourceCategory":null,"categoryReason":"Household rule: mortgage servicer (escrow split unknown)","confidence":"high","flags":[],"pairId":null,"matchIds":[],"sourceFile":"checking-2024-10-to-2025-12.csv","sourceRow":178,"note":"","balanceCents":243744},
     {"id":"tx-2frnxw2e7px","accountId":"joint-checking","date":"2024-10-01","description":"ONLINE TRANSFER FROM SAM PERSONAL CHK","merchant":"Online Transfer From Sam Personal CHK","amountCents":132500,"kind":"transfer","subtype":"contribution","category":"Transfer","sourceCategory":null,"categoryReason":"Transfer hint: Sam's contribution from a personal account outside the data","confidence":"high","flags":[],"pairId":null,"matchIds":[],"sourceFile":"checking-2024-10-to-2025-12.csv","sourceRow":177,"note":"","balanceCents":376244,"personId":"p2"},

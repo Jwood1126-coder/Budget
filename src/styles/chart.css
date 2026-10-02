@@ -1,20 +1,50 @@
 /* ==========================================================================
-   Cash chart (src/ui/chart.js): balance lines and monthly flows on one timeline.
-   Uses the base tokens; the one addition is --series-5 for a fifth flow category
-   (validated with the existing series as adjacent stack neighbours, light and dark).
+   Cash chart (src/ui/chart.js): balance lines, monthly flows and trends on one timeline.
+   Uses the base tokens; the additions are --series-5 (magenta) and --series-6 (yellow, the
+   palette's #c98500 step in both themes) so four coloured out-flows plus a muted Other stay
+   distinct. Validated (dataviz validate_palette.js, adjacent pairs, surfaces #ffffff / #1c1d21)
+   on the flows column series-2, series-1 | series-5, series-4, series-6, series-3 and on the
+   default order series-5, -4, -3, -6: worst CVD dE 8.7 light / 8.4 dark, normal-vision >= 18.2,
+   --series-6 contrast 3.07:1 light / 5.48:1 dark. (--series-5 light is 2.69:1: the readout,
+   legend and table twin are the relief channel.)
    ========================================================================== */
-:root { --series-5: #e87ba4; }
+:root { --series-5: #e87ba4; --series-6: #c98500; }
 @media (prefers-color-scheme: dark) {
-  :root:where(:not([data-theme="light"])) { --series-5: #d55181; }
+  :root:where(:not([data-theme="light"])) { --series-5: #d55181; --series-6: #c98500; }
 }
 
 .key-line.series-5 { border-color: var(--series-5); }
+.key-line.series-6 { border-color: var(--series-6); }
 .key-swatch.series-5 { background: var(--series-5); }
+.key-swatch.series-6 { background: var(--series-6); }
 .key-line.series-net { border-color: var(--text); }
 .chart .line.series-5 { stroke: var(--series-5); }
+.chart .line.series-6 { stroke: var(--series-6); }
 .chart .end-dot.series-5 { fill: var(--series-5); }
+.chart .end-dot.series-6 { fill: var(--series-6); }
 .chart .seg.series-4 { fill: var(--series-4); }
 .chart .seg.series-5 { fill: var(--series-5); }
+.chart .seg.series-6 { fill: var(--series-6); }
+
+/* Baseline plan (role 'ghost'): thin, muted, dashed, behind every other line. */
+.key-line.series-ghost, .cc-chip .key-line.series-ghost, .cc-tip-name .key-line.series-ghost { border-top: 2px dashed var(--text-3); opacity: .6; }
+.cash-chart .line.cc-ghost-line { stroke: var(--text-3); stroke-opacity: .6; stroke-width: 1.25; stroke-dasharray: 4 4; }
+
+/* Trends: moving average (thick, translucent, same hue) and least-squares trend (thin; dotted across the plan). */
+.cash-chart .line.cc-ma-line { stroke-width: 4.5; stroke-opacity: .55; }
+.cash-chart .line.cc-trend-line { stroke-width: 1.25; }
+.cash-chart .line.cc-trend-line.is-extended { stroke-dasharray: .1 4; stroke-linecap: round; stroke-width: 2; }
+.key-line.cc-key-ink { border-color: var(--text-2); }
+.cash-chart .key-line.cc-key-ma { border-top-width: 5px; opacity: .55; }
+.cash-chart .key-line.cc-key-trend { border-top-width: 1.5px; }
+
+/* Planned changes on the bottom axis line: triangle (one-time), tick + faint band (monthly from). */
+.cash-chart .cc-change-once { fill: var(--text-2); stroke: var(--surface); stroke-width: 1.5; stroke-linejoin: round; paint-order: stroke; }
+.cash-chart .cc-change-monthly { stroke: var(--text-2); stroke-width: 2; stroke-linecap: round; }
+.cash-chart .cc-change-band { fill: var(--text-2); fill-opacity: .12; }
+.cash-chart .cc-change-count { fill: var(--text-2); font-size: 10px; font-weight: 700; font-family: var(--font); font-variant-numeric: tabular-nums; paint-order: stroke; stroke: var(--surface); stroke-width: 3px; stroke-linejoin: round; }
+.key.cc-key-once { width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 8px solid var(--text-2); }
+.key.cc-key-monthly { width: 12px; height: 10px; border-left: 2px solid var(--text-2); background: linear-gradient(to top, var(--border-strong) 0 4px, transparent 4px); }
 
 /* ------------------------------------------------------------- frame */
 .cash-chart { position: relative; min-width: 0; }
@@ -103,6 +133,20 @@
 .cc-tip-row.is-net { border-top: 2px solid var(--border-strong); margin-top: 6px; padding-top: 4px; }
 .cc-tip-row.is-net .cc-tip-name { color: var(--text); font-weight: 700; }
 .cc-tip-note { margin: 2px 0 2px 18px; font-size: .74rem; color: var(--text-3); }
+.cc-tip-row.is-ghost .cc-tip-name, .cc-tip-row.is-ma .cc-tip-name, .cc-tip-row.is-trend .cc-tip-name { color: var(--text-3); }
+.cc-tip-row.is-ma .cc-tip-name, .cc-tip-row.is-trend .cc-tip-name { padding-left: 10px; }
+.cc-tip-row.is-ghost .cc-tip-value, .cc-tip-row.is-ma .cc-tip-value, .cc-tip-row.is-trend .cc-tip-value { color: var(--text-2); font-weight: 600; }
+.cc-tip-planned { margin-top: 4px; padding-top: 3px; border-top: 1px dashed var(--border); font-size: .76rem; color: var(--text-2); }
+.cc-tip-planned + .cc-tip-planned { margin-top: 0; padding-top: 0; border-top: 0; }
+/* Balance and trends: one shared grid, so values line up across rows (series, baseline, average, fit). */
+.cash-chart:not([data-mode="flows"]) .cc-tip { display: grid; grid-template-columns: minmax(min-content, 1fr) auto auto; align-items: center; column-gap: 10px; }
+.cash-chart:not([data-mode="flows"]) .cc-tip > :not(.cc-tip-row) { grid-column: 1 / -1; }
+.cash-chart:not([data-mode="flows"]) .cc-tip-row { display: contents; }
+/* Names keep whole words on a narrow readout. */
+.cash-chart:not([data-mode="flows"]) .cc-tip-name { grid-column: 1; padding: 1px 0; overflow-wrap: break-word; }
+.cash-chart:not([data-mode="flows"]) .cc-tip-value { grid-column: 2; }
+.cash-chart:not([data-mode="flows"]) .cc-tip-status { grid-column: 3; }
+.cash-chart:not([data-mode="flows"]) .cc-tip-row.is-ma .cc-tip-name, .cash-chart:not([data-mode="flows"]) .cc-tip-row.is-trend .cc-tip-name { padding-left: 10px; }
 
 .cc-caption { margin: var(--space-2) 0 0; font-size: .82rem; color: var(--text-3); }
 .cash-chart .chart-table { margin-top: var(--space-2); }
@@ -121,6 +165,8 @@
 @media (forced-colors: active) {
   .cc-chip[aria-pressed="false"] { border-style: dashed; }
   .cash-chart .line, .cash-chart .cc-net-line { stroke: CanvasText; }
+  .cash-chart .cc-change-once { fill: CanvasText; }
+  .cash-chart .cc-change-monthly { stroke: CanvasText; }
 }
 @media print {
   .cc-tip { display: none !important; }

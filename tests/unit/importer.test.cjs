@@ -1533,3 +1533,376 @@ test('buildDataset warns when a file contributes no transactions', () => {
   assert.ok(r2.report.warnings.some(w => /declared dates still count as covered/.test(w)));
   assert.deepEqual(r2.dataset.accounts[0].coverage, [{ start: '2026-09-01', end: '2026-09-30' }]);
 });
+
+// ====================================================================== balances supplied with the data
+
+describe('statementBalances (the config\'s "balances")', () => {
+  const accounts = [CHECKING, ACCOUNTS[2]];
+  test('amounts become cents, cents stay, source defaults to statement; sorted by account, then date', () => {
+    const out = I.statementBalances([
+      { accountId: 'sav', date: '2026-09-30', amount: '12,000.00' },
+      { accountId: 'chk', date: '2026-09-30', cents: 412345, note: '  September statement ' },
+      { accountId: 'chk', date: '2026-06-30', amount: '$3,987.00', source: 'statement' },
+      { accountId: 'chk', date: '2026-07-31', amount: 4001.5, source: 'bank' },
+      { accountId: 'chk', date: '2026-08-31', amount: '(25.00)' }
+    ], accounts);
+    assert.deepEqual(out, [
+      { accountId: 'chk', date: '2026-06-30', cents: 398700, source: 'statement' },
+      { accountId: 'chk', date: '2026-07-31', cents: 400150, source: 'bank' },
+      { accountId: 'chk', date: '2026-08-31', cents: -2500, source: 'statement' },
+      { accountId: 'chk', date: '2026-09-30', cents: 412345, source: 'statement', note: 'September statement' },
+      { accountId: 'sav', date: '2026-09-30', cents: 1200000, source: 'statement' }
+    ]);
+    assert.deepEqual(I.statementBalances(undefined, accounts), []);
+    assert.deepEqual(I.statementBalances(null, accounts), []);
+  });
+  test('the account must exist, the date be valid, and each account and date appear once', () => {
+    const bad = (list, re) => assert.throws(() => I.statementBalances(list, accounts), err => err instanceof E.ValidationError && re.test(err.message), String(re));
+    bad({ accountId: 'chk' }, /must be a list/);
+    bad([{ accountId: 'card', date: '2026-09-30', cents: 1 }], /Balance #1: unknown account "card" \(the accounts are chk, sav\)/);
+    bad([{ accountId: 'chk', date: '09/30/2026', cents: 1 }], /date must be a YYYY-MM-DD date/);
+    bad([{ accountId: 'chk', date: '2026-02-30', cents: 1 }], /date must be a YYYY-MM-DD date/);
+    bad([{ accountId: 'chk', date: '2026-09-30' }], /give the balance as "cents"/);
+    bad([{ accountId: 'chk', date: '2026-09-30', cents: 12.5 }], /whole number of cents/);
+    bad([{ accountId: 'chk', date: '2026-09-30', amount: 'about 40' }], /is not an amount/);
+    bad([{ accountId: 'chk', date: '2026-09-30', cents: 100, amount: '2.00' }], /disagree/);
+    bad([{ accountId: 'chk', date: '2026-09-30', cents: 1, source: 'typed' }], /source must be "statement" or "bank"/);
+    bad([{ accountId: 'chk', date: '2026-09-30', cents: 1, note: 5 }], /note must be text/);
+    bad([{ accountId: 'chk', date: '2026-09-30', cents: 1 }, { accountId: 'sav', date: '2026-09-30', cents: 2 }, { accountId: 'chk', date: '2026-09-30', amount: '0.01' }],
+      /Balance #3: Joint checking already has a balance on 2026-09-30 \(balance #1\)/);
+    assert.doesNotThrow(() => I.statementBalances([{ accountId: 'chk', date: '2026-09-30', cents: 100, amount: '1.00' }], accounts), 'cents and amount may both be given when they agree');
+  });
+});
+
+describe('bankBalances (a Balance column)', () => {
+  const header = 'Date,Description,Amount,Balance\n';
+  const build = (text, extra = {}) => I.buildDataset({ files: [{ name: 'chk.csv', accountId: 'chk', text, ...extra }], accounts: [CHECKING, CARD], datasetId: 't', generatedAt: '2026-10-01' }).dataset;
+
+  test('the running balance at the end of the account\'s last covered day, as a bank entry', () => {
+    // Newest first, two rows on the last day: the later one (listed first) ends the day.
+    const ds = build(header + '09/25/2026,SAMPLE BANK CARD AUTOPAY,-400.00,4600.00\n09/25/2026,SAMPLE EMPLOYER PAYROLL,1000.00,5000.00\n09/02/2026,SAMPLE GROCER,-50.00,4000.00\n',
+      { coverageStart: '2026-09-01', coverageEnd: '2026-09-30' });
+    assert.deepEqual(ds.balances, [{ accountId: 'chk', date: '2026-09-30', cents: 460000, source: 'bank',
+      note: 'Running balance after the last row (2026-09-25, chk.csv); no later rows through 2026-09-30.' }]);
+    assert.ok(ds.transactions.every(t => Number.isInteger(t.balanceCents)), 'per-row balances are kept as before');
+  });
+  test('ends on the last row\'s day when no coverage is declared; none without a Balance column', () => {
+    const ds = build(header + '09/02/2026,SAMPLE GROCER,-50.00,4000.00\n09/12/2026,SAMPLE CAFE,-5.00,3995.00\n');
+    assert.deepEqual(ds.balances.map(b => [b.date, b.cents]), [['2026-09-12', 399500]]);
+    assert.deepEqual(build('Date,Description,Amount\n09/02/2026,SAMPLE GROCER,-50.00\n').balances, []);
+  });
+  test('no figure when the last day has a row without a balance, or when the last coverage range has no rows', () => {
+    assert.deepEqual(build(header + '09/02/2026,SAMPLE GROCER,-50.00,4000.00\n09/12/2026,SAMPLE CAFE,-5.00,\n').balances, []);
+    const accounts = [{ ...CHECKING, coverage: [{ start: '2026-11-01', end: '2026-11-30' }] }];
+    const ds = I.buildDataset({ files: [{ name: 'chk.csv', accountId: 'chk', text: header + '09/02/2026,SAMPLE GROCER,-50.00,4000.00\n', coverageStart: '2026-09-01', coverageEnd: '2026-09-30' }],
+      accounts, datasetId: 't', generatedAt: '2026-12-01' }).dataset;
+    assert.deepEqual(ds.balances, [], 'October is not covered, so the September balance does not carry to November');
+  });
+  test('card and loan accounts never get one (their balance is what is owed)', () => {
+    assert.deepEqual(I.bankBalances([{ id: 'x', accountId: 'card', date: '2026-09-02', amountCents: -100, balanceCents: 5000, sourceFile: 'c.csv', sourceRow: 2 }], [CARD]), []);
+  });
+});
+
+describe('buildDataset: dataset.balances', () => {
+  const header = 'Date,Description,Amount,Balance\n';
+  const files = [{ name: 'chk.csv', accountId: 'chk', text: header + '09/02/2026,SAMPLE GROCER,-50.00,4000.00\n', coverageStart: '2026-09-01', coverageEnd: '2026-09-30' }];
+  const build = balances => I.buildDataset({ files, accounts: [CHECKING, ACCOUNTS[2]], datasetId: 't', generatedAt: '2026-10-01', balances });
+
+  test('statement balances from the config join the bank\'s in one sorted list; the schema stays version 2', () => {
+    const { dataset, report } = build([{ accountId: 'sav', date: '2026-09-30', amount: '12,000.00' }, { accountId: 'chk', date: '2026-08-31', cents: 405000 }]);
+    assert.equal(dataset.schemaVersion, 2);
+    assert.deepEqual(dataset.balances.map(b => [b.accountId, b.date, b.cents, b.source]), [
+      ['chk', '2026-08-31', 405000, 'statement'], ['chk', '2026-09-30', 400000, 'bank'], ['sav', '2026-09-30', 1200000, 'statement']]);
+    assert.deepEqual(report.balances, dataset.balances);
+    assert.deepEqual(Object.keys(dataset).slice(0, 8), ['schemaVersion', 'datasetId', 'isSynthetic', 'generatedAt', 'currency', 'accounts', 'balances', 'transactions']);
+  });
+  test('a statement on the bank\'s day wins; a different figure is warned about', () => {
+    const { dataset, report } = build([{ accountId: 'chk', date: '2026-09-30', amount: '3,990.00' }]);
+    assert.deepEqual(dataset.balances, [{ accountId: 'chk', date: '2026-09-30', cents: 399000, source: 'statement' }]);
+    assert.ok(report.warnings.some(w => /Joint checking, 2026-09-30: the statement balance \$3,990\.00 differs from the running balance in the export \(\$4,000\.00\)/.test(w)));
+    assert.ok(!build([{ accountId: 'chk', date: '2026-09-30', amount: '4,000.00' }]).report.warnings.some(w => /differs/.test(w)), 'no warning when they agree');
+  });
+  test('invalid balances stop the import with the item named', () => {
+    assert.throws(() => build([{ accountId: 'card', date: '2026-09-30', cents: 1 }]), /Balance #1: unknown account "card"/);
+  });
+  test('the dataset passes ledger validation and keeps its balances when normalized', { skip: !E.ledger }, () => {
+    const { dataset } = build([{ accountId: 'sav', date: '2026-09-30', cents: 1 }]);
+    assert.deepEqual(E.ledger.validateDataset(dataset), { errors: [], warnings: [] });
+    assert.deepEqual(E.ledger.normalizeDataset(dataset).balances, dataset.balances);
+  });
+});
+
+describe('mergeBalances', () => {
+  const bank = { accountId: 'chk', date: '2026-09-30', cents: 400000, source: 'bank' };
+  const statement = { accountId: 'chk', date: '2026-09-30', cents: 399000, source: 'statement' };
+  test('a statement replaces the bank\'s figure; the bank\'s never replaces a statement', () => {
+    const up = I.mergeBalances([bank], [statement]);
+    assert.deepEqual(up.balances, [statement]);
+    assert.deepEqual(up.replaced, [{ from: bank, to: statement }]);
+    const down = I.mergeBalances([statement], [bank]);
+    assert.deepEqual(down.balances, [statement]);
+    assert.deepEqual(down.ignored, [{ entry: bank, kept: statement }]);
+  });
+  test('between equals the later wins; identical entries are unchanged; others are added, sorted', () => {
+    const later = { ...statement, cents: 1 };
+    assert.deepEqual(I.mergeBalances([statement], [later]).balances, [later]);
+    const same = I.mergeBalances([statement], [{ ...statement }]);
+    assert.equal(same.unchanged, 1);
+    assert.deepEqual(same.added, []);
+    const other = { accountId: 'chk', date: '2026-08-31', cents: 5, source: 'statement' };
+    assert.deepEqual(I.mergeBalances([statement], [other]).balances, [other, statement]);
+  });
+});
+
+describe('parseBalancesCSV (a balances file: account, date, balance)', () => {
+  const accounts = [CHECKING, ACCOUNTS[2], CARD];
+  test('accounts by label or id, any case; US or year-first dates; amounts with commas; an optional note', () => {
+    const r = I.parseBalancesCSV(csv(['Account,Date,Balance,Note', 'JOINT CHECKING,10/31/2026,"3,987.12",October statement', 'sav,2026-10-31,12000', 'Joint card,2026-10-31,-250.00']), accounts);
+    assert.deepEqual(r.balances, [
+      { accountId: 'card', date: '2026-10-31', cents: -25000, source: 'statement' },
+      { accountId: 'chk', date: '2026-10-31', cents: 398712, source: 'statement', note: 'October statement' },
+      { accountId: 'sav', date: '2026-10-31', cents: 1200000, source: 'statement' }
+    ]);
+    assert.deepEqual(r.skipped, []);
+    assert.equal(r.rows, 3);
+  });
+  test('rows that cannot be used are skipped with the reason and line; a second balance for a day keeps the first', () => {
+    const r = I.parseBalancesCSV(csv(['account,date,balance', 'Other bank,2026-10-31,1.00', ',2026-10-31,1.00', 'chk,31/10/2026,1.00', 'chk,2026-10-31,', 'chk,2026-10-31,lots',
+      'chk,2026-10-31,5.00', 'chk,2026-10-31,6.00']), accounts);
+    assert.deepEqual(r.balances, [{ accountId: 'chk', date: '2026-10-31', cents: 500, source: 'statement' }]);
+    assert.deepEqual(r.skipped, [
+      { row: 2, reason: 'unknown account "Other bank"' }, { row: 3, reason: 'missing account' }, { row: 4, reason: 'invalid date "31/10/2026"' },
+      { row: 5, reason: 'missing balance' }, { row: 6, reason: 'invalid balance "lots"' }, { row: 8, reason: 'a second balance for Joint checking on 2026-10-31 (the first is used)' }]);
+  });
+  test('a label two accounts share must be given as an id', () => {
+    const twins = [{ id: 'a', label: 'Checking' }, { id: 'b', label: 'checking' }];
+    assert.deepEqual(I.parseBalancesCSV('account,date,balance\nChecking,2026-10-31,1\nb,2026-10-31,2\n', twins).skipped, [{ row: 2, reason: 'account "Checking" matches more than one account: use its id' }]);
+  });
+  test('only a balances header is taken for one: transaction exports and other files are refused', () => {
+    assert.deepEqual(I.detectBalancesHeader(['Account', 'Statement Date', 'Ending Balance', 'Memo']), { account: 0, date: 1, balance: 2, note: 3 });
+    assert.equal(I.detectBalancesHeader(['Date', 'Description', 'Amount', 'Balance']), null);
+    assert.equal(I.detectBalancesHeader(['Account', 'Date', 'Description', 'Balance']), null);
+    assert.equal(I.detectBalancesHeader(['Account', 'Date']), null);
+    assert.throws(() => I.parseBalancesCSV('Date,Description,Amount\n', accounts), err => err.code === 'NOT_BALANCES' && /not a balances file/.test(err.message));
+  });
+});
+
+// ====================================================================== adding exports to a dataset
+
+function deepFreeze(o) {
+  if (o && typeof o === 'object' && !Object.isFrozen(o)) {
+    Object.freeze(o);
+    for (const v of Object.values(o)) deepFreeze(v);
+  }
+  return o;
+}
+
+describe('mergeDataset', () => {
+  const header = 'Date,Description,Amount,Balance\n';
+  const AUG = '08/03/2026,SAMPLE GROCER,-40.00,960.00\n08/14/2026,SAMPLE EMPLOYER PAYROLL,1500.00,2460.00\n08/28/2026,TRANSFER TO SAVINGS,-200.00,2260.00\n';
+  const SEP = '09/04/2026,SAMPLE GROCER,-42.00,2218.00\n09/15/2026,SAMPLE EMPLOYER PAYROLL,1500.00,3718.00\n';
+  const OCT = '10/02/2026,SAMPLE CAFE,-4.50,3713.50\n10/02/2026,SAMPLE CAFE,-4.50,3709.00\n10/20/2026,SAMPLE GROCER,-38.00,3671.00\n';
+  const accounts = [CHECKING, ACCOUNTS[2]];
+  const SAV = 'Posting Date,Description,Amount\n2026-08-28,TRANSFER FROM CHECKING,200.00\n';
+  const files = {
+    augSep: { name: 'chk-aug-sep.csv', accountId: 'chk', text: header + AUG + SEP, coverageStart: '2026-08-01', coverageEnd: '2026-09-30' },
+    sepOct: { name: 'chk-sep-oct.csv', accountId: 'chk', text: header + SEP + OCT, coverageStart: '2026-09-01', coverageEnd: '2026-10-31' },
+    sav: { name: 'sav.csv', accountId: 'sav', text: SAV, coverageStart: '2026-08-01', coverageEnd: '2026-08-31' }
+  };
+  const build = list => I.buildDataset({ files: list, accounts, datasetId: 'household', generatedAt: '2026-10-01' }).dataset;
+  const base = () => (E.ledger ? E.ledger.normalizeDataset(build([files.augSep, files.sav])) : build([files.augSep, files.sav]));
+  const merge = (ds, list, extra = {}) => I.mergeDataset(ds, { files: list, generatedAt: '2026-11-01', ...extra });
+
+  test('adds only the rows the data does not have; existing rows stay exactly as they were', () => {
+    const before = base();
+    const { dataset, summary, report } = merge(before, [files.sepOct]);
+    assert.equal(summary.transactionsBefore, 6);
+    assert.equal(summary.added, 3);
+    assert.equal(summary.alreadyPresent, 2);
+    assert.equal(summary.transactionsAfter, 9);
+    assert.equal(dataset.transactions.length, 9);
+    for (const t of before.transactions) assert.equal(dataset.transactions.find(x => x.id === t.id), t, 'the very same row object: ' + t.description);
+    assert.deepEqual(report.alreadyPresent.map(r => [r.date, r.description, r.keptFile]), [['2026-09-04', 'SAMPLE GROCER', 'chk-aug-sep.csv'], ['2026-09-15', 'SAMPLE EMPLOYER PAYROLL', 'chk-aug-sep.csv']]);
+    assert.deepEqual(report.files.map(f => [f.name, f.rows, f.imported, f.alreadyPresent, f.duplicatesRemoved, f.skipped]), [['chk-sep-oct.csv', 5, 3, 2, 2, 0]]);
+    assert.equal(dataset.datasetId, 'household');
+    assert.equal(dataset.isSynthetic, false, 'the browser never vouches that added files are fictional');
+    assert.equal(dataset.generatedAt, '2026-11-01');
+    assert.deepEqual(dataset.importLog.map(l => l.file), ['chk-aug-sep.csv', 'sav.csv', 'chk-sep-oct.csv']);
+  });
+
+  test('ids are stable: the merged rows have exactly the ids a fresh import of every file gives', () => {
+    const { dataset } = merge(base(), [files.sepOct]);
+    const fresh = build([files.augSep, files.sav, files.sepOct]);
+    assert.deepEqual(dataset.transactions.map(t => t.id), fresh.transactions.map(t => t.id));
+    const strip = t => ({ ...t, sourceFile: null, sourceRow: null });
+    assert.deepEqual(dataset.transactions.map(strip), fresh.transactions.map(strip), 'and the same classification, pairs and notes');
+    // Re-importing the same rows from a differently named file gives the same ids again.
+    const renamed = build([{ ...files.augSep, name: 'export (3).csv' }, files.sav]);
+    assert.deepEqual(renamed.transactions.map(t => t.id), build([files.augSep, files.sav]).transactions.map(t => t.id));
+  });
+
+  test('same-day repeats: an extra identical row is added with the next occurrence number', () => {
+    const one = I.buildDataset({ files: [{ name: 'a.csv', accountId: 'chk', text: 'Date,Description,Amount\n10/02/2026,SAMPLE CAFE,-4.50\n' }], accounts: [CHECKING], datasetId: 't', generatedAt: '2026-10-03' }).dataset;
+    const { dataset, summary } = I.mergeDataset(one, { files: [{ name: 'b.csv', accountId: 'chk', text: 'Date,Description,Amount\n10/02/2026,SAMPLE CAFE,-4.50\n10/02/2026,SAMPLE CAFE,-4.50\n' }], generatedAt: '2026-10-04' });
+    assert.equal(summary.added, 1);
+    assert.equal(summary.alreadyPresent, 1);
+    assert.deepEqual(dataset.transactions.map(t => t.id).sort(), ['tx-' + E.util.hash('chk|2026-10-02|-450|sample cafe|0'), 'tx-' + E.util.hash('chk|2026-10-02|-450|sample cafe|1')].sort());
+  });
+
+  test('loading the same export again adds nothing and changes nothing', () => {
+    const once = merge(base(), [files.sepOct]).dataset;
+    const again = I.mergeDataset(once, { files: [files.sepOct], generatedAt: '2026-11-02' });
+    assert.equal(again.summary.added, 0);
+    assert.equal(again.summary.alreadyPresent, 5);
+    assert.equal(again.summary.existingChanged, 0);
+    assert.deepEqual(again.dataset.transactions, once.transactions);
+    assert.deepEqual(again.dataset.balances, once.balances);
+    assert.deepEqual(again.summary.renamedFiles, [], 'a file that adds nothing keeps its own name');
+    assert.equal(again.report.files[0].name, 'chk-sep-oct.csv');
+  });
+
+  test('ledger edits keyed by id keep applying after a merge', { skip: !E.ledger || !E.review }, () => {
+    const before = base();
+    const grocer = before.transactions.find(t => t.date === '2026-09-04');
+    const edits = { [grocer.id]: E.review.editRecord(null, 'category', 'Dining out', 'Test: it was a meal', '2026-10-15T12:00:00.000Z') };
+    const { dataset } = merge(before, [files.sepOct]);
+    const effective = E.ledger.applyEdits(E.ledger.normalizeDataset(dataset), edits);
+    assert.equal(effective.find(t => t.id === grocer.id).category, 'Dining out');
+  });
+
+  test('coverage is extended per account; a new gap is warned about', () => {
+    const { dataset, summary } = merge(base(), [files.sepOct]);
+    assert.deepEqual(dataset.accounts.find(a => a.id === 'chk').coverage, [{ start: '2026-08-01', end: '2026-10-31' }]);
+    assert.deepEqual(dataset.accounts.find(a => a.id === 'sav').coverage, [{ start: '2026-08-01', end: '2026-08-31' }], 'accounts without new files are untouched');
+    assert.equal(summary.coverageEndBefore, '2026-09-30');
+    assert.equal(summary.coverageEnd, '2026-10-31');
+    assert.deepEqual(summary.accounts.map(a => [a.id, a.added, a.alreadyPresent, a.coverageBefore.length ? a.coverageBefore[0].end : null, a.coverageAfter[0].end]),
+      [['chk', 3, 2, '2026-09-30', '2026-10-31'], ['sav', 0, 0, '2026-08-31', '2026-08-31']]);
+    const gap = I.mergeDataset(base(), { files: [{ name: 'dec.csv', accountId: 'chk', text: header + '12/05/2026,SAMPLE GROCER,-10.00,100.00\n', coverageStart: '2026-12-01', coverageEnd: '2026-12-31' }], generatedAt: '2027-01-02' });
+    assert.ok(gap.report.warnings.includes('Joint checking: no export covers 2026-10-01 – 2026-11-30.'));
+    assert.deepEqual(gap.dataset.accounts[0].coverage.map(r => r.end), ['2026-09-30', '2026-12-31']);
+  });
+
+  test('balances: the bank\'s figure at the new last covered day is added; statements win over it; old figures stay', () => {
+    const before = base();
+    assert.deepEqual(before.balances.map(b => [b.date, b.cents, b.source]), [['2026-09-30', 371800, 'bank']]);
+    const { dataset, summary } = merge(before, [files.sepOct], { balances: [{ accountId: 'chk', date: '2026-10-31', amount: '3,600.00' }, { accountId: 'sav', date: '2026-08-31', cents: 20000 }] });
+    assert.deepEqual(dataset.balances.map(b => [b.accountId, b.date, b.cents, b.source]), [
+      ['chk', '2026-09-30', 371800, 'bank'], ['chk', '2026-10-31', 360000, 'statement'], ['sav', '2026-08-31', 20000, 'statement']]);
+    assert.deepEqual(summary.balances.added.map(b => [b.date, b.source]), [['2026-10-31', 'statement'], ['2026-08-31', 'statement']]);
+    // A statement already in the data is never replaced by a later export's running balance.
+    const kept = I.mergeDataset(dataset, { files: [{ ...files.sepOct, name: 'again.csv' }], generatedAt: '2026-11-03' });
+    assert.deepEqual(kept.dataset.balances.find(b => b.date === '2026-10-31'), { accountId: 'chk', date: '2026-10-31', cents: 360000, source: 'statement' });
+    assert.ok(kept.report.warnings.some(w => /2026-10-31: the statement balance \$3,600\.00 differs from the running balance in the export \(\$3,671\.00\)/.test(w)));
+  });
+
+  test('balances alone can be added; nothing at all cannot', () => {
+    const { dataset, summary } = I.mergeDataset(base(), { balances: [{ accountId: 'sav', date: '2026-09-30', cents: 25000 }], generatedAt: '2026-10-05' });
+    assert.equal(summary.added, 0);
+    assert.deepEqual(dataset.balances.map(b => b.source), ['bank', 'statement']);
+    assert.throws(() => I.mergeDataset(base(), { generatedAt: '2026-10-05' }), /at least one export or balance/);
+    assert.throws(() => I.mergeDataset(base(), { files: [files.sepOct] }), /generatedAt/);
+    assert.throws(() => I.mergeDataset(null, { files: [files.sepOct], generatedAt: '2026-10-05' }), /no data set/);
+    assert.throws(() => I.mergeDataset(base(), { balances: [{ accountId: 'nope', date: '2026-09-30', cents: 1 }], generatedAt: '2026-10-05' }), /unknown account "nope"/);
+  });
+
+  test('an existing unpaired transfer pairs with its new counterpart and loses its unpaired note', () => {
+    const chkOnly = I.buildDataset({ files: [files.augSep], accounts, datasetId: 'household', generatedAt: '2026-10-01' }).dataset;
+    const out = chkOnly.transactions.find(t => t.description === 'TRANSFER TO SAVINGS');
+    assert.ok(out.flags.includes('unpaired_transfer') && /No matching inbound transfer/.test(out.note));
+    const { dataset, summary } = I.mergeDataset(chkOnly, { files: [files.sav], generatedAt: '2026-10-02' });
+    const now = dataset.transactions.find(t => t.id === out.id);
+    const inbound = dataset.transactions.find(t => t.accountId === 'sav');
+    assert.equal(now.pairId, inbound.id);
+    assert.equal(inbound.pairId, now.id);
+    assert.ok(!now.flags.includes('unpaired_transfer'));
+    assert.ok(!/No matching/.test(now.note), now.note);
+    assert.equal(summary.existingChanged, 1);
+    const fresh = build([files.augSep, files.sav]).transactions.find(t => t.id === out.id);
+    assert.deepEqual({ ...now }, fresh, 'the same as importing both files together');
+  });
+
+  test('new accounts are added only when a file uses them; a file name already in the data is made unique', () => {
+    const card = { id: 'new-card', label: 'New card', type: 'credit_card', scope: 'joint' };
+    const unused = { id: 'unused', label: 'Unused', type: 'checking', scope: 'joint' };
+    const cardFile = { name: 'chk-aug-sep.csv', accountId: 'new-card', text: 'Transaction Date,Posted Date,Description,Debit,Credit\n10/01/2026,10/02/2026,SAMPLE BOOKSHOP,20.00,\n' };
+    const { dataset, summary } = I.mergeDataset(base(), { files: [cardFile], accounts: [card, unused, { ...CHECKING, label: 'Renamed?' }], generatedAt: '2026-10-05' });
+    assert.deepEqual(dataset.accounts.map(a => a.id), ['chk', 'sav', 'new-card']);
+    assert.equal(dataset.accounts[0].label, 'Joint checking', 'the data\'s own accounts keep their settings');
+    assert.deepEqual(summary.accounts.find(a => a.id === 'new-card').isNew, true);
+    assert.deepEqual(summary.renamedFiles, [{ from: 'chk-aug-sep.csv', to: 'chk-aug-sep (2).csv' }]);
+    assert.equal(dataset.transactions.find(t => t.accountId === 'new-card').sourceFile, 'chk-aug-sep (2).csv');
+  });
+
+  test('does not modify the data set or the input it is given', () => {
+    const before = deepFreeze(base());
+    const input = deepFreeze({ files: [files.sepOct], generatedAt: '2026-11-01', balances: [{ accountId: 'chk', date: '2026-10-31', cents: 1 }] });
+    assert.doesNotThrow(() => I.mergeDataset(before, input));
+  });
+
+  test('the merged sample passes ledger validation', { skip: !E.ledger }, () => {
+    const { dataset } = merge(base(), [files.sepOct]);
+    assert.deepEqual(E.ledger.validateDataset(dataset).errors, []);
+  });
+});
+
+describe('tools/import.cjs: balances in the config', () => {
+  const tmpRoot = () => fs.mkdtempSync(path.join(os.tmpdir(), 'budget-import-'));
+  const run = (root, args) => spawnSync(process.execPath, [CLI, '--root', root, ...args], { encoding: 'utf8' });
+  const setup = balances => {
+    const root = tmpRoot();
+    fs.mkdirSync(path.join(root, 'private', 'raw'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'private', 'raw', 'chk.csv'), 'Date,Description,Amount,Balance\n02/02/2026,SAMPLE GROCER,-12.00,988.00\n02/05/2026,SAMPLE EMPLOYER PAYROLL,900.00,1888.00\n');
+    fs.writeFileSync(path.join(root, 'private', 'import.json'), JSON.stringify({
+      datasetId: 'household', isSynthetic: false, generatedAt: '2026-03-01', accounts: [CHECKING, ACCOUNTS[2]],
+      files: [{ path: 'private/raw/chk.csv', accountId: 'chk', coverageStart: '2026-02-01', coverageEnd: '2026-02-28' }], balances
+    }));
+    return root;
+  };
+  test('statement balances and the export\'s running balance are written to dataset.balances and listed in the report', () => {
+    const root = setup([{ accountId: 'sav', date: '2026-02-28', amount: '5,000.00', note: 'February statement' }, { accountId: 'chk', date: '2026-01-31', cents: 100000 }]);
+    const res = run(root, []);
+    assert.equal(res.status, 0, res.stderr);
+    const data = JSON.parse(fs.readFileSync(path.join(root, 'private', 'budget-data.json'), 'utf8'));
+    assert.equal(data.schemaVersion, 2);
+    assert.deepEqual(data.balances, [
+      { accountId: 'chk', date: '2026-01-31', cents: 100000, source: 'statement' },
+      { accountId: 'chk', date: '2026-02-28', cents: 188800, source: 'bank', note: 'Running balance after the last row (2026-02-05, chk.csv); no later rows through 2026-02-28.' },
+      { accountId: 'sav', date: '2026-02-28', cents: 500000, source: 'statement', note: 'February statement' }
+    ]);
+    const md = fs.readFileSync(path.join(root, 'private', 'import-report.md'), 'utf8');
+    assert.match(md, /## Balances embedded in the data/);
+    assert.match(md, /\| Joint savings \| 2026-02-28 \| \$5,000\.00 \| statement \| February statement \|/);
+    assert.match(md, /\| Joint checking \| 2026-02-28 \| \$1,888\.00 \| bank \|/);
+    assert.match(res.stdout, /Balances embedded: Joint checking 2026-01-31 \$1,000\.00 \(statement\)/);
+  });
+  test('an invalid balance stops the import and names it', () => {
+    const res = run(setup([{ accountId: 'chk', date: '2026-02-28', cents: 1 }, { accountId: 'chk', date: '2026-02-28', amount: '2.00' }]), []);
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /Import failed: Balance #2: Joint checking already has a balance on 2026-02-28/);
+    const bad = run(setup([{ accountId: 'joint-card', date: '2026-02-28', cents: 1 }]), []);
+    assert.equal(bad.status, 1);
+    assert.match(bad.stderr, /unknown account "joint-card"/);
+  });
+  test('the example config explains balances and its placeholder entry cannot be imported by mistake', () => {
+    const { EXAMPLE_CONFIG } = require(CLI);
+    assert.ok(EXAMPLE_CONFIG._balancesHelp.some(l => /statement balance on the same date wins/.test(l)));
+    assert.deepEqual(EXAMPLE_CONFIG.balances.map(b => b.date), ['YYYY-MM-DD']);
+    assert.throws(() => I.statementBalances(EXAMPLE_CONFIG.balances, EXAMPLE_CONFIG.accounts), /date must be a YYYY-MM-DD date/);
+  });
+});
+
+describe('mergeDataset: data whose pairs were never recorded', () => {
+  test('two existing rows that would pair are left as they are; only new rows are paired', () => {
+    const accounts = [CHECKING, ACCOUNTS[2]];
+    const base = I.buildDataset({ files: [
+      { name: 'chk.csv', accountId: 'chk', text: 'Date,Description,Amount\n08/28/2026,TRANSFER TO SAVINGS,-200.00\n' },
+      { name: 'sav.csv', accountId: 'sav', text: 'Posting Date,Description,Amount\n2026-08-28,TRANSFER FROM CHECKING,200.00\n' }
+    ], accounts, datasetId: 'old', generatedAt: '2026-09-01' }).dataset;
+    // As converted v1 data has them: no pairId recorded.
+    const unpaired = { ...base, transactions: base.transactions.map(t => ({ ...t, pairId: null })) };
+    const { dataset, summary } = I.mergeDataset(unpaired, { files: [{ name: 'chk2.csv', accountId: 'chk', text: 'Date,Description,Amount\n09/03/2026,SAMPLE GROCER,-20.00\n' }], generatedAt: '2026-09-05' });
+    assert.equal(summary.existingChanged, 0);
+    for (const t of unpaired.transactions) assert.equal(dataset.transactions.find(x => x.id === t.id), t);
+  });
+});
