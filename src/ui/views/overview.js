@@ -59,7 +59,7 @@
   let announceNext = false;
   /** An element to focus after the next render (a control that moved or disappeared). */
   let focusNext = null;
-  /** The migration note already handled this session (migrateRows runs once). */
+  /** The migration note already handled this session (migrateRows and migrateDials run once). */
   let migrated = null;
 
   // ------------------------------------------------------------------ formatting
@@ -830,14 +830,15 @@
     const rootEl = container.querySelector('#plan-root');
     if (!rootEl) return;
     const tl = model(ctx);
-    // Row changes saved under the earlier card and bank dials: made permanent once, with a note.
+    // Row changes and card/bank amounts saved under the earlier card and bank dials: carried over
+    // once, in one change, with one note.
     if (tl.migration && migrated !== tl.migration.note) {
       migrated = tl.migration.note;
-      const note = String(tl.migration.note || '').replace(/^ui\.plan\.rows:\s*/, '');
+      const note = String(tl.migration.note || '');
       setTimeout(() => {
         try {
-          ctx.app.update(st => E.timeline.migrateRows(st, tl), { message: note, undoable: false });
-        } catch (err) { console.warn('Earlier plan rows were not carried over:', err.message); }
+          ctx.app.update(st => E.timeline.migrateDials(E.timeline.migrateRows(st, tl), tl), { message: note, undoable: false });
+        } catch (err) { console.warn('Earlier plan settings were not carried over:', err.message); }
       }, 0);
     }
     // A slider being dragged: its box, its spoken value and the headline follow at once.

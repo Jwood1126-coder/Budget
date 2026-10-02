@@ -68,6 +68,9 @@
   const CHANGE_GROUPS = ['income', 'essentials', 'flexible', 'irregular', 'savings'];
   /** Dial keys that existed before spending was grouped by how adjustable it is (rows: '<key>-c|m|r-<hash>'). */
   const LEGACY_DIALS = ['card', 'bank'];
+  /** The spending dials: each has a card and a bank part. */
+  const SPEND_DIALS = ['essentials', 'flexible', 'irregular'];
+  const SHORT_LABEL = { essentials: 'Essentials', flexible: 'Flexible', irregular: 'Irregular' };
   /** Categories averaging less than this a month (either sign) are grouped into "Other" (when 2 or more). */
   const TINY_CATEGORY_CENTS = 2000;
   /**
@@ -148,6 +151,21 @@
     const irregularOff = {};
     if (isObj(s.irregularOff)) for (const [k, v] of Object.entries(s.irregularOff)) if (v === true) irregularOff[k] = true;
     const t = isObj(s.trends) ? s.trends : {};
+    // Amounts set for the earlier card and bank dials, waiting to be carried over (migrateDials);
+    // one still among the dials (a budget not checked by state.sanitize) is newer and wins.
+    const legacyDials = {};
+    if (isObj(s.legacyDials)) for (const k of LEGACY_DIALS) if (isCents(own(s.legacyDials, k))) legacyDials[k] = s.legacyDials[k];
+    for (const k of LEGACY_DIALS) {
+      if (isCents(own(dials, k))) legacyDials[k] = dials[k];
+      delete dials[k];
+    }
+    const cardSplit = {};
+    if (isObj(s.cardSplit)) {
+      for (const k of SPEND_DIALS) {
+        const v = own(s.cardSplit, k);
+        if (isObj(v) && isCents(v.cents) && isCents(v.card)) cardSplit[k] = { cents: v.cents, card: v.card };
+      }
+    }
     return {
       baselineMonths: pick(s.baselineMonths, BASELINE_CHOICES, DEFAULTS.baselineMonths),
       horizon: pick(s.horizon, HORIZONS, DEFAULTS.horizon),
@@ -157,7 +175,7 @@
       dials, rows,
       // null = the household never chose (the screen decides what to show); an array once set.
       hidden: Array.isArray(s.hidden) ? s.hidden.filter(k => typeof k === 'string') : null,
-      groups, irregularOff,
+      groups, irregularOff, legacyDials, cardSplit,
       trends: {
         series: Array.isArray(t.series) ? Array.from(new Set(t.series.filter(isSeriesKey))) : TREND_DEFAULTS.series.slice(),
         ma: pick(t.ma, TREND_MA, TREND_DEFAULTS.ma),
@@ -705,11 +723,16 @@
   }
 
 
-  /** A spending dial's plan amount split into card and bank (bank = the rest, so the two add up). */
-  function splitSpending(d, drill) {
+  /**
+   * A spending dial's plan amount split into card and bank (bank = the rest, so the two add up).
+   * A direct amount splits by the dial's cardShare, or by the card part kept with it
+   * (ui.plan.cardSplit, e.g. from carrying over the earlier card dial) while the dial still holds
+   * exactly that amount.
+   */
+  function splitSpending(d, drill, split) {
     let card;
     if (d.planCents === null) card = null;
-    else if (d.source === 'direct') card = roundCents(d.planCents * drill.cardShare);
+    else if (d.source === 'direct') card = split && split.cents === d.planCents ? split.card : roundCents(d.planCents * drill.cardShare);
     else card = d.source === 'rows' ? drill.rowsCardCents : drill.baselineCardCents;
     return {
       cardShare: drill.cardShare, cardCents: card, bankCents: card === null ? null : d.planCents - card,
@@ -765,7 +788,7 @@
       const d = Object.assign({ key, group: 'out', label: DIAL_LABEL[key], baselineCents: drill.baselineCents }, resolve(key, drill.baselineCents, drill.rowsCents, drill.overridden), {
         basis: windowText + (extra ? '; ' + extra : '') + (drill.stableCount ? '; regular bills at their latest amount' : ''), hint: null, drill,
       });
-      dials.push(Object.assign(d, splitSpending(d, drill)));
+      dials.push(Object.assign(d, splitSpending(d, drill, own(cfg.cardSplit, key))));
     }
     const irr = irregularFor(base, byId, cfg);
     const irrBasis = !n ? windowText
@@ -775,7 +798,7 @@
     const irregular = Object.assign({ key: 'irregular', group: 'out', label: DIAL_LABEL.irregular, baselineCents: irr.baselineCents }, resolve('irregular', irr.baselineCents, irr.rowsCents, irr.overridden), {
       basis: irrBasis, hint: null, drill: irr,
     });
-    dials.push(Object.assign(irregular, splitSpending(irregular, irr)));
+    dials.push(Object.assign(irregular, splitSpending(irregular, irr, own(cfg.cardSplit, 'irregular'))));
     const savingsBase = avg(T.savingsNet);
     dials.push(Object.assign({ key: 'savings', group: 'out', label: DIAL_LABEL.savings, baselineCents: savingsBase }, resolve('savings', savingsBase), {
       basis: windowText + (n ? ' (into savings minus out of savings)' : ''), hint: null, drill: null,
@@ -836,6 +859,82 @@
       in: inn, out, savings, net, combinedChange,
       toSavings: savings === null ? null : Math.max(0, savings), fromSavings: savings === null ? null : Math.max(0, 0 - savings),
     };
+  }
+
+  /**
+   * How the amounts set for the earlier card and bank dials (settings.legacyDials) become direct
+   * amounts for essentials, flexible and irregular, or null when there are none.
+   * A card amount X is shared over the three dials' baseline card parts (C = their sum): each
+   * card part becomes round(baselineCard × X / C), the rounding remainder on the largest baseline
+   * card part, so the three add up to X exactly; when C is 0 the whole of X is Flexible's card
+   * part (the others' card parts are $0). A bank amount likewise on the bank parts. A side that was
+   * not set keeps its baseline parts. Each dial's amount = its card part + its bank part. A dial the
+   * household already set directly is left alone (to: null, named in `skipped` and in the note).
+   * With no baseline yet (no complete month), everything set goes to Flexible.
+   * @returns {{ from: { card?, bank? }, to: { essentials, flexible, irregular }, parts: { [dial]: { card, bank }|null },
+   *   skipped: string[], note: string }|null}
+   */
+  function legacyDialsPlan(dialsByKey, cfg) {
+    const from = {};
+    for (const k of LEGACY_DIALS) if (isCents(own(cfg.legacyDials, k))) from[k] = cfg.legacyDials[k];
+    const sides = LEGACY_DIALS.filter(k => has(from, k));
+    if (!sides.length) return null;
+    const skipped = SPEND_DIALS.filter(k => isCents(own(cfg.dials, k)));
+    const known = SPEND_DIALS.every(k => dialsByKey[k] && isCents(dialsByKey[k].baselineCardCents) && isCents(dialsByKey[k].baselineBankCents));
+    const parts = {};
+    const how = {};
+    if (!known) {
+      for (const k of SPEND_DIALS) parts[k] = null;
+      parts.flexible = { card: has(from, 'card') ? from.card : 0, bank: has(from, 'bank') ? from.bank : 0 };
+    } else {
+      for (const k of SPEND_DIALS) parts[k] = { card: dialsByKey[k].baselineCardCents, bank: dialsByKey[k].baselineBankCents };
+      for (const side of sides) {
+        const base = SPEND_DIALS.map(k => parts[k][side]);
+        const total = base.reduce((s, v) => s + v, 0);
+        const x = from[side];
+        if (total === 0) {
+          SPEND_DIALS.forEach(k => { parts[k][side] = k === 'flexible' ? x : 0; });
+          how[side] = 'flexible';
+          continue;
+        }
+        const share = base.map(b => roundCents(b * x / total));
+        let big = 0;
+        base.forEach((b, i) => { if (Math.abs(b) > Math.abs(base[big])) big = i; });
+        share[big] += x - share.reduce((s, v) => s + v, 0);
+        SPEND_DIALS.forEach((k, i) => { parts[k][side] = share[i]; });
+        how[side] = 'scaled';
+      }
+    }
+    const to = {};
+    for (const k of SPEND_DIALS) to[k] = parts[k] && !skipped.includes(k) ? parts[k].card + parts[k].bank : null;
+    // The note: what was set, how it was carried over, and what was left alone.
+    const money = E.money.format;
+    const said = sides.map((s, i) => (i ? '' : 'Your earlier ') + s + ' spending setting of ' + money(from[s])).join(' and ');
+    const was = sides.length > 1 ? 'were' : 'was';
+    const it = sides.length > 1 ? 'them' : 'it';
+    const list = keys => keys.map(k => SHORT_LABEL[k]).join(keys.length > 2 ? ', ' : ' and ').replace(/, ([^,]+)$/, ' and $1');
+    const applied = SPEND_DIALS.filter(k => to[k] !== null);
+    let note;
+    if (!applied.length) {
+      note = said + ' ' + was + ' not carried over: ' + (known ? list(skipped) + (skipped.length > 1 ? ' were' : ' was') + ' already set by you.' : 'Flexible was already set by you, and there is no baseline yet to scale ' + it + ' by.');
+    } else if (!known) {
+      note = said + ' ' + was + ' carried over to Flexible (there is no baseline yet to scale ' + it + ' by); adjust ' + it + ' from here.';
+    } else {
+      const scaled = sides.filter(s => how[s] === 'scaled');
+      const flat = sides.filter(s => how[s] === 'flexible');
+      const bits = [];
+      if (scaled.length) {
+        bits.push('by scaling the ' + (scaled.length > 1 ? 'card and bank parts' : scaled[0] + ' part') + ' of Essentials, Flexible and Irregular'
+          + (skipped.length ? '' : ' (they now add up to ' + (scaled.length > 1 ? 'them' : 'it') + ')'));
+      }
+      if (flat.length) {
+        bits.push((scaled.length ? 'putting the ' : 'by putting the ') + flat.join(' and ') + ' amount' + (flat.length > 1 ? 's' : '') + ' on Flexible (there was no '
+          + flat.join(' or ') + ' spending in the baseline to scale)');
+      }
+      note = said + ' ' + was + ' carried over ' + bits.join(', and ') + '; adjust them individually from here.';
+      if (skipped.length) note += ' ' + list(skipped) + (skipped.length > 1 ? ' were' : ' was') + ' already set by you and ' + (skipped.length > 1 ? 'were left as they are.' : 'was left as it is.');
+    }
+    return { from, to, parts, skipped, note };
   }
 
   // ------------------------------------------------------------------ planned changes
@@ -1332,19 +1431,22 @@
     const otherOneTime = base.oneOffs.filter(o => !seen.has(o.id) && o.role !== 'card' && o.role !== 'bank').map(o => oneOffItem(o, people, false));
     const oneTime = spendOneTime.concat(otherOneTime);
     const dialsByKey = Object.fromEntries(dials.map(d => [d.key, d]));
-    // Row changes saved under the earlier card/bank dials: which still apply, and which cannot.
+    // Settings saved under the earlier card/bank dials: row changes (which still apply, and which
+    // cannot) and amounts set for the dials themselves (carried over to the spending dials).
     const legacyIds = Object.keys(cfg.rows).filter(id => LEGACY_DIALS.some(k => id.startsWith(k + '-'))).sort();
+    const dialMigration = legacyDialsPlan(dialsByKey, cfg);
     let migration = null;
-    if (legacyIds.length) {
+    if (legacyIds.length || dialMigration) {
       const moved = legacy.slice().sort((a, b) => (a.from < b.from ? -1 : 1));
       const dropped = legacyIds.filter(id => !moved.some(l => l.from === id));
+      const rowsNote = !legacyIds.length ? null : ('ui.plan.rows: spending is now planned as essentials, flexible and irregular. '
+        + (moved.length ? plural(moved.length, 'change') + ' to card and bank spending rows now apply to the same rows there. ' : '')
+        + (dropped.length ? plural(dropped.length, 'change') + ' to card and bank spending rows could not be matched to a row in the new grouping and ' + (dropped.length === 1 ? 'was' : 'were') + ' removed.' : '')).trim();
       migration = {
-        rows: moved, dropped, superseded: superseded.slice().sort(),
-        note: 'ui.plan.rows: spending is now planned as essentials, flexible and irregular. '
-          + (moved.length ? plural(moved.length, 'change') + ' to card and bank spending rows now apply to the same rows there. ' : '')
-          + (dropped.length ? plural(dropped.length, 'change') + ' to card and bank spending rows could not be matched to a row in the new grouping and ' + (dropped.length === 1 ? 'was' : 'were') + ' removed.' : ''),
+        rows: moved, dropped, superseded: superseded.slice().sort(), rowsNote, dials: dialMigration,
+        // What to tell the household, once: the row note (without its path) and the dial note.
+        note: [rowsNote ? rowsNote.replace(/^ui\.plan\.rows: /, '') : null, dialMigration ? dialMigration.note : null].filter(Boolean).join(' '),
       };
-      migration.note = migration.note.trim();
     }
 
     return {
@@ -1549,9 +1651,22 @@
 
   function planUi(state) { return state && isObj(state.ui) && isObj(state.ui.plan) ? state.ui.plan : {}; }
 
-  /** Set one dial directly (cents, may be negative), or clear it with null/undefined (back to rows or baseline). */
+  /**
+   * Set one dial directly (cents, may be negative), or clear it with null/undefined (back to rows
+   * or baseline). A card part kept for the dial's earlier amount (ui.plan.cardSplit) is removed.
+   */
   function setDial(state, key, cents) {
-    return E.state.setPath(state, 'ui.plan.dials.' + key, cents === null ? undefined : cents);
+    let next = E.state.setPath(state, 'ui.plan.dials.' + key, cents === null ? undefined : cents);
+    if (has(planUi(next).cardSplit, key)) next = E.state.setPath(next, 'ui.plan.cardSplit.' + key, undefined);
+    return next;
+  }
+
+  /** Append a note to meta.migrationNotes once (kept within the limit). */
+  function recordNote(state, note) {
+    if (!note || !isObj(state.meta)) return state;
+    const notes = Array.isArray(state.meta.migrationNotes) ? state.meta.migrationNotes : [];
+    if (notes.includes(note)) return state;
+    return E.state.setPath(state, 'meta.migrationNotes', notes.concat([note.slice(0, 500)]).slice(-E.state.LIMITS.migrationNotes));
   }
 
   /**
@@ -1593,6 +1708,7 @@
     for (const k of Object.keys(isObj(p.dials) ? p.dials : {})) next = E.state.setPath(next, 'ui.plan.dials.' + k, undefined);
     for (const id of Object.keys(isObj(p.rows) ? p.rows : {})) next = E.state.setPath(next, 'ui.plan.rows.' + id, undefined);
     for (const id of Object.keys(isObj(p.irregularOff) ? p.irregularOff : {})) next = E.state.setPath(next, 'ui.plan.irregularOff.' + id, undefined);
+    for (const k of Object.keys(isObj(p.cardSplit) ? p.cardSplit : {})) next = E.state.setPath(next, 'ui.plan.cardSplit.' + k, undefined);
     return next;
   }
 
@@ -1683,17 +1799,38 @@
       changed = true;
     }
     for (const id of mig.dropped) if (has(rows, id)) { next = E.state.setPath(next, 'ui.plan.rows.' + id, undefined); changed = true; }
-    if (changed && isObj(next.meta)) {
-      const notes = Array.isArray(next.meta.migrationNotes) ? next.meta.migrationNotes : [];
-      if (!notes.includes(mig.note)) next = E.state.setPath(next, 'meta.migrationNotes', notes.concat([mig.note]).slice(-E.state.LIMITS.migrationNotes));
+    return changed ? recordNote(next, mig.rowsNote) : next;
+  }
+
+  /**
+   * Carry the amounts set for the earlier card and bank dials over to essentials, flexible and
+   * irregular (tl.migration.dials from build): each dial in `to` is set directly (with its card
+   * part kept in ui.plan.cardSplit, so card and bank still add up to what was set), a dial set
+   * directly in the meantime is left alone, ui.plan.legacyDials (and any card/bank dial still
+   * saved) is removed, and the note is appended to meta.migrationNotes. Nothing waiting: the state
+   * is returned as it is, so running it twice changes nothing more.
+   */
+  function migrateDials(state, tl) {
+    const mig = tl && isObj(tl.migration) && isObj(tl.migration.dials) ? tl.migration.dials : null;
+    const p = planUi(state);
+    const waiting = has(p, 'legacyDials') || LEGACY_DIALS.some(k => has(p.dials, k));
+    if (!mig || !waiting) return state;
+    let next = state;
+    for (const k of SPEND_DIALS) {
+      const cents = mig.to[k];
+      if (!isCents(cents) || isCents(own(planUi(next).dials, k))) continue;
+      next = setDial(next, k, cents);
+      next = E.state.setPath(next, 'ui.plan.cardSplit.' + k, { cents, card: mig.parts[k].card });
     }
-    return next;
+    next = E.state.setPath(next, 'ui.plan.legacyDials', undefined);
+    for (const k of LEGACY_DIALS) if (has(planUi(next).dials, k)) next = E.state.setPath(next, 'ui.plan.dials.' + k, undefined);
+    return recordNote(next, mig.note);
   }
 
   E.timeline = {
-    BASELINE_CHOICES, HORIZONS, PAST_CHOICES, MODES, DEFAULTS, TREND_MA, TREND_DEFAULTS, SPEND_GROUPS, OUT_DIALS, MERCHANT_KEY, CHANGE_KINDS, CHANGE_GROUPS, SERIES,
+    BASELINE_CHOICES, HORIZONS, PAST_CHOICES, MODES, DEFAULTS, TREND_MA, TREND_DEFAULTS, SPEND_GROUPS, SPEND_DIALS, LEGACY_DIALS, OUT_DIALS, MERCHANT_KEY, CHANGE_KINDS, CHANGE_GROUPS, SERIES,
     TINY_CATEGORY_CENTS, STABLE_MIN_CHARGES, STABLE_SPREAD, OTHER_CATEGORY, SIMPLE_LABEL, RULE, SIMPLE_RULE, ILLUSTRATIVE, DIAL_LABEL,
     build, anchors, settings, depositHint, prorate, toCSV, templates,
-    setDial, setRow, resetDial, resetPlan, setGroup, setIrregular, addChange, setChange, removeChange, acceptChanges, migrateRows,
+    setDial, setRow, resetDial, resetPlan, setGroup, setIrregular, addChange, setChange, removeChange, acceptChanges, migrateRows, migrateDials,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

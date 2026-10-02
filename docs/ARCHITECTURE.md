@@ -480,15 +480,22 @@ State = {
                 groups: { [categoryName | 'merchant:' + place]: 'essentials'|'flexible' },  // household's grouping ({}); keys ≤ 120 chars, up to 300
                 irregularOff: { [txnId]: true },                  // one-time costs left out of the irregular allowance ({}); up to 1,000
                 trends: { series: string[] (['card']; keys from state.TREND_SERIES, up to 16; unknown ones dropped),
-                          ma: 0|3|6 (3), trend: boolean (true) } },   // the Trends chart
+                          ma: 0|3|6 (3), trend: boolean (true) },     // the Trends chart
+                legacyDials?: { card?: signed cents, bank?: signed cents },  // absent unless waiting: amounts set for the
+                                                                  // earlier card/bank dials, until Plan carries them over
+                cardSplit?: { [essentials|flexible|irregular]: { cents: signed cents, card: signed cents } } },
+                                                                  // absent unless needed: the card part of a direct amount,
+                                                                  // used while dials[key] === cents (set by migrateDials)
                                                  // the plan screen (BudgetEngine.timeline). Replaces the earlier ui.home:
-                                                 // sanitize moves p1InCents/p2InCents/savedCents to dials p1/p2/savings
-                                                 // and baselineMonths/horizon to their fields (what ui.plan already holds
-                                                 // wins); cardCents/bankCents/outCents are named as not carried over; it
-                                                 // drops ui.home and notes it in meta.migrationNotes. Card and bank were
-                                                 // dials before spending was grouped by how adjustable it is: a saved
-                                                 // ui.plan.dials.card/bank cannot be mapped to the new dials, so sanitize
-                                                 // removes it with a note in meta.migrationNotes. Both idempotent.
+                                                 // sanitize moves p1InCents/p2InCents/cardCents/bankCents/savedCents to
+                                                 // dials p1/p2/card/bank/savings and baselineMonths/horizon to their
+                                                 // fields (what ui.plan already holds wins; outCents is named as not
+                                                 // carried over), drops ui.home and notes it in meta.migrationNotes.
+                                                 // Card and bank were dials before spending was grouped by how adjustable
+                                                 // it is: a saved ui.plan.dials.card/bank moves to ui.plan.legacyDials
+                                                 // (a newer one replaces one already waiting) with a note in
+                                                 // meta.migrationNotes, and the plan screen carries it over to
+                                                 // essentials, flexible and irregular (timeline.migrateDials). Both idempotent.
         dismissed: { [noticeId]: boolean } },
   meta: { createdAt, updatedAt, migratedFrom: null|0..4,           // 0 = unversioned earlier budget
           migrationNotes: string[], legacySnapshot: string|null }  // raw earlier data, set only by a migration
@@ -1139,8 +1146,9 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
     observed deposits `{ count, lastCents, lastDate, typicalIntervalDays, cadence, cadenceLabel, days,
     perYear, perMonthCents }` (semimonthly 24 a year, biweekly 26, matched with `schedule.paydays`).
     Spending dials (essentials, flexible, irregular) also carry `cardShare` (0..1), `cardCents` /
-    `bankCents` (the plan amount split by how it was paid; a direct amount splits by `cardShare`) and
-    `baselineCardCents` / `baselineBankCents`.
+    `bankCents` (the plan amount split by how it was paid; a direct amount splits by `cardShare`,
+    or by `settings.cardSplit[key].card` while the dial holds exactly `settings.cardSplit[key].cents`)
+    and `baselineCardCents` / `baselineBankCents`.
   - Grouping: a category is `essentials` when `categories.isEssential` says so, else `flexible`;
     `settings.groups[category]` overrides it, and `settings.groups['merchant:' + place]` moves every
     purchase of that place (all its categories) into a synthetic category row named after the place
@@ -1197,10 +1205,30 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
     months from the plan). Keys, in order: `in-<personId>` per person, `in-other`, `in-total`,
     `card`, `bank`, `essentials`, `flexible`, `irregular`, `other-out`, `out-total`, `to-savings`,
     `from-savings`, `net`, `combined-change` (`SERIES` lists the fixed ones).
-  - `migration`: null, or `{ rows: [{ from, to }], dropped, superseded, note }` when
-    `settings.rows` still holds changes saved under the earlier card/bank dials. A change applies to
-    the same row (`<group>` instead of `card`/`bank` in its id) when that row is paid only that way
-    and is not the grouped "Other"; `migrateRows` makes that permanent.
+  - `migration`: null, or `{ rows: [{ from, to }], dropped, superseded, rowsNote, dials, note }`
+    when `settings.rows` still holds changes saved under the earlier card/bank dials, or
+    `settings.legacyDials` holds amounts set for them. A row change applies to the same row
+    (`<group>` instead of `card`/`bank` in its id) when that row is paid only that way and is not the
+    grouped "Other"; `migrateRows` makes that permanent. `rowsNote`: the row note
+    ('ui.plan.rows: …', recorded by `migrateRows`) or null. `note`: what to show once — the row note
+    without its path, then `dials.note`.
+    `dials`: null, or `{ from: { card?, bank? }, to: { essentials, flexible, irregular },
+    parts: { [dial]: { card, bank }|null }, skipped: string[], note }` — how `migrateDials` carries
+    the amounts over. A card amount X is shared over the three dials' `baselineCardCents` (sum C):
+    card part = round(baselineCard × X / C), the rounding remainder on the largest baseline card
+    part, so the parts add up to X exactly; C = 0 puts all of X on Flexible (the others' card parts
+    $0). A bank amount likewise on `baselineBankCents`; a side not set keeps its baseline parts; both
+    compose. `to[dial]` = card part + bank part, or null for a dial already set directly (`skipped`).
+    With no baseline yet, all of it goes to Flexible (`parts` null for the others). Note, e.g.:
+    "Your earlier card spending setting of $4,200.00 was carried over by scaling the card part of
+    Essentials, Flexible and Irregular (they now add up to it); adjust them individually from here."
+    Variants: "…card spending setting of $X and bank spending setting of $Y were carried over by
+    scaling the card and bank parts of … (they now add up to them); …"; C = 0: "…was carried over
+    by putting the card amount on Flexible (there was no card spending in the baseline to scale);
+    adjust them individually from here."; a skipped dial drops "(they now add …)" and adds "Flexible
+    was already set by you and was left as it is."; all skipped: "…was not carried over: Essentials,
+    Flexible and Irregular were already set by you."; no baseline: "…was carried over to Flexible
+    (there is no baseline yet to scale it by); adjust it from here."
   - `balances`: `{ mode: 'accounts'|'simple'|'none', simple, label, rule, accounts, missing,
     combined, policy, runsOut, lowest, notes, assumed, illustrative }`. Points are `{ month, cents,
     status: 'reconstructed'|'assumed'|'projected'|null, anchor, gap, note, illustrative }`: a
@@ -1256,11 +1284,19 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
   `endMonth`, away from income clears `personId`, unless the patch sets them),
   `removeChange(state, id)`, `acceptChanges(state, id | ids, accepted = true)`,
   `migrateRows(state, tl)` (moves the earlier card/bank row changes `tl.migration` matched, removes
-  the rest, and appends `tl.migration.note` to `meta.migrationNotes`; returns the same state when
-  there is nothing to do).
-- `settings(raw)` (adds `groups`, `irregularOff`, `trends: { series, ma, trend }`; `mode` may be
-  'trends'), `prorate(cents, daysLeft, daysInMonth)`, `depositHint(credits, personId)`; constants
-  `SPEND_GROUPS`, `OUT_DIALS`, `MERCHANT_KEY`, `CHANGE_KINDS`, `CHANGE_GROUPS`, `SERIES`, `TREND_MA`,
+  the rest, and appends `tl.migration.rowsNote` to `meta.migrationNotes`; returns the same state
+  when there is nothing to do), `migrateDials(state, tl)` (sets each `tl.migration.dials.to` amount
+  directly with its card part in `ui.plan.cardSplit`, leaving a dial set directly in the meantime
+  alone; removes `ui.plan.legacyDials` and any `ui.plan.dials.card`/`bank`; appends
+  `tl.migration.dials.note` to `meta.migrationNotes`; returns the same state when nothing is
+  waiting). The plan screen runs `migrateDials(migrateRows(state, tl), tl)` once, as one change,
+  and shows `tl.migration.note`. `setDial` removes the dial's `cardSplit` entry; `resetPlan` clears
+  `cardSplit`.
+- `settings(raw)` (adds `groups`, `irregularOff`, `legacyDials` (`{ card?, bank? }`, amounts only;
+  a `dials.card`/`bank` still in `raw` moves here and wins), `cardSplit` (valid entries only),
+  `trends: { series, ma, trend }`; `mode` may be 'trends'), `prorate(cents, daysLeft, daysInMonth)`,
+  `depositHint(credits, personId)`; constants `SPEND_GROUPS`, `SPEND_DIALS`, `LEGACY_DIALS`,
+  `OUT_DIALS`, `MERCHANT_KEY`, `CHANGE_KINDS`, `CHANGE_GROUPS`, `SERIES`, `TREND_MA`,
   `TREND_DEFAULTS`, `DIAL_LABEL`.
 
 ### BudgetEngine.state
@@ -1283,8 +1319,13 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
   - A saved `ui.home` (the earlier Home settings) is moved to `ui.plan` (section 7) and dropped,
     with one note that is also appended to `meta.migrationNotes`.
   - A saved `ui.plan.dials.card` / `bank` (dials before spending was grouped as essentials,
-    flexible and irregular) is removed with one note naming the amounts, also appended to
-    `meta.migrationNotes`. A missing `plan.changes` becomes `[]` without a note.
+    flexible and irregular) moves to `ui.plan.legacyDials` with one note, also appended to
+    `meta.migrationNotes`: "ui.plan.dials: card spending $880.00 and bank spending −$15.00 set on
+    the plan screen will be carried over to essentials, flexible and irregular spending the next
+    time Plan opens (card and bank spending are now worked out from those)." A blank (null) one is
+    removed; one that is not an amount is dropped and named. `legacyDials` keeps only amounts and is
+    removed when none is left; it survives a workbook export/import until the plan screen applies
+    it. A missing `plan.changes` becomes `[]` without a note.
   - A dataset id differing from the saved one is noted; edits apply where the transactions exist.
 - `migrate(raw, profile, dataset, opts?) -> { state, notes }` — saved-state versions 1–4 or
   unversioned earlier budgets (object, JSON text or `{ copyId, state }` wrapper) → v5. Never
@@ -1335,7 +1376,7 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
   strictly like a new item; `undefined` resets a field to its default; the id is kept),
   `removeItem(state, list, id, { now }?)` — removing a bill/debt clears the link on the other side;
   removing a goal sets `goalId: null` on scenario events.
-- Constants for the plan screen: `DIAL_KEYS`, `RETIRED_DIALS` (['card', 'bank']), `SPEND_GROUPS`,
+- Constants for the plan screen: `DIAL_KEYS`, `RETIRED_DIALS` (['card', 'bank']), `SPEND_GROUPS`, `SPEND_DIALS`,
   `CHANGE_KINDS`, `CHANGE_GROUPS`, `TREND_SERIES`.
 - `setPath(state, path, value) -> State` (validated writes from forms, path-copying, input never
   modified), `getPath(state, path)` (returns a copy, or undefined for a missing item):
@@ -1344,7 +1385,8 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
     on first write), `scenarios[id=…].events[id=…].monthlyCents`; a numeric index also works.
   - Map entries (`plan.targets`, `checklist`, `ui.dismissed`, `ui.plan.dials|rows|groups|irregularOff`) take the rest of the path as the key
     (`plan.targets.Gas & heating`) or a quoted key (`plan.targets["A.B"]`).
-  - Writing `undefined` **removes** a map entry or an optional `income_change` field.
+  - Writing `undefined` **removes** a map entry, an optional field (`ui.plan.legacyDials`) or an
+    optional `income_change` field.
   - Ids cannot be written, and a list's selector field cannot be rewritten
     (`…[personId=p1].personId` is refused). Whole sections and whole items cannot be set: use
     `addItem`, `removeItem` or `updateEvent`. `compareIds` takes 1–3 existing, distinct ids.

@@ -41,9 +41,15 @@
   const TXN_KINDS = ['spend', 'income', 'transfer', 'card_payment', 'debt_payment'];
   /** The plan screen's dials (BudgetEngine.timeline): money in per person and other, money out by how adjustable it is. */
   const DIAL_KEYS = ['p1', 'p2', 'inOther', 'essentials', 'flexible', 'irregular', 'savings', 'other'];
-  /** Card and bank spending were dials before spending was grouped by how adjustable it is; now they are derived. */
+  /**
+   * Card and bank spending were dials before spending was grouped by how adjustable it is; now
+   * they are derived. An amount saved for one is kept in ui.plan.legacyDials until the plan
+   * screen carries it over to the spending dials (BudgetEngine.timeline.migrateDials).
+   */
   const RETIRED_DIALS = ['card', 'bank'];
   const SPEND_GROUPS = ['essentials', 'flexible'];
+  /** The spending dials whose direct amount can carry its own card part (ui.plan.cardSplit). */
+  const SPEND_DIALS = ['essentials', 'flexible', 'irregular'];
   const CHANGE_KINDS = ['oneTime', 'monthly'];
   const CHANGE_GROUPS = ['income', 'essentials', 'flexible', 'irregular', 'savings'];
   /** Monthly series the plan screen's Trends chart can draw (BudgetEngine.timeline series keys). */
@@ -367,8 +373,15 @@
   //     own grouping (the taxonomy's `essential` flag otherwise).
   //   irregularOff: { [txnId]: true } one-time costs left out of the irregular allowance.
   //   trends: the Trends chart: which series (TREND_SERIES), a moving average of 0/3/6 months, and a trend line.
+  //   legacyDials (absent unless needed): { card?, bank? } signed cents set for the earlier card and
+  //     bank dials, waiting to be carried over to essentials, flexible and irregular.
+  //   cardSplit (absent unless needed): { [essentials|flexible|irregular]: { cents, card } } the card
+  //     part of a direct amount, used while the dial still holds exactly `cents`.
   const PLAN_ROW_FIELDS = [['included', optional(rule('bool', {}))], ['cents', optional(rule('cents', { signed: true }))]];
   const PLAN_ROW_RULE = rule('object', { fields: PLAN_ROW_FIELDS });
+  const LEGACY_DIAL_FIELDS = RETIRED_DIALS.map(k => [k, optional(rule('cents', { signed: true }))]);
+  const CARD_SPLIT_FIELDS = [['cents', rule('cents', { signed: true, required: true })], ['card', rule('cents', { signed: true, required: true })]];
+  const CARD_SPLIT_RULE = rule('object', { fields: CARD_SPLIT_FIELDS });
   const SPEND_GROUP_RULE = oneOf(SPEND_GROUPS, null);
   const TRENDS_FIELDS = [
     ['series', rule('keylist', { max: LIMITS.planTrendSeries, def: ['card'], values: TREND_SERIES })],
@@ -387,12 +400,14 @@
     ['hidden', rule('keylist', { max: LIMITS.planHidden, def: null, nullable: true })],
     ['groups', rule('enummap', { max: LIMITS.planGroups, keyMax: LIMITS.groupKey, values: SPEND_GROUPS, def: {}, noun: 'spending groups' })],
     ['irregularOff', rule('boolmap', { max: LIMITS.planIrregular, keyMax: LIMITS.txnId, def: {} })],
-    ['trends', rule('object', { fields: TRENDS_FIELDS, def: TRENDS_DEFAULT })]
+    ['trends', rule('object', { fields: TRENDS_FIELDS, def: TRENDS_DEFAULT })],
+    ['legacyDials', optional(rule('object', { fields: LEGACY_DIAL_FIELDS }))],
+    ['cardSplit', optional(rule('objmap', { max: SPEND_DIALS.length, keys: SPEND_DIALS, fields: CARD_SPLIT_FIELDS, noun: 'card parts of plan amounts' }))]
   ];
   const PLAN_UI_DEFAULT = { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null,
     groups: {}, irregularOff: {}, trends: TRENDS_DEFAULT };
-  /** Where each earlier Home amount (ui.home, removed) goes in ui.plan.dials (card and bank are no longer dials). */
-  const HOME_TO_DIALS = { p1InCents: 'p1', p2InCents: 'p2', savedCents: 'savings' };
+  /** Where each earlier Home amount (ui.home, removed) goes in ui.plan.dials (card and bank then go on to ui.plan.legacyDials). */
+  const HOME_TO_DIALS = { p1InCents: 'p1', p2InCents: 'p2', cardCents: 'card', bankCents: 'bank', savedCents: 'savings' };
 
   const UI_FIELDS = [
     ['scope', oneOf(['joint', 'household'], 'joint')],
@@ -559,6 +574,29 @@
         const changed = list.length !== value.length || list.some((k, i) => k !== value[i]);
         if (changed && strict) return bad(r.values ? 'Choose up to ' + r.max + ' different series from: ' + r.values.join(', ') + '.' : 'Use up to ' + r.max + ' different short names.');
         return ok(list, changed ? 'cleaned (names that were not valid, ' + (r.values ? 'not known, ' : '') + 'repeated or over ' + r.max + ' removed)' : null);
+      }
+      case 'objmap': {
+        // { [key]: { field: value } } with every field checked strictly; a bad entry is dropped whole.
+        const noun = r.noun || 'entries';
+        if (!isObj(value)) return bad('Expected a list of ' + noun + '.');
+        const out = {};
+        const dropped = [];
+        for (const [k, v] of Object.entries(value)) {
+          const key = k.trim();
+          let entry = null;
+          if (isValidId(key) && (!r.keys || r.keys.includes(key)) && isObj(v) && Object.keys(v).every(f => r.fields.some(([n]) => n === f)) && Object.keys(out).length < r.max) {
+            entry = {};
+            for (const [f, fr] of r.fields) {
+              const res = check(fr, v[f], true);
+              if (!res.ok) { entry = null; break; }
+              entry[f] = res.value;
+            }
+          }
+          if (!entry) { dropped.push(k); continue; }
+          out[key] = entry;
+        }
+        if (dropped.length && strict) return bad('Every entry needs one of: ' + (r.keys || []).join(', ') + ', with ' + r.fields.map(([n]) => n).join(' and ') + ' in whole cents.');
+        return ok(out, dropped.length ? 'dropped ' + noun + ' that were not valid (' + dropped.slice(0, 5).map(k => JSON.stringify(k)).join(', ') + ')' : null);
       }
       case 'boolmap': {
         if (!isObj(value)) return bad('Expected a set of yes/no settings.');
@@ -1176,8 +1214,15 @@
       const moved = has(raw.ui, 'home') ? migrateHome(raw.ui) : null;
       const retired = migratePlanDials(moved ? moved.ui : raw.ui);
       ui = cleanFields(retired ? retired.ui : moved ? moved.ui : raw.ui, UI_FIELDS, { path: 'ui', ctx, strict: false, defaults: base.ui });
+      // Card and bank amounts waiting to be carried over: only amounts are kept, and nothing at all when none is left.
+      if (isObj(ui.plan) && has(ui.plan, 'legacyDials')) {
+        const kept = {};
+        for (const k of RETIRED_DIALS) if (isObj(ui.plan.legacyDials) && Number.isSafeInteger(ui.plan.legacyDials[k])) kept[k] = ui.plan.legacyDials[k];
+        if (Object.keys(kept).length) ui.plan.legacyDials = kept;
+        else delete ui.plan.legacyDials;
+      }
       for (const m of [moved, retired]) {
-        if (!m) continue;
+        if (!m || !m.note) continue;
         ctx.note(m.note);
         // Recorded like the other migrations, so the household can see what moved where.
         const notes = Array.isArray(meta.migrationNotes) ? meta.migrationNotes : [];
@@ -1209,7 +1254,8 @@
     for (const [from, key] of Object.entries(HOME_TO_DIALS)) {
       const v = home[from];
       if (!Number.isSafeInteger(v)) continue;
-      if (has(dials, key) && dials[key] !== null) { kept.push(key); continue; }
+      const waiting = isObj(plan.legacyDials) && Number.isSafeInteger(plan.legacyDials[key]);
+      if ((has(dials, key) && dials[key] !== null) || waiting) { kept.push(key); continue; }
       dials[key] = v;
       moved.push(key + ' ' + money(v));
     }
@@ -1220,9 +1266,7 @@
     ui.plan = plan;
     const left = [];
     if (Number.isSafeInteger(home.inCents)) left.push('all money into joint (' + money(home.inCents) + '): the plan now sets each partner’s money in separately');
-    const spent = [['outCents', 'the earlier single spending amount'], ['cardCents', 'card spending'], ['bankCents', 'bank spending']]
-      .filter(([k]) => Number.isSafeInteger(home[k])).map(([k, what]) => what + ' (' + money(home[k]) + ')');
-    if (spent.length) left.push(spent.join(', ') + ': spending is now set as essentials, flexible and irregular');
+    if (Number.isSafeInteger(home.outCents)) left.push('the earlier single spending amount (' + money(home.outCents) + '): spending is now planned as essentials, flexible and irregular');
     const note = 'ui.home: the Home settings moved to the plan screen (ui.plan)' + (moved.length ? ': ' + moved.join(', ') : '') + '.'
       + (kept.length ? ' The plan screen already had its own ' + kept.join(', ') + ', which were kept.' : '')
       + (left.length ? ' Not carried over: ' + left.join('; ') + '.' : '');
@@ -1232,8 +1276,10 @@
   /**
    * Card and bank spending were dials set directly; spending is now planned as essentials,
    * flexible and irregular, and card and bank are worked out from those. An amount set for card or
-   * bank says nothing about how it splits between the new groups, so it cannot be carried over: it
-   * is removed and the note says what it was. Returns { ui, note } or null when there is none.
+   * bank is moved to ui.plan.legacyDials (an amount saved there before is replaced: the dial is
+   * newer), where the plan screen carries it over to the new dials the next time it opens
+   * (BudgetEngine.timeline.migrateDials). A blank (null) one held nothing and is removed; one that
+   * is not an amount is dropped and named. Returns { ui, note } or null when there is none.
    */
   function migratePlanDials(rawUi) {
     if (!isObj(rawUi) || !isObj(rawUi.plan) || !isObj(rawUi.plan.dials)) return null;
@@ -1241,11 +1287,20 @@
     if (!found.length) return null;
     const dials = Object.assign({}, rawUi.plan.dials);
     for (const k of found) delete dials[k];
-    const ui = Object.assign({}, rawUi, { plan: Object.assign({}, rawUi.plan, { dials }) });
-    const said = found.map(k => k + ' spending ' + (Number.isSafeInteger(rawUi.plan.dials[k]) ? money(rawUi.plan.dials[k]) : preview(rawUi.plan.dials[k])));
-    const note = 'ui.plan.dials: ' + said.join(' and ') + ' set on the plan screen ' + (found.length > 1 ? 'were' : 'was') + ' removed. '
-      + 'Spending is now planned as essentials, flexible and irregular, and card and bank spending are worked out from those, so '
-      + (found.length > 1 ? 'these amounts' : 'this amount') + ' could not be carried over. Set the new dials on the plan screen.';
+    const legacy = isObj(rawUi.plan.legacyDials) ? Object.assign({}, rawUi.plan.legacyDials) : {};
+    const kept = [], bad = [];
+    for (const k of found) {
+      const v = rawUi.plan.dials[k];
+      if (Number.isSafeInteger(v) && Math.abs(v) <= E.money.MAX_INPUT_CENTS) { legacy[k] = v; kept.push(k + ' spending ' + money(v)); }
+      else if (v !== null) bad.push(k + ' spending ' + preview(v));
+    }
+    const plan = Object.assign({}, rawUi.plan, { dials });
+    if (Object.keys(legacy).length) plan.legacyDials = legacy;
+    const ui = Object.assign({}, rawUi, { plan });
+    if (!kept.length && !bad.length) return { ui, note: null };
+    const note = 'ui.plan.dials: '
+      + (kept.length ? kept.join(' and ') + ' set on the plan screen will be carried over to essentials, flexible and irregular spending the next time Plan opens (card and bank spending are now worked out from those).' : '')
+      + (bad.length ? (kept.length ? ' ' : '') + bad.join(' and ') + ' set on the plan screen ' + (bad.length > 1 ? 'were not amounts and were' : 'was not an amount and was') + ' dropped.' : '');
     return { ui, note };
   }
 
@@ -2452,7 +2507,9 @@
         rows: N.map(PLAN_ROW_RULE, LIMITS.planRows),
         groups: N.map(SPEND_GROUP_RULE, LIMITS.planGroups, { keyMax: LIMITS.groupKey }),
         irregularOff: N.map(STRICT_BOOL, LIMITS.planIrregular, { keyMax: LIMITS.txnId }),
-        trends: N.item(TRENDS_FIELDS)
+        trends: N.item(TRENDS_FIELDS),
+        legacyDials: N.item(LEGACY_DIAL_FIELDS),
+        cardSplit: N.map(CARD_SPLIT_RULE, SPEND_DIALS.length, { keys: SPEND_DIALS, keysMessage: 'A card part can be kept for: ' + SPEND_DIALS.join(', ') + '.' })
       }),
       dismissed: N.map(STRICT_BOOL, LIMITS.dismissed)
     }),
@@ -2576,7 +2633,9 @@
         } else {
           const r = n.rules.get(key);
           if (!r) badPath(path);
-          copy[key] = strictValue(r, value, key);
+          // An optional field (one that may be absent) is removed by writing undefined.
+          if (value === undefined && r.optional) delete copy[key];
+          else copy[key] = strictValue(r, value, key);
         }
         if (n.after) n.after(copy, path, { strict: true, ctx: makeCtx() });
         return copy;
@@ -2859,7 +2918,7 @@
     exportWorkbook, importWorkbook, extractEmbeddedState,
     addScenario, renameScenario, deleteScenario, removeScenario: deleteScenario,
     addEvent, updateEvent, removeEvent, validateEvent,
-    DIAL_KEYS, RETIRED_DIALS, SPEND_GROUPS, CHANGE_KINDS, CHANGE_GROUPS, TREND_SERIES,
+    DIAL_KEYS, RETIRED_DIALS, SPEND_GROUPS, SPEND_DIALS, CHANGE_KINDS, CHANGE_GROUPS, TREND_SERIES,
     getPath, setPath, addItem, updateItem, removeItem,
     loadFromStorage, saveToStorage
   };

@@ -2056,19 +2056,20 @@ test('Plan settings: dials keep signed cents through saving, loading and unrelat
   for (const re of [/ui\.plan\.baselineMonths/, /ui\.plan\.dials: dropped plan amounts.*"mystery"/, /ui\.plan\.rows: dropped plan row changes/, /ui\.plan\.hidden/]) assert.ok(hasNote(r.notes, re), String(re));
 });
 
-test('Plan settings: the earlier Home settings (ui.home) move to ui.plan once, losslessly where they can, and the move is noted in meta', () => {
+test('Plan settings: the earlier Home settings (ui.home) move to ui.plan once, losslessly, and the move is noted in meta', () => {
   const raw = JSON.parse(JSON.stringify(base()));
   delete raw.ui.plan;
   raw.ui.home = { inCents: 410000, p1InCents: 300000, p2InCents: null, outCents: 450000, savedCents: -5075, cardCents: 0, bankCents: 187612, baselineMonths: 6, fundingWho: 'p2', chartView: 'balances', horizon: 60 };
   const r = S.sanitize(raw, profile(), DS);
   assert.equal(r.state.ui.home, undefined, 'ui.home is dropped');
   assert.deepEqual(r.state.ui.plan, { baselineMonths: 6, horizon: 60, past: 12, mode: 'balance', coverFromSavings: true, dials: { p1: 300000, savings: -5075 }, rows: {}, hidden: null,
-    groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true } });
+    groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true }, legacyDials: { card: 0, bank: 187612 } }, 'card and bank wait in legacyDials for the plan screen');
   const note = r.notes.find(n => /^ui\.home: /.test(n));
   assert.ok(note, 'noted');
-  assert.match(note, /p1 \$3,000\.00, savings −\$50\.75, baselineMonths 6, horizon 60/);
-  assert.match(note, /Not carried over: all money into joint \(\$4,100\.00\).*; the earlier single spending amount \(\$4,500\.00\), card spending \(\$0\.00\), bank spending \(\$1,876\.12\): spending is now set as essentials, flexible and irregular\.$/);
+  assert.match(note, /p1 \$3,000\.00, card \$0\.00, bank \$1,876\.12, savings −\$50\.75, baselineMonths 6, horizon 60/);
+  assert.match(note, /Not carried over: all money into joint \(\$4,100\.00\).*; the earlier single spending amount \(\$4,500\.00\): spending is now planned as essentials, flexible and irregular\.$/);
   assert.ok(r.state.meta.migrationNotes.includes(note), 'kept in meta like other migrations');
+  assert.ok(r.state.meta.migrationNotes.includes('ui.plan.dials: card spending $0.00 and bank spending $1,876.12 set on the plan screen will be carried over to essentials, flexible and irregular spending the next time Plan opens (card and bank spending are now worked out from those).'));
   // Idempotent: a second pass finds nothing to move and changes nothing.
   const again = S.sanitize(r.state, profile(), DS);
   assert.deepEqual(again.state, r.state);
@@ -2079,31 +2080,80 @@ test('Plan settings: the earlier Home settings (ui.home) move to ui.plan once, l
   both.ui.plan.dials = { p1: 120000 };
   const b = S.sanitize(both, profile(), DS);
   assert.deepEqual(b.state.ui.plan.dials, { p1: 120000, savings: 1000 });
+  assert.deepEqual(b.state.ui.plan.legacyDials, { card: 0, bank: 187612 }, 'the card amount already waiting is kept');
   assert.equal(b.state.ui.plan.baselineMonths, 6, 'the plan’s own setting is kept');
-  assert.ok(hasNote(b.notes, /already had its own p1, which were kept/));
+  assert.ok(hasNote(b.notes, /already had its own p1, card, which were kept/));
   // A blank Home (nothing set) moves its two settings and creates no dials.
   const blank = JSON.parse(JSON.stringify(base()));
   delete blank.ui.plan;
   blank.ui.home = { inCents: null, p1InCents: null, p2InCents: null, outCents: null, savedCents: null, cardCents: null, bankCents: null, baselineMonths: 12, fundingWho: 'both', chartView: 'money', horizon: 24 };
   const bl = S.sanitize(blank, profile(), DS);
   assert.deepEqual(bl.state.ui.plan.dials, {});
+  assert.equal(bl.state.ui.plan.legacyDials, undefined);
   assert.equal(bl.state.ui.plan.horizon, 24);
 });
 
-test('Plan settings: card and bank amounts set before spending was grouped are removed once, with a migration note', () => {
+test('Plan settings: card and bank amounts set before spending was grouped wait in ui.plan.legacyDials (through a workbook too), with a migration note', () => {
   const raw = JSON.parse(JSON.stringify(base()));
   raw.ui.plan.dials = { card: 88000, bank: -1500, savings: 2500, p2: 1 };
   const r = S.sanitize(raw, profile(), DS);
   assert.deepEqual(r.state.ui.plan.dials, { savings: 2500, p2: 1 }, 'the other dials stay');
+  assert.deepEqual(r.state.ui.plan.legacyDials, { card: 88000, bank: -1500 }, 'kept, signed, to be carried over');
   const note = r.notes.find(n => /^ui\.plan\.dials: /.test(n));
-  assert.equal(note, 'ui.plan.dials: card spending $880.00 and bank spending −$15.00 set on the plan screen were removed. Spending is now planned as essentials, flexible and irregular, and card and bank spending are worked out from those, so these amounts could not be carried over. Set the new dials on the plan screen.');
+  assert.equal(note, 'ui.plan.dials: card spending $880.00 and bank spending −$15.00 set on the plan screen will be carried over to essentials, flexible and irregular spending the next time Plan opens (card and bank spending are now worked out from those).');
   assert.ok(r.state.meta.migrationNotes.includes(note), 'kept in meta');
   const again = S.sanitize(r.state, profile(), DS);
   assert.deepEqual(again.state, r.state, 'once only');
   assert.deepEqual(again.notes, []);
+  // Through a workbook export and import, still waiting.
+  const wb = S.importWorkbook(S.exportWorkbook(r.state, { now: NOW }), profile(), DS);
+  assert.deepEqual(wb.state.ui.plan.legacyDials, { card: 88000, bank: -1500 });
+  assert.deepEqual(wb.state.ui.plan.dials, { savings: 2500, p2: 1 });
+  // One amount; a newer card dial replaces the one waiting; a blank one is simply removed; a non-amount is named.
   const one = JSON.parse(JSON.stringify(base()));
   one.ui.plan.dials = { bank: 0 };
-  assert.ok(hasNote(S.sanitize(one, profile(), DS).notes, /^ui\.plan\.dials: bank spending \$0\.00 set on the plan screen was removed\..*this amount could not be carried over/));
+  assert.equal(S.sanitize(one, profile(), DS).notes.find(n => /^ui\.plan\.dials: /.test(n)), 'ui.plan.dials: bank spending $0.00 set on the plan screen will be carried over to essentials, flexible and irregular spending the next time Plan opens (card and bank spending are now worked out from those).');
+  const newer = JSON.parse(JSON.stringify(r.state));
+  newer.ui.plan.dials.card = 91000;
+  assert.deepEqual(S.sanitize(newer, profile(), DS).state.ui.plan.legacyDials, { card: 91000, bank: -1500 });
+  const blank = JSON.parse(JSON.stringify(base()));
+  blank.ui.plan.dials = { card: null, bank: 'lots' };
+  const bl = S.sanitize(blank, profile(), DS);
+  assert.equal(bl.state.ui.plan.legacyDials, undefined);
+  assert.deepEqual(bl.state.ui.plan.dials, {});
+  assert.equal(bl.notes.find(n => /^ui\.plan\.dials: /.test(n)), 'ui.plan.dials: bank spending "lots" set on the plan screen was not an amount and was dropped.');
+  // A damaged legacyDials keeps its amounts only; none left: removed.
+  const damaged = JSON.parse(JSON.stringify(base()));
+  damaged.ui.plan.legacyDials = { card: 'x', bank: 5000, other: 1 };
+  const d = S.sanitize(damaged, profile(), DS);
+  assert.deepEqual(d.state.ui.plan.legacyDials, { bank: 5000 });
+  for (const re of [/ui\.plan\.legacyDials\.card/, /ui\.plan\.legacyDials\.other: not part of the saved budget format/]) assert.ok(hasNote(d.notes, re), String(re));
+  damaged.ui.plan.legacyDials = 'x';
+  assert.equal(S.sanitize(damaged, profile(), DS).state.ui.plan.legacyDials, undefined);
+  // Written and removed through paths.
+  let st = S.setPath(base(), 'ui.plan.legacyDials.card', 420000);
+  assert.deepEqual(st.ui.plan.legacyDials, { card: 420000 });
+  assert.throws(() => S.setPath(st, 'ui.plan.legacyDials.card', 1.5), isValidationError(/whole cents/));
+  st = S.setPath(st, 'ui.plan.legacyDials', undefined);
+  assert.equal(st.ui.plan.legacyDials, undefined, 'an optional field is removed by writing undefined');
+  assert.ok(!('legacyDials' in st.ui.plan));
+});
+
+test('Plan settings: the card part kept with a direct spending amount (ui.plan.cardSplit) is validated', () => {
+  let st = S.setPath(base(), 'ui.plan.cardSplit.essentials', { cents: 320000, card: 120000 });
+  st = S.setPath(st, 'ui.plan.cardSplit.irregular', { cents: -500, card: -500 });
+  assert.deepEqual(st.ui.plan.cardSplit, { essentials: { cents: 320000, card: 120000 }, irregular: { cents: -500, card: -500 } });
+  assert.deepEqual(S.sanitize(JSON.parse(JSON.stringify(st)), profile(), DS).state.ui.plan.cardSplit, st.ui.plan.cardSplit, 'kept through a save');
+  assert.throws(() => S.setPath(st, 'ui.plan.cardSplit.card', { cents: 1, card: 1 }), isValidationError(/A card part can be kept for: essentials, flexible, irregular/));
+  assert.throws(() => S.setPath(st, 'ui.plan.cardSplit.flexible', { cents: 1 }), isValidationError());
+  assert.throws(() => S.setPath(st, 'ui.plan.cardSplit.flexible', { cents: 1, card: 0.5 }), isValidationError(/whole cents/));
+  assert.deepEqual(Object.keys(S.setPath(st, 'ui.plan.cardSplit.essentials', undefined).ui.plan.cardSplit), ['irregular']);
+  assert.equal(base().ui.plan.cardSplit, undefined, 'absent until needed');
+  const raw = JSON.parse(JSON.stringify(st));
+  raw.ui.plan.cardSplit = { essentials: { cents: 1, card: 1 }, flexible: { cents: 2 }, bank: { cents: 1, card: 1 }, irregular: { cents: 1, card: 1, x: 2 } };
+  const r = S.sanitize(raw, profile(), DS);
+  assert.deepEqual(r.state.ui.plan.cardSplit, { essentials: { cents: 1, card: 1 } });
+  assert.ok(hasNote(r.notes, /ui\.plan\.cardSplit: dropped card parts of plan amounts that were not valid \("flexible", "bank", "irregular"\)/));
 });
 
 test('Plan settings: groups, one-time costs left out and the Trends chart are saved and validated', () => {

@@ -709,7 +709,7 @@ test('stable regular bills plan at their latest charge; the average is kept besi
   assert.equal(changed.plan.out.bank, 150000 + power.avgCents);
 });
 
-test('state: the earlier Home settings become ui.plan once, and the plan screen reads them (card and bank amounts cannot be carried over)', () => {
+test('state: the earlier Home settings become ui.plan once, and the plan screen reads them (the card amount is carried over to the spending dials)', () => {
   const ds = household();
   const raw = JSON.parse(JSON.stringify(E.state.defaults(null, ds)));
   delete raw.ui.plan;
@@ -719,12 +719,17 @@ test('state: the earlier Home settings become ui.plan once, and the plan screen 
   assert.deepEqual(twice.state, once.state);
   assert.equal(once.state.ui.home, undefined);
   assert.deepEqual(once.state.ui.plan.dials, { p1: 410000, savings: -7525 });
-  const r = T.build({ txns: L.applyEdits(ds, {}), dataset: ds, plan: Object.assign({}, once.state.plan, { people: PEOPLE }), settings: once.state.ui.plan, today: '2026-07-03' });
+  assert.deepEqual(once.state.ui.plan.legacyDials, { card: 88000 });
+  const build = st => T.build({ txns: L.applyEdits(ds, {}), dataset: ds, plan: Object.assign({}, st.plan, { people: PEOPLE }), settings: st.ui.plan, today: '2026-07-03' });
+  const r = build(once.state);
   assert.deepEqual(['p1', 'savings', 'essentials', 'flexible'].map(k => [r.dialsByKey[k].source, r.dialsByKey[k].planCents]),
-    [['direct', 410000], ['direct', -7525], ['baseline', r.dialsByKey.essentials.baselineCents], ['baseline', r.dialsByKey.flexible.baselineCents]]);
+    [['direct', 410000], ['direct', -7525], ['baseline', r.dialsByKey.essentials.baselineCents], ['baseline', r.dialsByKey.flexible.baselineCents]], 'not applied until carried over');
   assert.equal(r.dialsByKey.card, undefined, 'card is not a dial');
-  assert.equal(r.baseline.count, 3);
-  assert.equal(r.horizon, 24);
+  assert.deepEqual(r.migration.dials.from, { card: 88000 });
+  const r2 = build(T.migrateDials(once.state, r));
+  assert.equal(r2.plan.out.card, 88000, 'carried over: card spending is what was set');
+  assert.equal(r2.baseline.count, 3);
+  assert.equal(r2.horizon, 24);
 });
 
 test('build needs today and the data set; settings fall back to the defaults', () => {
@@ -734,7 +739,10 @@ test('build needs today and the data set; settings fall back to the defaults', (
   assert.deepEqual(T.settings({ horizon: 36, baselineMonths: 'all', dials: { essentials: 1.5, flexible: -4 }, rows: { a: { included: false, x: 1 }, b: {} },
     groups: { Pets: 'essentials', 'merchant:Bayside Club': 'flexible', Travel: 'sometimes' }, irregularOff: { t1: true, t2: false }, trends: { series: ['card', 'card', 'nope', 'in-p2'], ma: 4 } }),
   { baselineMonths: 'all', horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: { flexible: -4 }, rows: { a: { included: false } }, hidden: null,
-    groups: { Pets: 'essentials', 'merchant:Bayside Club': 'flexible' }, irregularOff: { t1: true }, trends: { series: ['card', 'in-p2'], ma: 3, trend: true } });
+    groups: { Pets: 'essentials', 'merchant:Bayside Club': 'flexible' }, irregularOff: { t1: true }, legacyDials: {}, cardSplit: {}, trends: { series: ['card', 'in-p2'], ma: 3, trend: true } });
+  // A card or bank amount still among the dials (not yet checked by state.sanitize) waits to be carried over, and is newer.
+  assert.deepEqual(T.settings({ dials: { card: 5000, essentials: 7 }, legacyDials: { card: 1, bank: 2, x: 3 }, cardSplit: { essentials: { cents: 7, card: 3 }, flexible: { cents: 1 }, card: { cents: 1, card: 1 } } }),
+    Object.assign(T.settings({}), { dials: { essentials: 7 }, legacyDials: { card: 5000, bank: 2 }, cardSplit: { essentials: { cents: 7, card: 3 } } }));
   assert.equal(T.settings(undefined).hidden, null, 'never chosen');
   assert.deepEqual(T.settings(undefined).trends, { series: ['card'], ma: 3, trend: true });
   assert.equal(T.settings({ mode: 'trends' }).mode, 'trends');
@@ -1199,8 +1207,11 @@ test('row changes saved under the earlier card and bank dials still apply to the
   const next = T.migrateRows(state, r);
   assert.deepEqual(Object.keys(next.ui.plan.rows).sort(), [lumen.id, mortgage.id].sort());
   assert.deepEqual(next.ui.plan.rows[lumen.id], { included: false });
-  assert.ok(next.meta.migrationNotes.includes(r.migration.note));
-  assert.match(r.migration.note, /^ui\.plan\.rows: spending is now planned as essentials, flexible and irregular\. 2 changes to card and bank spending rows now apply to the same rows there\. 2 changes to card and bank spending rows could not be matched/);
+  assert.ok(next.meta.migrationNotes.includes(r.migration.rowsNote));
+  assert.match(r.migration.rowsNote, /^ui\.plan\.rows: spending is now planned as essentials, flexible and irregular\. 2 changes to card and bank spending rows now apply to the same rows there\. 2 changes to card and bank spending rows could not be matched/);
+  assert.equal(r.migration.note, r.migration.rowsNote.replace(/^ui\.plan\.rows: /, ''), 'the note to show, without the path');
+  assert.equal(r.migration.dials, null, 'no card or bank amount waiting');
+  assert.equal(T.migrateDials(next, r), next, 'nothing for migrateDials to do');
   const r2 = build(next);
   assert.equal(r2.migration, null);
   assert.deepEqual([r2.dialsByKey.flexible.planCents, r2.dialsByKey.essentials.planCents], [r.dialsByKey.flexible.planCents, r.dialsByKey.essentials.planCents], 'the same plan after the move');
@@ -1208,4 +1219,164 @@ test('row changes saved under the earlier card and bank dials still apply to the
   // Resetting a dial with the timeline also clears the earlier changes its rows use.
   const reset = T.resetDial(state, 'flexible', r);
   assert.deepEqual(Object.keys(reset.ui.plan.rows).sort(), [mortgageOld, otherOld, goneOld].sort());
+});
+
+// ------------------------------------------------------------------ amounts set for the earlier card and bank dials
+
+const SPEND = ['essentials', 'flexible', 'irregular'];
+/** A state with amounts waiting for the earlier card/bank dials, and a build for it. */
+function legacyRig(ds, legacy, extra = {}) {
+  const st = E.state.defaults(null, ds);
+  st.ui.plan = Object.assign({}, st.ui.plan, extra, { legacyDials: legacy });
+  if (extra.dials) st.ui.plan.dials = extra.dials;
+  const build = s => T.build({ txns: L.applyEdits(ds, s.ledgerEdits), dataset: ds, plan: Object.assign({}, s.plan, { people: PEOPLE }), settings: s.ui.plan, today: '2026-07-03' });
+  return { st, build };
+}
+const baseParts = (r, side) => SPEND.map(k => r.dialsByKey[k][side === 'card' ? 'baselineCardCents' : 'baselineBankCents']);
+const sum = list => list.reduce((s, v) => s + v, 0);
+
+test('the earlier card amount is carried over by scaling the card part of the three spending dials: they add up to it exactly, remainder included', () => {
+  const ds = household({ extra: [spend('card', '2026-04-18', 129900, 'Summit Appliance', 'Electronics')] });
+  const plain = legacyRig(ds, {});
+  const r0 = plain.build(plain.st);
+  const card = baseParts(r0, 'card'), bank = baseParts(r0, 'bank');
+  assert.ok(card.every(v => v > 0), 'every dial has a card part here');
+  const C = sum(card), B = sum(bank);
+  // An amount whose proportional shares do not round to it: the remainder has somewhere to go.
+  let X = 420000;
+  while (sum(card.map(c => Math.round(c * X / C))) === X) X += 1;
+  const { st, build } = legacyRig(ds, { card: X });
+  const r = build(st);
+  const mig = r.migration.dials;
+  assert.deepEqual(mig.from, { card: X });
+  assert.deepEqual(mig.skipped, []);
+  const parts = SPEND.map(k => mig.parts[k].card);
+  assert.equal(sum(parts), X, 'the card parts add up to the amount set, to the cent');
+  const big = card.indexOf(Math.max(...card));
+  SPEND.forEach((k, i) => {
+    const exact = card[i] * X / C;
+    if (i === big) assert.ok(Math.abs(parts[i] - exact) < 3, k + ' takes the remainder');
+    else assert.equal(parts[i], Math.round(exact), k);
+    assert.equal(mig.parts[k].bank, bank[i], k + ': the bank part stays at its baseline');
+    assert.equal(mig.to[k], bank[i] + parts[i], k);
+  });
+  assert.notEqual(parts[big], Math.round(card[big] * X / C), 'the remainder went to the largest card part');
+  assert.equal(mig.note, 'Your earlier card spending setting of ' + E.money.format(X) + ' was carried over by scaling the card part of Essentials, Flexible and Irregular (they now add up to it); adjust them individually from here.');
+  assert.equal(r.migration.note, mig.note);
+  assert.equal(r.migration.rowsNote, null);
+  // Applied: three direct amounts, whose card parts are the ones worked out.
+  const next = T.migrateDials(st, r);
+  assert.deepEqual(next.ui.plan.dials, Object.fromEntries(SPEND.map(k => [k, mig.to[k]])));
+  assert.equal(next.ui.plan.legacyDials, undefined);
+  assert.deepEqual(next.ui.plan.cardSplit, Object.fromEntries(SPEND.map(k => [k, { cents: mig.to[k], card: mig.parts[k].card }])));
+  assert.ok(next.meta.migrationNotes.includes(mig.note));
+  const r2 = build(next);
+  assert.deepEqual(SPEND.map(k => [r2.dialsByKey[k].source, r2.dialsByKey[k].cardCents, r2.dialsByKey[k].bankCents]), SPEND.map((k, i) => ['direct', parts[i], bank[i]]));
+  assert.deepEqual([r2.plan.out.card, r2.plan.out.bank], [X, B]);
+  assert.equal(sum(SPEND.map(k => r2.dialsByKey[k].planCents)), X + B);
+  // Once: nothing is waiting any more.
+  assert.equal(r2.migration, null);
+  assert.equal(T.migrateDials(next, r2), next);
+  assert.equal(T.migrateDials(next, r), next, 'an older build changes nothing either');
+  // Moving a dial afterwards: its kept card part no longer applies.
+  const moved = T.setDial(next, 'essentials', mig.to.essentials + 1000);
+  assert.equal(moved.ui.plan.cardSplit.essentials, undefined);
+  const r3 = build(moved);
+  assert.equal(r3.dialsByKey.essentials.cardCents, Math.round((mig.to.essentials + 1000) * r3.dialsByKey.essentials.cardShare));
+  assert.deepEqual(T.resetPlan(next).ui.plan.cardSplit, {}, 'reset clears the kept card parts');
+  assert.deepEqual(T.resetPlan(next).ui.plan.dials, {});
+});
+
+test('the earlier bank amount scales the bank parts; card and bank together each add up to what was set', () => {
+  const ds = household();
+  const r0 = legacyRig(ds, {}).build(legacyRig(ds, {}).st);
+  const card = baseParts(r0, 'card'), bank = baseParts(r0, 'bank');
+  const Y = 180001;
+  const one = legacyRig(ds, { bank: Y });
+  const rb = one.build(one.st);
+  const mb = rb.migration.dials;
+  assert.equal(sum(SPEND.map(k => mb.parts[k].bank)), Y);
+  assert.deepEqual(SPEND.map(k => mb.parts[k].card), card, 'card parts stay at their baseline');
+  assert.deepEqual(bank.map(b => b > 0), [true, false, false], 'only essentials is paid from the bank here…');
+  assert.deepEqual(SPEND.map(k => mb.parts[k].bank), [Y, 0, 0], '…so it takes the whole bank amount');
+  assert.equal(mb.note, 'Your earlier bank spending setting of $1,800.01 was carried over by scaling the bank part of Essentials, Flexible and Irregular (they now add up to it); adjust them individually from here.');
+  const rb2 = one.build(T.migrateDials(one.st, rb));
+  assert.deepEqual([rb2.plan.out.card, rb2.plan.out.bank], [sum(card), Y]);
+  // Both.
+  const X = 333333;
+  const two = legacyRig(ds, { card: X, bank: Y });
+  const r = two.build(two.st);
+  const m = r.migration.dials;
+  assert.deepEqual([sum(SPEND.map(k => m.parts[k].card)), sum(SPEND.map(k => m.parts[k].bank))], [X, Y]);
+  assert.equal(m.note, 'Your earlier card spending setting of $3,333.33 and bank spending setting of $1,800.01 were carried over by scaling the card and bank parts of Essentials, Flexible and Irregular (they now add up to them); adjust them individually from here.');
+  const r2 = two.build(T.migrateDials(two.st, r));
+  assert.deepEqual([r2.plan.out.card, r2.plan.out.bank], [X, Y]);
+  assert.deepEqual(SPEND.map(k => r2.dialsByKey[k].planCents), SPEND.map(k => m.to[k]));
+});
+
+test('no card spending in the baseline: the whole card amount goes to Flexible; a dial already set is left alone and named', () => {
+  // Only bank-paid spending: a mortgage and a utility.
+  const txns = [];
+  for (const m of E.months.range('2025-10', '2026-06')) {
+    txns.push(spend('chk', `${m}-01`, 145000, 'Westbrook Home Loans', 'Mortgage'));
+    txns.push(spend('chk', `${m}-15`, 9900, 'Copperline Power', 'Electric'));
+  }
+  const ds = dataset(txns, { from: '2025-10-01', to: '2026-06-30' });
+  const { st, build } = legacyRig(ds, { card: 50000 });
+  const r = build(st);
+  const m = r.migration.dials;
+  assert.deepEqual(SPEND.map(k => m.parts[k].card), [0, 50000, 0]);
+  assert.deepEqual(m.to, { essentials: r.dialsByKey.essentials.baselineBankCents, flexible: 50000, irregular: 0 });
+  assert.equal(m.note, 'Your earlier card spending setting of $500.00 was carried over by putting the card amount on Flexible (there was no card spending in the baseline to scale); adjust them individually from here.');
+  const r2 = build(T.migrateDials(st, r));
+  assert.deepEqual([r2.plan.out.card, r2.plan.out.bank, r2.dialsByKey.flexible.cardCents], [50000, 145000 + 9900, 50000]);
+  // Flexible already set directly: left alone, and the note says so (and no longer claims a total).
+  const set = legacyRig(household(), { card: 400000 }, { dials: { flexible: 61000 } });
+  const rs = set.build(set.st);
+  assert.deepEqual(rs.migration.dials.skipped, ['flexible']);
+  assert.equal(rs.migration.dials.to.flexible, null);
+  assert.equal(rs.migration.dials.note, 'Your earlier card spending setting of $4,000.00 was carried over by scaling the card part of Essentials, Flexible and Irregular; adjust them individually from here. Flexible was already set by you and was left as it is.');
+  const after = T.migrateDials(set.st, rs);
+  assert.equal(after.ui.plan.dials.flexible, 61000);
+  assert.equal(after.ui.plan.cardSplit.flexible, undefined);
+  assert.deepEqual(Object.keys(after.ui.plan.cardSplit).sort(), ['essentials', 'irregular']);
+  // All three already set: nothing to carry over, said plainly; the waiting amount is still cleared.
+  const all = legacyRig(household(), { bank: 1 }, { dials: { essentials: 1, flexible: 2, irregular: 3 } });
+  const ra = all.build(all.st);
+  assert.equal(ra.migration.dials.note, 'Your earlier bank spending setting of $0.01 was not carried over: Essentials, Flexible and Irregular were already set by you.');
+  const done = T.migrateDials(all.st, ra);
+  assert.deepEqual([done.ui.plan.dials, done.ui.plan.legacyDials], [{ essentials: 1, flexible: 2, irregular: 3 }, undefined]);
+});
+
+test('no complete month yet: what was set goes to Flexible; a card dial saved without state.sanitize is carried over and removed too', () => {
+  const half = dataset([spend('card', '2026-06-05', 4200, 'Harbor Grocer', 'Groceries')], { from: '2026-06-01', to: '2026-06-15' });
+  const { st, build } = legacyRig(half, { card: 1000 });
+  const r = build(st);
+  assert.equal(r.baseline.count, 0);
+  assert.deepEqual(r.migration.dials.to, { essentials: null, flexible: 1000, irregular: null });
+  assert.equal(r.migration.dials.note, 'Your earlier card spending setting of $10.00 was carried over to Flexible (there is no baseline yet to scale it by); adjust it from here.');
+  assert.deepEqual(T.migrateDials(st, r).ui.plan.dials, { flexible: 1000 });
+  // A budget whose dials still hold card (set in memory, as an older page would have saved it).
+  const ds = household();
+  const raw = E.state.defaults(null, ds);
+  raw.ui.plan = Object.assign({}, raw.ui.plan, { dials: { card: 300000, savings: 100 } });
+  const b = T.build({ txns: L.applyEdits(ds, {}), dataset: ds, plan: Object.assign({}, raw.plan, { people: PEOPLE }), settings: raw.ui.plan, today: '2026-07-03' });
+  assert.deepEqual(b.migration.dials.from, { card: 300000 });
+  const next = T.migrateDials(raw, b);
+  assert.deepEqual(Object.keys(next.ui.plan.dials).sort(), ['essentials', 'flexible', 'irregular', 'savings']);
+  assert.equal(next.ui.plan.dials.card, undefined, 'the old dial is gone');
+});
+
+test('row changes and dial amounts from the earlier card dial are carried over together: one note to show, each recorded once', () => {
+  const ds = household();
+  const oldId = 'card-m-' + E.util.hash(['Subscriptions', 'Lumen Streaming'].join('\u0001'));
+  const { st: s0, build } = legacyRig(ds, { card: 250000 });
+  const st = E.state.setPath(s0, 'ui.plan.rows.' + oldId, { included: false });
+  const r = build(st);
+  assert.ok(r.migration.rowsNote && r.migration.dials);
+  assert.equal(r.migration.note, r.migration.rowsNote.replace(/^ui\.plan\.rows: /, '') + ' ' + r.migration.dials.note);
+  const next = T.migrateDials(T.migrateRows(st, r), r);
+  assert.ok(next.meta.migrationNotes.includes(r.migration.rowsNote) && next.meta.migrationNotes.includes(r.migration.dials.note));
+  assert.equal(build(next).migration, null);
+  assert.equal(build(next).plan.out.card, 250000, 'the direct amounts win over the row change, as the card dial did');
 });

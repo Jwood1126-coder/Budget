@@ -956,6 +956,46 @@ module.exports = [
     },
   },
   {
+    name: 'card spending set under the earlier card dial is carried over to the three spending dials, once, with a note',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      const spend = ['essentials', 'flexible', 'irregular'];
+      const before = await timeline(page);
+      assert.ok(spend.every(k => dialOf(before, k).source === 'baseline'));
+      const bankBase = spend.reduce((s, k) => s + dialOf(before, k).bankCents, 0);
+      await page.evaluate(() => {
+        const H = window.HouseholdBudget;
+        const st = H.getState();
+        st.ui.plan.dials = Object.assign({}, st.ui.plan.dials, { card: 420000 });
+        H.setState(st);
+      });
+      await page.waitForFunction(keys => {
+        const p = window.HouseholdBudget.getState().ui.plan;
+        return p.dials.card === undefined && !p.legacyDials && keys.every(k => Number.isInteger(p.dials[k]));
+      }, spend);
+      const note = 'Your earlier card spending setting of $4,200.00 was carried over by scaling the card part of Essentials, Flexible and Irregular (they now add up to it); adjust them individually from here.';
+      assert.equal((await page.textContent('#toast')).trim(), note);
+      assert.ok((await state(page)).meta.migrationNotes.includes(note), 'noted in the budget');
+      const exp = await timeline(page);
+      assert.equal(exp.changed, true);
+      for (const k of spend) {
+        assert.equal(dialOf(exp, k).source, 'direct', k);
+        assert.match((await page.textContent(`#plan-dial-${k}-base`)).trim(), / · set by you$/, k + ' shows it was set');
+        await page.waitForFunction(([id, v]) => document.getElementById(id).value === v, [`plan-dial-${k}`, boxText(dialOf(exp, k).planCents)]);
+      }
+      assert.equal(spend.reduce((s, k) => s + dialOf(exp, k).cardCents, 0), 420000, 'the card parts add up to the amount set');
+      assert.equal(spend.reduce((s, k) => s + dialOf(exp, k).planCents, 0), 420000 + bankBase, 'the bank parts stay at their baseline');
+      assert.equal(exp.plan.out.card, 420000);
+      // Once: nothing is left to carry over.
+      await page.reload();
+      await page.waitForSelector('#plan-root');
+      const again = await timeline(page);
+      assert.deepEqual(spend.map(k => dialOf(again, k).planCents), spend.map(k => dialOf(exp, k).planCents));
+      assert.equal((await state(page)).meta.migrationNotes.filter(n => n === note).length, 1);
+    },
+  },
+  {
     name: 'money in starts from the pay saved in Budget; without it the average is marked not confirmed',
     async run(t) {
       const { page, assert } = t;
