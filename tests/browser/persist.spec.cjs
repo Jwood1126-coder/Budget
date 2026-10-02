@@ -305,7 +305,7 @@ module.exports = [
       const small = [];
       for (const route of ['#/forecast', '#/budget?section=bills', '#/review?queue=uncertain', '#/overview']) {
         await t.open(route);
-        small.push(...await page.$$eval('#view .btn, #view .segmented label, #view .bt-remove, #view input[type="range"], #view .home-amount input', els => els
+        small.push(...await page.$$eval('#view .btn, #view .segmented label, #view .bt-remove, #view input[type="range"], #view .plan-amount input', els => els
           .filter(el => el.getBoundingClientRect().width > 0)
           .map(el => ({ text: el.textContent.trim().slice(0, 30), h: Math.round(el.getBoundingClientRect().height) }))
           .filter(x => x.h < 40)).then(xs => xs.map(x => route + ' ' + x.text + ' ' + x.h + 'px')));

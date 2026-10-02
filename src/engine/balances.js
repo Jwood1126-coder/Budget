@@ -5,7 +5,11 @@
  * History: the balance of each joint cash account (checking, savings) at the end of every month.
  *   - "bank": the export's running-balance column gives the balance at the end of each day that
  *     has rows; other days follow from the transactions in between.
- *   - "entered": one balance the household typed in (plan.balances.accounts + accountsAsOf).
+ *   - "entered": one balance the household typed in (plan.balances.accounts, true at the end of
+ *     its own date: plan.balances.accountDates, else accountsAsOf). It is used at exactly that
+ *     date, never moved. Days between the end of the account's export and that date (or between
+ *     that date and the start of the export) are a "gap": no transactions are assumed in them,
+ *     and the account's note says so.
  *   - "change": neither is available, so the line shows the change since the account's first
  *     covered day (a real pattern, but not a real balance), and says so.
  *   A month-end value is null when the days between it and the nearest known balance are not
@@ -26,12 +30,6 @@
 
   const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
   const isCents = v => Number.isSafeInteger(v);
-  /**
-   * An entered balance dated up to this many days after the account's export ends (or before it
-   * starts) is used at that end: people type today's balance, a few days after their last export.
-   * What moved in between is not in the data, and the note says so.
-   */
-  const ENTERED_GAP_DAYS = 45;
 
   /** Joint cash accounts in the data (cards and loans are not balances you can spend from). */
   function cashAccounts(dataset) {
@@ -69,7 +67,26 @@
     return byRow[0].newestFirst ? byRow[0].balanceCents : byRow[byRow.length - 1].balanceCents;
   }
 
-  /** Known balances of one account: [{ day, cents, source }] sorted by day. */
+  /**
+   * The days between an entered balance and the account's export, when the balance is dated
+   * after the export ends or before the day it starts: { side, from, to, days } or null.
+   */
+  function gapFor(account, day) {
+    const ranges = Array.isArray(account.coverage) ? account.coverage : [];
+    if (!ranges.length) return null;
+    const first = Math.min(...ranges.map(r => E.dates.dayNumber(r.start)));
+    const last = Math.max(...ranges.map(r => E.dates.dayNumber(r.end)));
+    if (day > last) return { side: 'after', from: E.dates.fromDayNumber(last + 1), to: E.dates.fromDayNumber(day), days: day - last };
+    if (day < first - 1) return { side: 'before', from: E.dates.fromDayNumber(day + 1), to: E.dates.fromDayNumber(first - 1), days: first - 1 - day };
+    return null;
+  }
+
+  /**
+   * Known balances of one account: [{ day, cents, source, gap? }] sorted by day.
+   * The export's running balances come first. An entered balance is used at exactly its date
+   * when the export has no running balance, or when it is dated after the last one (a newer
+   * fact); otherwise the export's own figure is used. `rows` need a `day` (dates.dayNumber).
+   */
   function anchorsFor(account, rows, entered, asOf) {
     const out = [];
     const withBalance = rows.filter(t => isCents(t.balanceCents));
@@ -93,36 +110,57 @@
         byDay.get(d).push({ balanceCents: t.balanceCents, amountCents: t.amountCents, sourceRow: t.sourceRow, newestFirst: newest.get(t.sourceFile || '') });
       }
       for (const [day, list] of byDay) out.push({ day, cents: endOfDay(list), source: 'bank' });
-    } else if (isCents(entered) && E.dates.isDate(asOf)) {
-      let day = E.dates.dayNumber(asOf);
-      let gap = null;
-      const ranges = Array.isArray(account.coverage) ? account.coverage : [];
-      if (ranges.length) {
-        const first = Math.min(...ranges.map(r => E.dates.dayNumber(r.start)));
-        const last = Math.max(...ranges.map(r => E.dates.dayNumber(r.end)));
-        if (day > last && day - last <= ENTERED_GAP_DAYS) { gap = { asOf, usedAt: E.dates.fromDayNumber(last) }; day = last; }
-        else if (day < first - 1 && first - 1 - day <= ENTERED_GAP_DAYS) { gap = { asOf, usedAt: E.dates.fromDayNumber(first - 1) }; day = first - 1; }
-      }
-      out.push({ day, cents: entered, source: 'entered', gap });
+    }
+    if (isCents(entered) && E.dates.isDate(asOf)) {
+      const day = E.dates.dayNumber(asOf);
+      const lastBank = out.length ? Math.max(...out.map(a => a.day)) : null;
+      if (lastBank === null || day > lastBank) out.push({ day, cents: entered, source: 'entered', gap: gapFor(account, day) });
     }
     return out.sort((a, b) => a.day - b.day);
+  }
+
+  /** Merge date ranges into sorted day blocks [{ s, e }] (touching ranges join). */
+  function blocksOf(ranges) {
+    const spans = ranges.map(r => ({ s: E.dates.dayNumber(r.start), e: E.dates.dayNumber(r.end) })).filter(b => b.s !== null && b.e !== null && b.e >= b.s).sort((a, b) => a.s - b.s);
+    const out = [];
+    for (const b of spans) {
+      const last = out[out.length - 1];
+      if (last && b.s <= last.e + 1) last.e = Math.max(last.e, b.e);
+      else out.push({ s: b.s, e: b.e });
+    }
+    return out;
+  }
+
+  /** The sentence an account's note uses for a gap between its export and an entered balance. */
+  function gapText(gap) {
+    const span = gap.days === 1 ? 'The day ' + E.dates.label(gap.from) + ' is' : 'The ' + gap.days + ' days from ' + E.dates.label(gap.from) + ' to ' + E.dates.label(gap.to) + ' are';
+    return (gap.side === 'after' ? 'Your export ends ' + E.dates.label(E.dates.addDays(gap.from, -1)) : 'Your export starts ' + E.dates.label(E.dates.addDays(gap.to, 1)))
+      + ', the balance is dated ' + E.dates.label(gap.side === 'after' ? gap.to : E.dates.addDays(gap.from, -1)) + '. '
+      + span + ' not in your data: no transactions are assumed in them.';
   }
 
   /**
    * Month-end balances per joint cash account and per group.
    * @param {object[]} txns effective transactions (ledger.applyEdits, no what-if)
    * @param {object} dataset normalized dataset
-   * @param {{ entered?: object, asOf?: string|null, months?: string[] }} opts entered = { [accountId]: cents|null }
+   * @param {{ entered?: object, asOf?: string|null, enteredAsOf?: object, months?: string[] }} opts
+   *   entered = { [accountId]: cents|null }; enteredAsOf = { [accountId]: 'YYYY-MM-DD' } (each
+   *   account's own date; asOf for accounts without one)
+   * Each account also reports `anchor` (its latest known balance { date, cents, source }), `gap`
+   * (days assumed empty between its export and an entered balance), and `first` / `last`: the
+   * earliest and latest days whose end-of-day balance is known ({ date, cents }), or null.
    */
   function history(txns, dataset, opts = {}) {
     const months = opts.months || E.ledger.months(dataset);
     const entered = isObj(opts.entered) ? opts.entered : {};
+    const dates = isObj(opts.enteredAsOf) ? opts.enteredAsOf : {};
     const accounts = cashAccounts(dataset).map(a => {
       // Rows marked as duplicate copies were never real money; everything else moved the balance.
       const rows = txns.filter(t => t.accountId === a.id && t.excluded !== 'duplicate')
         .map(t => ({ ...t, day: E.dates.dayNumber(t.date) }))
         .sort((x, y) => x.day - y.day);
-      const anchors = anchorsFor(a, rows, entered[a.id], opts.asOf);
+      const asOf = E.dates.isDate(dates[a.id]) ? dates[a.id] : opts.asOf;
+      const anchors = anchorsFor(a, rows, entered[a.id], asOf);
       let source = anchors.length ? anchors[0].source : 'change';
       let base = anchors;
       if (!anchors.length) {
@@ -130,30 +168,54 @@
         const first = a.coverage.length ? Math.min(...a.coverage.map(r => E.dates.dayNumber(r.start))) : (rows.length ? rows[0].day : null);
         base = first === null ? [] : [{ day: first - 1, cents: 0, source: 'change' }];
       }
+      // The gap next to an entered balance counts as covered, with no transactions in it.
+      const enteredAnchor = anchors.find(x => x.source === 'entered') || null;
+      const gap = enteredAnchor ? enteredAnchor.gap : null;
+      const ranges = gap ? a.coverage.concat([{ start: gap.from, end: gap.to }]) : a.coverage;
       const flowBetween = (from, to) => { // sum of flows in (from, to]
         let s = 0;
         for (const t of rows) if (t.day > from && t.day <= to) s += t.amountCents;
         return s;
       };
-      const values = months.map(m => {
+      const valueAt = end => {
         if (!base.length) return null;
-        const end = E.dates.dayNumber(E.months.end(m));
         let anchor = null;
         for (const x of base) { if (x.day <= end) anchor = x; else break; }
         if (anchor) {
-          if (!coveredBetween(a.coverage, anchor.day, end)) return null;
+          if (!coveredBetween(ranges, anchor.day, end)) return null;
           return anchor.cents + flowBetween(anchor.day, end);
         }
         const after = base[0];
-        if (!coveredBetween(a.coverage, end, after.day)) return null;
+        if (!coveredBetween(ranges, end, after.day)) return null;
         return after.cents - flowBetween(end, after.day);
-      });
-      const gap = anchors.length && anchors[0].gap;
-      const note = source === 'bank' ? 'From the running balance in the bank export.'
-        : source === 'entered' ? 'From the balance you entered for ' + E.dates.label(opts.asOf) + ', worked back and forward with the transactions.'
-          + (gap ? ' Your export ' + (gap.usedAt < gap.asOf ? 'ends ' : 'starts the day after ') + E.dates.label(gap.usedAt) + ', so it is used as the balance then: anything that moved in between is not in your data.' : '')
-          : 'No balance known: shows the change since ' + (base.length ? E.dates.label(E.dates.fromDayNumber(base[0].day + 1)) : 'the first export') + ', not the balance.';
-      return { id: a.id, label: a.label, group: a.group, source, values, note, gap: gap || null };
+      };
+      const values = months.map(m => valueAt(E.dates.dayNumber(E.months.end(m))));
+      // Days with a known end-of-day balance: each anchor and the covered stretch it touches.
+      let lo = null, hi = null;
+      const blocks = blocksOf(ranges);
+      for (const x of base) {
+        const b = blocks.find(k => x.day >= k.s - 1 && x.day <= k.e);
+        const from = b ? Math.min(b.s - 1, x.day) : x.day;
+        const to = b ? Math.max(b.e, x.day) : x.day;
+        if (lo === null || from < lo) lo = from;
+        if (hi === null || to > hi) hi = to;
+      }
+      const point = d => (d === null ? null : { date: E.dates.fromDayNumber(d), cents: valueAt(d) });
+      const latest = anchors.length ? anchors[anchors.length - 1] : null;
+      const bankAndEntered = source === 'bank' && enteredAnchor;
+      const ignoredEntered = source === 'bank' && !enteredAnchor && isCents(entered[a.id]) && E.dates.isDate(asOf);
+      const note = source === 'bank'
+        ? 'From the running balance in the bank export' + (bankAndEntered ? ', and the balance you entered for ' + E.dates.label(asOf) + ' after it.' : ignoredEntered ? '. The balance you entered for ' + E.dates.label(asOf) + ' is not newer than the export’s last running balance, so the export’s own figure is used.' : '.')
+        : source === 'entered' ? 'From the balance you entered for ' + E.dates.label(asOf) + ', worked back and forward with the transactions.'
+        : 'No balance known: shows the change since ' + (base.length ? E.dates.label(E.dates.fromDayNumber(base[0].day + 1)) : 'the first export') + ', not the balance.';
+      return {
+        id: a.id, label: a.label, group: a.group, source, values,
+        note: note + (gap ? ' ' + gapText(gap) : ''),
+        gap: gap || null,
+        anchor: latest ? { date: E.dates.fromDayNumber(latest.day), cents: latest.cents, source: latest.source } : null,
+        first: anchors.length ? point(lo) : null,
+        last: anchors.length ? point(hi) : null,
+      };
     });
     const groups = {};
     for (const g of GROUPS) {
@@ -391,5 +453,5 @@
     };
   }
 
-  E.balances = { CASH_TYPES, GROUPS, ENTERED_GAP_DAYS, cashAccounts, coveredBetween, endOfDay, history, incomeAttribution, monthlyFlows, usual, comfortable, project };
+  E.balances = { CASH_TYPES, GROUPS, cashAccounts, coveredBetween, endOfDay, anchorsFor, gapFor, history, incomeAttribution, monthlyFlows, usual, comfortable, project };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

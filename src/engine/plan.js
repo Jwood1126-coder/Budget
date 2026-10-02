@@ -471,7 +471,8 @@
         ' while ' + (blocked.length === 1 ? 'their transfer' : 'their transfers') + ' to joint ' + (blocked.length === 1 ? 'is' : 'are') + ' unknown.';
     }
 
-    if (!plan.balances || !isCents(plan.balances.jointCashCents)) acc.missing.push({ id: 'jointCash', label: 'Joint cash balance not entered', area: 'balances' });
+    const anyAccountBalance = !!plan.balances && !!plan.balances.accounts && Object.values(plan.balances.accounts).some(isCents);
+    if (!plan.balances || (!isCents(plan.balances.jointCashCents) && !anyAccountBalance)) acc.missing.push({ id: 'jointCash', label: 'Joint cash balance not entered', area: 'balances' });
     for (const debt of arr(plan.debts)) {
       if (debt && !isCents(debt.balanceCents)) acc.missing.push({ id: debt.id, label: (debt.label || debt.id) + ': balance not entered', area: 'debts' });
     }

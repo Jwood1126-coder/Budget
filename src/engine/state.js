@@ -45,6 +45,7 @@
     scenarios: 20, events: 200, incomes: 12, bills: 60, savings: 30, debts: 30, personal: 2,
     compareIds: 3, targets: 200, references: 100, checklist: 200, dismissed: 500,
     ledgerEdits: 50000, history: 200, splits: 50, migrationNotes: 200, balanceAccounts: 30,
+    planDials: 20, planRows: 500, planHidden: 40,
     legacySnapshot: 200000, workbookChars: 25000000
   });
 
@@ -248,10 +249,12 @@
   ];
 
   // accounts: a balance the household entered per account id (for exports without a running
-  // balance), all true at the end of accountsAsOf.
+  // balance). accountDates: the day each of those balances is true at the end of (per account);
+  // an account without its own date uses accountsAsOf. A balance is used at exactly that date.
   const BALANCE_FIELDS = [
     ['jointCashCents', SIGNED_CENTS], ['asOf', DATE], ['note', NOTE],
-    ['accounts', rule('centsmap', { max: LIMITS.balanceAccounts, def: {} })], ['accountsAsOf', DATE]
+    ['accounts', rule('centsmap', { max: LIMITS.balanceAccounts, def: {} })], ['accountsAsOf', DATE],
+    ['accountDates', rule('datemap', { max: LIMITS.balanceAccounts, def: {} })]
   ];
 
   const SETTINGS_FIELDS = [
@@ -321,31 +324,37 @@
   const WHATIF_FIELDS = [['excludePendingReimbursements', bool(false)], ['excludeBusinessCandidates', bool(false)]];
   const WHATIF_DEFAULT = { excludePendingReimbursements: false, excludeBusinessCandidates: false };
 
-  // Home's plan: monthly amounts in whole cents (null = the baseline: the current Budget pay for
-  // each partner, the recent-month averages for the rest) and how far ahead to look.
-  //   p1InCents/p2InCents: each partner's money into joint; inCents: all money in (used when no
-  //     partner's pay can be told apart).
-  //   cardCents: net card spending (purchases minus refunds; card repayments are not spending).
-  //   bankCents: bills and other spending paid straight from the bank (mortgage included).
-  //   savedCents: net transfers into savings; negative = drawing savings down. Signed on purpose:
-  //     a drawdown must survive every save.
-  //   outCents: the earlier single "spending" amount, kept so an older saved copy loses nothing;
-  //     Home now sets card and bank spending separately.
-  //   baselineMonths: how many recent complete months the baselines average.
-  //   fundingWho: whose joint funding the "by person" chart shows.
-  //   chartView: the main chart shows money each month (who paid in, spending, savings) or balances.
-  const HOME_FIELDS = [
-    ['inCents', CENTS], ['p1InCents', CENTS], ['p2InCents', CENTS], ['outCents', CENTS], ['savedCents', SIGNED_CENTS],
-    ['cardCents', CENTS], ['bankCents', CENTS], ['baselineMonths', oneOf([3, 6, 12], 12)],
-    ['fundingWho', oneOf(['both', 'p1', 'p2'], 'both')], ['chartView', oneOf(['money', 'balances'], 'money')], ['horizon', oneOf([12, 24, 60], 24)]
+  // The plan screen (BudgetEngine.timeline): what the household set, never derived data.
+  //   baselineMonths: how many recent complete months the dial baselines average ('all' = every one).
+  //   horizon: months planned ahead (from the first month without complete data).
+  //   past: months of history shown before the plan.
+  //   mode: the main chart shows balances or money in and out each month.
+  //   coverFromSavings: in projected months, move a checking shortfall from savings (per account only).
+  //   dials: { [dialKey]: signed cents } set directly (p1, p2, inOther, card, bank, savings, other).
+  //     Signed on purpose: a savings drawdown is negative and must survive every save.
+  //   rows: { [rowId]: { included?, cents? } } changes to the card/bank drill-down rows.
+  //   hidden: chart series the household switched off; null = never chosen (the screen picks).
+  const PLAN_ROW_FIELDS = [['included', optional(rule('bool', {}))], ['cents', optional(rule('cents', { signed: true }))]];
+  const PLAN_ROW_RULE = rule('object', { fields: PLAN_ROW_FIELDS });
+  const PLAN_UI_FIELDS = [
+    ['baselineMonths', oneOf([3, 6, 12, 'all'], 12)],
+    ['horizon', oneOf([6, 12, 24, 60], 12)],
+    ['past', oneOf([6, 12, 'all'], 12)],
+    ['mode', oneOf(['balance', 'flows'], 'balance')],
+    ['coverFromSavings', bool(true)],
+    ['dials', rule('centsmap', { max: LIMITS.planDials, def: {}, noun: 'plan amounts' })],
+    ['rows', rule('rowmap', { max: LIMITS.planRows, def: {} })],
+    ['hidden', rule('keylist', { max: LIMITS.planHidden, def: null, nullable: true })]
   ];
-  const HOME_DEFAULT = { inCents: null, p1InCents: null, p2InCents: null, outCents: null, savedCents: null, cardCents: null, bankCents: null, baselineMonths: 12, fundingWho: 'both', chartView: 'money', horizon: 24 };
+  const PLAN_UI_DEFAULT = { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null };
+  /** Where each earlier Home amount (ui.home, removed) goes in ui.plan.dials. */
+  const HOME_TO_DIALS = { p1InCents: 'p1', p2InCents: 'p2', cardCents: 'card', bankCents: 'bank', savedCents: 'savings' };
 
   const UI_FIELDS = [
     ['scope', oneOf(['joint', 'household'], 'joint')],
     ['lastRoute', rule('route', { def: '#/overview' })],
     ['whatIf', rule('object', { fields: WHATIF_FIELDS, def: WHATIF_DEFAULT })],
-    ['home', rule('object', { fields: HOME_FIELDS, def: HOME_DEFAULT })],
+    ['plan', rule('object', { fields: PLAN_UI_FIELDS, def: PLAN_UI_DEFAULT })],
     ['dismissed', rule('boolmap', { max: LIMITS.dismissed, def: {} })]
   ];
 
@@ -409,7 +418,7 @@
       case 'enum': {
         let v = value;
         // Form selects deliver numbers as text ("6"); accept them for numeric choices.
-        if (typeof v === 'string' && r.values.every(x => typeof x === 'number') && /^\s*\d+\s*$/.test(v)) v = Number(v);
+        if (typeof v === 'string' && !r.values.includes(v) && /^\s*\d+\s*$/.test(v) && r.values.includes(Number(v))) v = Number(v);
         return r.values.includes(v) ? ok(v) : bad('Choose one of: ' + r.values.join(', ') + '.');
       }
       case 'bool':
@@ -451,7 +460,8 @@
       case 'route':
         return typeof value === 'string' && value.startsWith('#/') && value.length <= LIMITS.route ? ok(value) : bad('Not a page address in this app.');
       case 'centsmap': {
-        if (!isObj(value)) return bad('Expected a list of account balances.');
+        const noun = r.noun || 'balances';
+        if (!isObj(value)) return bad(r.noun ? 'Expected a list of ' + noun + '.' : 'Expected a list of account balances.');
         const out = {};
         const dropped = [];
         for (const [k, v] of Object.entries(value)) {
@@ -460,8 +470,46 @@
           if (!isValidId(key) || !okValue || Object.keys(out).length >= r.max) { dropped.push(k); continue; }
           out[key] = v;
         }
-        if (dropped.length && strict) return bad('Every balance needs an account and an amount in whole cents.');
-        return ok(out, dropped.length ? 'dropped balances that were not valid (' + dropped.slice(0, 5).map(k => JSON.stringify(k)).join(', ') + ')' : null);
+        if (dropped.length && strict) return bad(r.noun ? 'Every entry needs a short name and an amount in whole cents.' : 'Every balance needs an account and an amount in whole cents.');
+        return ok(out, dropped.length ? 'dropped ' + noun + ' that were not valid (' + dropped.slice(0, 5).map(k => JSON.stringify(k)).join(', ') + ')' : null);
+      }
+      case 'datemap': {
+        if (!isObj(value)) return bad('Expected a date for each account.');
+        const out = {};
+        const dropped = [];
+        for (const [k, v] of Object.entries(value)) {
+          const key = k.trim();
+          if (!isValidId(key) || !(v === null || E.dates.isDate(v)) || Object.keys(out).length >= r.max) { dropped.push(k); continue; }
+          out[key] = v;
+        }
+        if (dropped.length && strict) return bad('Every balance date needs an account and a date (YYYY-MM-DD).');
+        return ok(out, dropped.length ? 'dropped balance dates that were not valid (' + dropped.slice(0, 5).map(k => JSON.stringify(k)).join(', ') + ')' : null);
+      }
+      case 'rowmap': {
+        if (!isObj(value)) return bad('Expected a list of changes to plan rows.');
+        const out = {};
+        const dropped = [];
+        for (const [k, v] of Object.entries(value)) {
+          const key = k.trim();
+          const okIncluded = isObj(v) && (v.included === undefined || typeof v.included === 'boolean');
+          const okCents = isObj(v) && (v.cents === undefined || (Number.isSafeInteger(v.cents) && Math.abs(v.cents) <= E.money.MAX_INPUT_CENTS));
+          const extra = isObj(v) && Object.keys(v).some(x => x !== 'included' && x !== 'cents');
+          if (!isValidId(key) || !okIncluded || !okCents || extra || Object.keys(out).length >= r.max) { dropped.push(k); continue; }
+          const entry = {};
+          if (v.included !== undefined) entry.included = v.included;
+          if (v.cents !== undefined) entry.cents = v.cents;
+          out[key] = entry;
+        }
+        if (dropped.length && strict) return bad('Every plan row change needs a row id, and yes/no or an amount in whole cents.');
+        return ok(out, dropped.length ? 'dropped plan row changes that were not valid (' + dropped.slice(0, 5).map(k => JSON.stringify(k)).join(', ') + ')' : null);
+      }
+      case 'keylist': {
+        if (!Array.isArray(value)) return bad('Expected a list of names.');
+        const list = [];
+        for (const k of value) if (typeof k === 'string' && isValidId(k.trim()) && !list.includes(k.trim()) && list.length < r.max) list.push(k.trim());
+        const changed = list.length !== value.length || list.some((k, i) => k !== value[i]);
+        if (changed && strict) return bad('Use up to ' + r.max + ' different short names.');
+        return ok(list, changed ? 'cleaned (names that were not valid, repeated or over ' + r.max + ' removed)' : null);
       }
       case 'boolmap': {
         if (!isObj(value)) return bad('Expected a set of yes/no settings.');
@@ -690,7 +738,7 @@
     return {
       people: clone(people),
       incomes: [], bills: [], debts: [], targets: {}, savings: [], personalSpending: [],
-      balances: { jointCashCents: null, asOf: null, note: '', accounts: {}, accountsAsOf: null },
+      balances: { jointCashCents: null, asOf: null, note: '', accounts: {}, accountsAsOf: null, accountDates: {} },
       settings: { incomeTiming: 'conservative', planningBaseline: 'actual', comparisonWindow: 3 }
     };
   }
@@ -998,7 +1046,7 @@
       ledgerEdits: {},
       references: [],
       checklist: {},
-      ui: { scope: 'joint', lastRoute: '#/overview', whatIf: clone(WHATIF_DEFAULT), home: clone(HOME_DEFAULT), dismissed: {} },
+      ui: { scope: 'joint', lastRoute: '#/overview', whatIf: clone(WHATIF_DEFAULT), plan: clone(PLAN_UI_DEFAULT), dismissed: {} },
       meta
     };
   }
@@ -1039,12 +1087,57 @@
     let ui;
     if (raw.ui === undefined) ui = clone(base.ui);
     else if (!isObj(raw.ui)) { ctx.note('ui: not readable (' + preview(raw.ui) + '); reset.'); ui = clone(base.ui); }
-    else ui = cleanFields(raw.ui, UI_FIELDS, { path: 'ui', ctx, strict: false, defaults: base.ui });
+    else {
+      const moved = has(raw.ui, 'home') ? migrateHome(raw.ui) : null;
+      ui = cleanFields(moved ? moved.ui : raw.ui, UI_FIELDS, { path: 'ui', ctx, strict: false, defaults: base.ui });
+      if (moved) {
+        ctx.note(moved.note);
+        // Recorded like the other migrations, so the household can see what moved where.
+        const notes = Array.isArray(meta.migrationNotes) ? meta.migrationNotes : [];
+        if (!notes.includes(moved.note)) meta.migrationNotes = notes.concat([moved.note.slice(0, LIMITS.note)]).slice(-LIMITS.migrationNotes);
+      }
+    }
 
     for (const k of Object.keys(raw)) {
       if (!STATE_KEYS.includes(k)) ctx.note(k + ': not part of the saved budget format; dropped (it was ' + preview(raw[k]) + ').');
     }
     return { version: VERSION, datasetId, plan, scenarios, compareIds, ledgerEdits, references, checklist, ui, meta };
+  }
+
+  /**
+   * The earlier Home settings (ui.home) become the plan screen's settings (ui.plan): each known
+   * amount becomes a dial set directly, baselineMonths and horizon keep their values, and
+   * ui.home is dropped. What ui.plan already holds wins, so running this twice changes nothing
+   * more. Returns the new raw ui and one note saying what moved.
+   */
+  function migrateHome(rawUi) {
+    const home = rawUi.home;
+    const ui = Object.assign({}, rawUi);
+    delete ui.home;
+    if (!isObj(home)) return { ui, note: 'ui.home: the earlier Home settings were not readable (' + preview(home) + '); dropped.' };
+    const plan = isObj(rawUi.plan) ? Object.assign({}, rawUi.plan) : {};
+    const dials = isObj(plan.dials) ? Object.assign({}, plan.dials) : {};
+    const moved = [];
+    const kept = [];
+    for (const [from, key] of Object.entries(HOME_TO_DIALS)) {
+      const v = home[from];
+      if (!Number.isSafeInteger(v)) continue;
+      if (has(dials, key) && dials[key] !== null) { kept.push(key); continue; }
+      dials[key] = v;
+      moved.push(key + ' ' + money(v));
+    }
+    plan.dials = dials;
+    for (const k of ['baselineMonths', 'horizon']) {
+      if (plan[k] === undefined && home[k] !== undefined && home[k] !== null) { plan[k] = home[k]; moved.push(k + ' ' + preview(home[k])); }
+    }
+    ui.plan = plan;
+    const left = [];
+    if (Number.isSafeInteger(home.inCents)) left.push('all money into joint (' + money(home.inCents) + '): the plan now sets each partner’s money in separately');
+    if (Number.isSafeInteger(home.outCents)) left.push('the earlier single spending amount (' + money(home.outCents) + '): card and bank spending are set separately');
+    const note = 'ui.home: the Home settings moved to the plan screen (ui.plan)' + (moved.length ? ': ' + moved.join(', ') : '') + '.'
+      + (kept.length ? ' The plan screen already had its own ' + kept.join(', ') + ', which were kept.' : '')
+      + (left.length ? ' Not carried over: ' + left.join('; ') + '.' : '');
+    return { ui, note };
   }
 
   function isWorkbook(d) { return isObj(d) && d.format === WORKBOOK_FORMAT; }
@@ -2206,13 +2299,17 @@
         autoCreate: v => (PEOPLE.includes(v) ? { personId: v, monthlyCents: null, note: '' } : null)
       }),
       targets: N.map(CENTS, LIMITS.targets),
-      balances: N.item(BALANCE_FIELDS, { accounts: N.map(SIGNED_CENTS, LIMITS.balanceAccounts) }),
+      balances: N.item(BALANCE_FIELDS, { accounts: N.map(SIGNED_CENTS, LIMITS.balanceAccounts), accountDates: N.map(DATE, LIMITS.balanceAccounts) }),
       settings: N.item(SETTINGS_FIELDS)
     }),
     scenarios: N.list('id', N.item(SCENARIO_FIELDS, { assumptions: N.item(ASSUMPTION_FIELDS), events: N.list('id', N.event()) })),
     compareIds: N.leaf(rule('compareIds')),
     checklist: N.map(STRICT_BOOL, LIMITS.checklist),
-    ui: N.item(UI_FIELDS, { whatIf: N.item(WHATIF_FIELDS), home: N.item(HOME_FIELDS), dismissed: N.map(STRICT_BOOL, LIMITS.dismissed) }),
+    ui: N.item(UI_FIELDS, {
+      whatIf: N.item(WHATIF_FIELDS),
+      plan: N.item(PLAN_UI_FIELDS, { dials: N.map(SIGNED_CENTS, LIMITS.planDials), rows: N.map(PLAN_ROW_RULE, LIMITS.planRows) }),
+      dismissed: N.map(STRICT_BOOL, LIMITS.dismissed)
+    }),
     meta: N.item([['createdAt', ISO_TIME], ['updatedAt', ISO_TIME], ['migrationNotes', NOTES_RULE]])
   });
 

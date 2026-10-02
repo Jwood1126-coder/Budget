@@ -31,7 +31,7 @@
   const KIND_OPTIONS = [
     // `short` fits the Show select on a phone; `label` is used in headings and breadcrumbs.
     { value: 'spend', label: 'Spending', short: 'Spending', test: t => t.kind === 'spend' },
-    // Money coming in, as Home counts it: income plus partners' contributions from personal accounts.
+    // Money coming in, as the Plan page counts it: income plus partners' contributions from personal accounts.
     { value: 'income', label: 'Income & contributions', short: 'Coming in', test: t => t.kind === 'income' || (t.kind === 'transfer' && t.subtype === 'contribution') },
     { value: 'transfer', label: 'Transfers & savings', short: 'Transfers', test: t => t.kind === 'transfer' },
     { value: 'debt', label: 'Debt payments', short: 'Debts', test: t => t.kind === 'debt_payment' },
@@ -1338,7 +1338,7 @@
     for (const n of P.notes) notes.push(c.notice({ tone: 'warn', title: 'Part of this link was not understood', body: esc(n) }));
     if (P.basis === 'bank' && level !== 'txn') notes.push(c.notice({ tone: 'info', title: "Showing the bank's original categories", body: 'Your household rules and category corrections are not applied to category names here. Amounts, exclusions and splits still are. Rows without a bank category (most checking rows) are grouped as “No bank category”.' }));
     if (P.scope && !P.acct && level !== 'txn') {
-      notes.push(c.notice({ tone: 'info', title: P.scope === 'joint' ? 'Joint accounts only' : 'Personal accounts only', body: P.scope === 'joint' ? 'Shared household accounts only, as on Home. Pay and bills that go through personal accounts are not here.' : 'Personal accounts only. Whether a month is complete still depends on every spending account.' }));
+      notes.push(c.notice({ tone: 'info', title: P.scope === 'joint' ? 'Joint accounts only' : 'Personal accounts only', body: P.scope === 'joint' ? 'Shared household accounts only, as on the Plan page. Pay and bills that go through personal accounts are not here.' : 'Personal accounts only. Whether a month is complete still depends on every spending account.' }));
     }
     if (P.acct && level !== 'txn') {
       const a = ctx.dataset.accounts.find(x => x.id === P.acct);

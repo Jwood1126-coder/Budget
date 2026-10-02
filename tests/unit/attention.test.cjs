@@ -184,9 +184,11 @@ test('sample: data review items with plan items, in severity order', () => {
   const { ds, state, txns } = sampleState();
   const items = A.list({ dataset: ds, txns, state });
   assertOrdered(items);
-  for (const id of ['dupes', 'uncertain', 'transfers', 'business', 'spike-2026-08Dental', 'coverage', 'bill-fund-p2-car', 'promo-store-card', 'balance', 'net-p2-pay', 'contrib-p2-contribution', 'bill-planned-life-insurance', 'escrow-mortgage', 'terms-p1-student-loans']) {
+  for (const id of ['dupes', 'uncertain', 'transfers', 'business', 'spike-2026-08Dental', 'coverage', 'bill-fund-p2-car', 'promo-store-card', 'net-p2-pay', 'contrib-p2-contribution', 'bill-planned-life-insurance', 'escrow-mortgage', 'terms-p1-student-loans']) {
     assert.ok(item(items, id), id + ' missing from ' + ids(items).join(', '));
   }
+  // The sample profile carries an account balance, so there is no 'enter today's balances' item.
+  assert.equal(item(items, 'balance'), undefined);
   // Sam's paycheck has no known amount, so only 'pay unknown' is listed, not a frequency question.
   assert.equal(item(items, 'freq-p2-pay'), undefined);
   assert.equal(item(items, 'dupes').severity, 'action');

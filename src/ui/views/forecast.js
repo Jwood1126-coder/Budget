@@ -199,9 +199,22 @@
   const projOpts = (ctx, R) => ({ startMonth: R.start, months: R.horizon, scope: ctx.scope });
   const scenarioById = (ctx, id) => ctx.state.scenarios.find(s => s.id === id);
 
+  /**
+   * The plan with its starting cash read through E.timeline.anchors, the same accessor the plan
+   * screen uses: the sum of the accounts with a known balance when there are any (asOf = the
+   * latest of their dates), else the joint cash entered in Budget.
+   */
+  function cashPlan(ctx) {
+    return ctx.memo('fc-cash-plan', () => {
+      const plan = ctx.state.plan;
+      const start = E.timeline.anchors(plan, ctx.dataset, ctx.realTxns || ctx.txns).combined;
+      return Object.assign({}, plan, { balances: Object.assign({}, plan.balances, { jointCashCents: start ? start.cents : null, asOf: start ? start.asOf : null }) });
+    });
+  }
+
   function comparison(ctx, R) {
     const opts = projOpts(ctx, R);
-    return ctx.memo('fc-compare:' + R.compare.join(',') + JSON.stringify(opts), () => E.forecast.compare(ctx.state.plan, R.compare.map(id => scenarioById(ctx, id)), opts));
+    return ctx.memo('fc-compare:' + R.compare.join(',') + JSON.stringify(opts), () => E.forecast.compare(cashPlan(ctx), R.compare.map(id => scenarioById(ctx, id)), opts));
   }
 
   function projection(ctx, R, scenario) {
@@ -210,11 +223,11 @@
     try { cmp = comparison(ctx, R); } catch { cmp = null; }
     const col = cmp && cmp.columns.find(x => x.scenarioId === scenario.id);
     if (col) return col.projection;
-    return ctx.memo('fc-proj:' + scenario.id + JSON.stringify(opts), () => E.forecast.project(ctx.state.plan, scenario, opts));
+    return ctx.memo('fc-proj:' + scenario.id + JSON.stringify(opts), () => E.forecast.project(cashPlan(ctx), scenario, opts));
   }
 
   function balanceKnown(ctx) {
-    const b = ctx.state.plan.balances;
+    const b = cashPlan(ctx).balances;
     return !!b && E.money.isCents(b.jointCashCents);
   }
 
@@ -381,7 +394,7 @@
 
   /** First month with a projected balance: the entered balance already includes its own month. */
   function balanceOpenMonth(ctx) {
-    const asOf = ctx.state.plan.balances && ctx.state.plan.balances.asOf;
+    const asOf = cashPlan(ctx).balances.asOf;
     return asOf && E.dates.isDate(asOf) ? E.months.of(E.dates.addDays(asOf, 1)) : null;
   }
 
@@ -1177,7 +1190,7 @@
     const unsetTargets = proj.missing.filter(m => m.source === 'plan' && String(m.id || '').startsWith('target:')).length;
     const notes = [
       unsetTargets ? `Spending leaves out ${esc(plural(unsetTargets, 'spending target'))} not entered yet, so real spending is likely higher. <button type="button" id="fc-months-see-missing" class="fc-linkbtn" data-action="fc:focus" data-target="fc-missing-h">See which</button>` : '',
-      open && proj.rows.some(notYet) ? `Balances start in ${esc(fmt.month(open))}: the balance entered is dated ${esc(fmt.date(ctx.state.plan.balances.asOf))} and already includes the months before.` : '',
+      open && proj.rows.some(notYet) ? `Balances start in ${esc(fmt.month(open))}: the balance entered is dated ${esc(fmt.date(cashPlan(ctx).balances.asOf))} and already includes the months before.` : '',
       proj.rows.some(r => Object.values(missingIn(r)).some(Boolean)) ? '<span class="fc-plus-missing">+ missing</span> next to a total: a change in that month has no amount yet, so the total leaves it out.' : '',
       proj.rows.some(r => paycheckInfo(ctx, r).items.some(p => p.assumed)) ? '~ before a paycheck count: assumed, because that pay schedule is not entered.' : '',
     ].filter(Boolean);

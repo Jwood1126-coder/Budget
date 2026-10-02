@@ -359,7 +359,8 @@ module.exports = [
       assert.ok(await page.$('#fc-chart details.chart-table table caption'), 'table alternative with a caption');
       assert.equal(await page.getAttribute('#fc-chart svg', 'role'), 'img');
       assert.ok((await page.getAttribute('#fc-chart svg', 'aria-label')).includes('arrow keys'));
-      assert.ok((await page.textContent('#fc-chart figcaption')).includes('running change in joint cash'));
+      // The sample's checking export carries a running balance, so Forecast starts from it (the same balances the Plan page uses).
+      assert.ok((await page.textContent('#fc-chart figcaption')).includes('projected joint cash'));
       await page.focus('#fc-chart svg');
       await page.keyboard.press('ArrowRight');
       await page.waitForFunction(() => document.querySelector('#chartLive').textContent.length > 0);
@@ -576,7 +577,8 @@ module.exports = [
       await t.open('#/forecast?scenario=baseline');
       await page.evaluate(() => {
         const st = window.HouseholdBudget.getState();
-        st.plan.balances = { ...st.plan.balances, jointCashCents: 500000, asOf: '2026-10-31' };
+        // Per-account balances dated after the export's own running balance win over it; the single joint-cash figure only applies when no account balance is known.
+        st.plan.balances = { ...st.plan.balances, accounts: { 'joint-checking': 500000, 'joint-savings': 0 }, accountDates: { 'joint-checking': '2026-10-31', 'joint-savings': '2026-10-31' } };
         window.HouseholdBudget.setState(st);
       });
       await page.waitForSelector('#fc-m-2026-11[data-balance-cents]');

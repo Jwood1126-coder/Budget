@@ -1128,7 +1128,10 @@
     const st = ctx.state;
     const bal = st.plan.balances || {};
     const cashKnown = E.money.isCents(bal.jointCashCents);
-    const cashCard = c.card(`<p class="fine">Bank exports do not include balances. Until you enter one, forecasts show how much joint cash goes up or down, not how much you will have.</p>
+    const anchored = E.timeline.anchors(st.plan, ctx.dataset, ctx.realTxns || ctx.txns);
+    const cashCard = anchored.accounts.length ? c.card(`<p class="fine">Forecasts start from the account balances on the Plan page: <strong>${esc(money(anchored.combined.cents))}</strong> as of ${esc(fmt.date(anchored.combined.asOf))} (${esc(anchored.accounts.map(a => a.name + ' ' + money(a.cents)).join(', '))}).</p>
+      <p class="bud-counts"><a href="#/overview#plan-balances">Change the balances on the Plan page</a>. The single joint-cash figure below is used only while no account balance is known.</p>`,
+    { title: 'Joint cash balance', id: 'bud-cash-card' }) : c.card(`<p class="fine">Bank exports do not include balances. Until you enter one, forecasts show how much joint cash goes up or down, not how much you will have.</p>
       <div class="bud-grid-2">
         ${moneyField({ id: 'bud-cash', label: 'Joint cash today', path: 'plan.balances.jointCashCents', cents: bal.jointCashCents ?? null, allowNegative: true, placeholder: 'Not entered', message: 'Joint cash balance saved.',
           help: 'Checking plus joint savings. A negative amount means overdrawn.' })}

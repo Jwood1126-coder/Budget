@@ -96,7 +96,7 @@ test('defaults: compares the baseline with the first other scenario', () => {
 
 test('defaults: joint scope, overview route, what-ifs off and epoch timestamps', () => {
   const st = base();
-  assert.deepEqual(st.ui, { scope: 'joint', lastRoute: '#/overview', whatIf: { excludePendingReimbursements: false, excludeBusinessCandidates: false }, home: { inCents: null, p1InCents: null, p2InCents: null, outCents: null, savedCents: null, cardCents: null, bankCents: null, baselineMonths: 12, fundingWho: 'both', chartView: 'money', horizon: 24 }, dismissed: {} });
+  assert.deepEqual(st.ui, { scope: 'joint', lastRoute: '#/overview', whatIf: { excludePendingReimbursements: false, excludeBusinessCandidates: false }, plan: { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null }, dismissed: {} });
   assert.deepEqual(st.meta, { createdAt: '1970-01-01T00:00:00.000Z', updatedAt: '1970-01-01T00:00:00.000Z', migratedFrom: null, migrationNotes: [], legacySnapshot: null });
   assert.equal(st.scenarios[1].createdAt, '1970-01-01T00:00:00.000Z');
 });
@@ -115,7 +115,7 @@ test('defaults: without a profile gives an empty plan for Partner A and Partner 
   assert.deepEqual(st.plan.people, [{ id: 'p1', name: 'Partner A' }, { id: 'p2', name: 'Partner B' }]);
   assert.deepEqual(st.plan.incomes, []);
   assert.deepEqual(st.plan.targets, {});
-  assert.deepEqual(st.plan.balances, { jointCashCents: null, asOf: null, note: '', accounts: {}, accountsAsOf: null });
+  assert.deepEqual(st.plan.balances, { jointCashCents: null, asOf: null, note: '', accounts: {}, accountsAsOf: null, accountDates: {} });
   assert.deepEqual(st.plan.settings, { incomeTiming: 'conservative', planningBaseline: 'actual', comparisonWindow: 3 });
   assert.equal(st.scenarios.length, 1);
 });
@@ -640,7 +640,7 @@ test('sanitize: references, checklist, ui and meta are validated', () => {
   const r = S.sanitize(raw, profile(), DS);
   assert.deepEqual(r.state.references.map(x => x.id), ['q3']);
   assert.deepEqual(r.state.checklist, { balances: true });
-  assert.deepEqual(r.state.ui, { scope: 'household', lastRoute: '#/forecast?horizon=36', whatIf: { excludePendingReimbursements: true, excludeBusinessCandidates: false }, home: { inCents: null, p1InCents: null, p2InCents: null, outCents: null, savedCents: null, cardCents: null, bankCents: null, baselineMonths: 12, fundingWho: 'both', chartView: 'money', horizon: 24 }, dismissed: { tip1: true } });
+  assert.deepEqual(r.state.ui, { scope: 'household', lastRoute: '#/forecast?horizon=36', whatIf: { excludePendingReimbursements: true, excludeBusinessCandidates: false }, plan: { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null }, dismissed: { tip1: true } });
   assert.equal(r.state.meta.createdAt, NOW);
   assert.equal(r.state.meta.updatedAt, '1970-01-01T00:00:00.000Z');
   assert.equal(r.state.meta.migratedFrom, null);
@@ -1968,7 +1968,7 @@ test('scenario names must be unique (case-insensitive) on create and rename', ()
   assert.doesNotThrow(() => E.state.renameScenario(added, id, 'Something new'), 'keeping its own name is fine');
 });
 
-test('balances: per-account entered balances and the Home what-if are validated and writable', () => {
+test('balances: per-account entered balances and their own dates are validated and writable', () => {
   let st = base();
   st = S.setPath(st, 'plan.balances.accounts.joint-savings', 406466);
   st = S.setPath(st, 'plan.balances.accountsAsOf', '2026-09-30');
@@ -1976,49 +1976,113 @@ test('balances: per-account entered balances and the Home what-if are validated 
   st = S.setPath(st, 'plan.balances.accounts.joint-checking', -2500);
   assert.equal(st.plan.balances.accounts['joint-checking'], -2500, 'an overdrawn balance is allowed');
   assert.throws(() => S.setPath(st, 'plan.balances.accounts.joint-savings', 1.5), isValidationError(/whole cents/));
-  st = S.setPath(st, 'ui.home.savedCents', 50000);
-  st = S.setPath(st, 'ui.home.horizon', 60);
-  st = S.setPath(st, 'ui.home.p2InCents', 0);
-  assert.deepEqual(st.ui.home, { inCents: null, p1InCents: null, p2InCents: 0, outCents: null, savedCents: 50000, cardCents: null, bankCents: null, baselineMonths: 12, fundingWho: 'both', chartView: 'money', horizon: 60 });
-  assert.throws(() => S.setPath(st, 'ui.home.horizon', 7), isValidationError());
+  st = S.setPath(st, 'plan.balances.accountDates.joint-checking', '2026-10-01');
+  assert.deepEqual(st.plan.balances.accountDates, { 'joint-checking': '2026-10-01' });
+  assert.equal(st.plan.balances.accountsAsOf, '2026-09-30', 'the shared date stays readable');
+  assert.throws(() => S.setPath(st, 'plan.balances.accountDates.joint-checking', '2026-13-01'), isValidationError(/YYYY-MM-DD/));
+  st = S.setPath(st, 'plan.balances.accountDates.joint-checking', undefined);
+  assert.deepEqual(st.plan.balances.accountDates, {});
   const raw = JSON.parse(JSON.stringify(st));
   raw.plan.balances.accounts = { 'joint-savings': 100, 'bad id!': 5, other: 'lots' };
-  raw.ui.home = { inCents: -5, horizon: 3 };
+  raw.plan.balances.accountDates = { 'joint-savings': '2026-09-28', 'joint-checking': 'soon', 'bad id!': '2026-09-01' };
   const r = S.sanitize(raw, profile(), DS);
   assert.deepEqual(r.state.plan.balances.accounts, { 'joint-savings': 100 });
-  assert.deepEqual(r.state.ui.home, { inCents: null, p1InCents: null, p2InCents: null, outCents: null, savedCents: null, cardCents: null, bankCents: null, baselineMonths: 12, fundingWho: 'both', chartView: 'money', horizon: 24 });
+  assert.deepEqual(r.state.plan.balances.accountDates, { 'joint-savings': '2026-09-28' });
   assert.ok(r.notes.some(n => /dropped balances/.test(n)));
+  assert.ok(r.notes.some(n => /dropped balance dates/.test(n)));
+  // A budget saved before per-account dates existed loses nothing and reads the same.
+  const older = JSON.parse(JSON.stringify(st));
+  delete older.plan.balances.accountDates;
+  const o = S.sanitize(older, profile(), DS);
+  assert.deepEqual(o.state.plan.balances.accountDates, {});
+  assert.equal(o.state.plan.balances.accountsAsOf, '2026-09-30');
+  assert.deepEqual(S.sanitize(o.state, profile(), DS).state, o.state, 'sanitizing again changes nothing');
 });
 
-test('Home plan amounts: a savings drawdown with cents survives saving, loading, sanitizing and unrelated edits; zero stays zero', () => {
+test('Plan settings: dials keep signed cents through saving, loading and unrelated edits; zero stays zero; choices are validated', () => {
   let st = base();
-  st = S.setPath(st, 'ui.home.savedCents', -123648);
-  assert.equal(st.ui.home.savedCents, -123648, 'a negative net savings amount is a drawdown, not an error');
-  st = S.setPath(st, 'ui.home.cardCents', 234567);
-  st = S.setPath(st, 'ui.home.bankCents', 0);
-  st = S.setPath(st, 'ui.home.p1InCents', 398800);
-  assert.equal(st.ui.home.savedCents, -123648, 'unrelated edits keep it');
-  assert.equal(st.ui.home.bankCents, 0, 'zero is an amount, not "use the baseline"');
+  st = S.setPath(st, 'ui.plan.dials.savings', -123648);
+  assert.equal(st.ui.plan.dials.savings, -123648, 'a negative net savings amount is a drawdown, not an error');
+  st = S.setPath(st, 'ui.plan.dials.card', 234567);
+  st = S.setPath(st, 'ui.plan.dials.bank', 0);
+  st = S.setPath(st, 'ui.plan.dials.p1', 398800);
+  st = S.setPath(st, 'ui.plan.rows.card-m-x1y2', { included: false });
+  st = S.setPath(st, 'ui.plan.rows.card-r-z9', { cents: 12345 });
+  st = S.setPath(st, 'ui.plan.baselineMonths', 'all');
+  st = S.setPath(st, 'ui.plan.horizon', '60');
+  st = S.setPath(st, 'ui.plan.past', 6);
+  st = S.setPath(st, 'ui.plan.mode', 'flows');
+  st = S.setPath(st, 'ui.plan.coverFromSavings', false);
+  st = S.setPath(st, 'ui.plan.hidden', ['p2', 'combined']);
+  assert.equal(st.ui.plan.dials.savings, -123648, 'unrelated edits keep it');
+  assert.equal(st.ui.plan.dials.bank, 0, 'zero is an amount, not "use the baseline"');
+  assert.deepEqual(st.ui.plan, { baselineMonths: 'all', horizon: 60, past: 6, mode: 'flows', coverFromSavings: false,
+    dials: { savings: -123648, card: 234567, bank: 0, p1: 398800 }, rows: { 'card-m-x1y2': { included: false }, 'card-r-z9': { cents: 12345 } }, hidden: ['p2', 'combined'] });
   // Through storage and back.
   const store = new Map();
   const storage = { getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k), key: i => Array.from(store.keys())[i] ?? null, get length() { return store.size; } };
-  const saved = S.saveToStorage(storage, st);
-  assert.ok(saved.ok !== false, 'saved');
+  assert.ok(S.saveToStorage(storage, st).ok !== false, 'saved');
   const loaded = S.loadFromStorage(storage, st.datasetId, profile(), DS).state;
-  assert.equal(loaded.ui.home.savedCents, -123648);
-  assert.equal(loaded.ui.home.cardCents, 234567);
-  assert.equal(loaded.ui.home.bankCents, 0);
-  assert.equal(loaded.ui.home.p1InCents, 398800);
-  // A saved copy from before these fields existed loses nothing and gains the defaults.
+  assert.deepEqual(loaded.ui.plan, st.ui.plan);
+  // Removing: undefined clears a dial or a row change.
+  const cleared = S.setPath(S.setPath(st, 'ui.plan.dials.card', undefined), 'ui.plan.rows.card-r-z9', undefined);
+  assert.deepEqual(cleared.ui.plan.dials, { savings: -123648, bank: 0, p1: 398800 });
+  assert.deepEqual(Object.keys(cleared.ui.plan.rows), ['card-m-x1y2']);
+  // Choices and amounts are checked.
+  assert.throws(() => S.setPath(st, 'ui.plan.horizon', 36), isValidationError());
+  assert.throws(() => S.setPath(st, 'ui.plan.baselineMonths', 5), isValidationError());
+  assert.throws(() => S.setPath(st, 'ui.plan.past', 'some'), isValidationError());
+  assert.throws(() => S.setPath(st, 'ui.plan.mode', 'chart'), isValidationError());
+  assert.throws(() => S.setPath(st, 'ui.plan.dials.card', 1.5), isValidationError(/whole cents/));
+  assert.throws(() => S.setPath(st, 'ui.plan.rows.card-m-x1y2', { included: 'no' }), isValidationError());
+  assert.throws(() => S.setPath(st, 'ui.plan.rows.card-m-x1y2', { cents: 0.5 }), isValidationError(/whole cents/));
+  assert.throws(() => S.setPath(st, 'ui.plan.hidden', ['ok', 'not ok!']), isValidationError());
+  // hidden: null until the household chooses; an empty list is a choice and is kept.
+  assert.equal(base().ui.plan.hidden, null);
+  assert.deepEqual(S.setPath(st, 'ui.plan.hidden', []).ui.plan.hidden, []);
+  assert.equal(S.setPath(st, 'ui.plan.hidden', null).ui.plan.hidden, null);
+  const emptyChoice = JSON.parse(JSON.stringify(S.setPath(st, 'ui.plan.hidden', [])));
+  assert.deepEqual(S.sanitize(emptyChoice, profile(), DS).state.ui.plan.hidden, []);
+  assert.throws(() => S.setPath(st, 'ui.home.cardCents', 100), isValidationError(/no field/), 'ui.home is gone');
+  // A damaged saved copy keeps what is valid and says what was dropped.
   const raw = JSON.parse(JSON.stringify(st));
-  raw.ui.home = { inCents: null, p1InCents: 300000, p2InCents: null, outCents: 450000, savedCents: -5000, horizon: 12 };
+  raw.ui.plan = { baselineMonths: 7, horizon: 24, dials: { card: 'lots', bank: 5000, 'bad key!': 1 }, rows: { 'card-m-a': { included: 'x' }, 'card-m-b': { cents: -250 }, 'card-m-c': { cents: 1, extra: true } }, hidden: 'p1' };
   const r = S.sanitize(raw, profile(), DS);
-  assert.deepEqual(r.state.ui.home, { inCents: null, p1InCents: 300000, p2InCents: null, outCents: 450000, savedCents: -5000, cardCents: null, bankCents: null, baselineMonths: 12, fundingWho: 'both', chartView: 'money', horizon: 12 });
-  // Planned card and bank spending can't be negative; savings can.
-  assert.throws(() => S.setPath(st, 'ui.home.cardCents', -100), isValidationError(/\$0 or more/));
-  assert.throws(() => S.setPath(st, 'ui.home.bankCents', -1), isValidationError(/\$0 or more/));
-  assert.throws(() => S.setPath(st, 'ui.home.savedCents', 1.5), isValidationError(/whole cents/));
-  assert.throws(() => S.setPath(st, 'ui.home.baselineMonths', 5), isValidationError());
+  assert.deepEqual(r.state.ui.plan, { baselineMonths: 12, horizon: 24, past: 12, mode: 'balance', coverFromSavings: true, dials: { bank: 5000 }, rows: { 'card-m-b': { cents: -250 } }, hidden: null });
+  for (const re of [/ui\.plan\.baselineMonths/, /ui\.plan\.dials: dropped plan amounts/, /ui\.plan\.rows: dropped plan row changes/, /ui\.plan\.hidden/]) assert.ok(hasNote(r.notes, re), String(re));
+});
+
+test('Plan settings: the earlier Home settings (ui.home) move to ui.plan once, losslessly, and the move is noted in meta', () => {
+  const raw = JSON.parse(JSON.stringify(base()));
+  delete raw.ui.plan;
+  raw.ui.home = { inCents: 410000, p1InCents: 300000, p2InCents: null, outCents: 450000, savedCents: -5075, cardCents: 0, bankCents: 187612, baselineMonths: 6, fundingWho: 'p2', chartView: 'balances', horizon: 60 };
+  const r = S.sanitize(raw, profile(), DS);
+  assert.equal(r.state.ui.home, undefined, 'ui.home is dropped');
+  assert.deepEqual(r.state.ui.plan, { baselineMonths: 6, horizon: 60, past: 12, mode: 'balance', coverFromSavings: true, dials: { p1: 300000, card: 0, bank: 187612, savings: -5075 }, rows: {}, hidden: null });
+  const note = r.notes.find(n => /^ui\.home: /.test(n));
+  assert.ok(note, 'noted');
+  assert.match(note, /p1 \$3,000\.00, card \$0\.00, bank \$1,876\.12, savings −\$50\.75, baselineMonths 6, horizon 60/);
+  assert.match(note, /Not carried over: all money into joint \(\$4,100\.00\).*earlier single spending amount \(\$4,500\.00\)/);
+  assert.ok(r.state.meta.migrationNotes.includes(note), 'kept in meta like other migrations');
+  // Idempotent: a second pass finds nothing to move and changes nothing.
+  const again = S.sanitize(r.state, profile(), DS);
+  assert.deepEqual(again.state, r.state);
+  assert.deepEqual(again.notes, []);
+  // A copy holding both (an older tab saved ui.home again): what ui.plan already has wins.
+  const both = JSON.parse(JSON.stringify(r.state));
+  both.ui.home = { cardCents: 99900, bankCents: null, savedCents: 1000, baselineMonths: 3 };
+  both.ui.plan.dials = { card: 120000 };
+  const b = S.sanitize(both, profile(), DS);
+  assert.deepEqual(b.state.ui.plan.dials, { card: 120000, savings: 1000 });
+  assert.equal(b.state.ui.plan.baselineMonths, 6, 'the plan’s own setting is kept');
+  assert.ok(hasNote(b.notes, /already had its own card, which were kept/));
+  // A blank Home (nothing set) moves its two settings and creates no dials.
+  const blank = JSON.parse(JSON.stringify(base()));
+  delete blank.ui.plan;
+  blank.ui.home = { inCents: null, p1InCents: null, p2InCents: null, outCents: null, savedCents: null, cardCents: null, bankCents: null, baselineMonths: 12, fundingWho: 'both', chartView: 'money', horizon: 24 };
+  const bl = S.sanitize(blank, profile(), DS);
+  assert.deepEqual(bl.state.ui.plan.dials, {});
+  assert.equal(bl.state.ui.plan.horizon, 24);
 });
 
 test('ledger edits: whose money a deposit is (p1, p2 or none) is kept; anything else is dropped with a note', () => {

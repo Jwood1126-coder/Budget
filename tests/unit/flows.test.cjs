@@ -242,7 +242,7 @@ test('Home plan: one card amount, separate from bank-paid bills; a drawdown rais
   assert.equal(people.lines.funding.value, 520000);
 });
 
-test('baseline: a big purchase that does not repeat is one-time (left out of the plan, kept in history) unless counted as regular', () => {
+test('baseline: a big purchase at a place that is not regular is one-time (left out of the plan, kept in history) unless counted as regular', () => {
   const txns = [];
   for (const m of ['01', '02', '03']) txns.push(buy('card', `2026-${m}-03`, 60000, 'Corner Grocer'), buy('chk', `2026-${m}-01`, 137500, 'Hillside Mortgage', { category: 'Mortgage' }));
   const dentist = buy('card', '2026-02-18', 193045, 'Molar Bay Dental', { category: 'Dental' });
@@ -265,6 +265,33 @@ test('baseline: a big purchase that does not repeat is one-time (left out of the
   const chosen = run(txns.concat([small]), { edits: { [small.id]: { planningBaseline: 'exclude' } } });
   assert.ok(chosen.base.oneTime.some(o => o.id === small.id && o.auto === false && o.role === 'bank'));
   assert.equal(chosen.base.total.planning.bankNet, 3 * 137500);
+});
+
+test('baseline: one-time means "not a regular place", not "only once": two big charges in one month are both one-time; a big charge at a regular place is not', () => {
+  const months = [{ start: '2026-01-01', end: '2026-06-30' }];
+  const txns = [];
+  for (const m of ['01', '02', '03', '04', '05', '06']) txns.push(buy('card', `2026-${m}-04`, 61250 + Number(m) * 75, 'Corner Grocer'));
+  // The same practice twice in one month (an earlier rule kept these because they look alike).
+  const first = buy('card', '2026-04-07', 123200, 'Molar Bay Dental', { category: 'Dental' });
+  const second = buy('card', '2026-04-21', 103100, 'Molar Bay Dental', { category: 'Dental' });
+  // A big week at the regular grocer is still groceries.
+  const bigShop = buy('card', '2026-05-28', 88015, 'Corner Grocer');
+  // Seen in 2 of 6 months, below the 60% needed to be regular: both big charges are one-time.
+  const shopA = buy('chk', '2026-02-12', 70500, 'Lakeside Furniture', { category: 'Household & hardware' });
+  const shopB = buy('chk', '2026-05-15', 52080, 'Lakeside Furniture', { category: 'Household & hardware' });
+  const ds = build(txns.concat([first, second, bigShop, shopA, shopB]), { months });
+  const rows = F.breakdown(L.applyEdits(ds, {}), ds, { plan: PLAN });
+  const b = F.baseline(rows, { count: 6 });
+  assert.equal(b.regularAt, 4);
+  assert.deepEqual(b.oneTime.map(o => o.id).sort(), [first.id, second.id, shopA.id, shopB.id].sort());
+  assert.ok(b.oneTime.every(o => o.auto));
+  assert.equal(b.spends.find(x => x.id === bigShop.id).kind, 'regular');
+  assert.equal(b.total.planning.cardNet, txns.reduce((s, t) => s - t.amountCents, 0) + 88015);
+  assert.equal(b.total.planning.bankNet, 0);
+  // "Count it" on one of them still wins.
+  const kept = F.baseline(F.breakdown(L.applyEdits(ds, { [second.id]: { planningBaseline: 'include' } }), ds, { plan: PLAN }), { count: 6 });
+  assert.deepEqual(kept.keptRegular.map(o => o.id), [second.id]);
+  assert.ok(!kept.oneTime.some(o => o.id === second.id));
 });
 
 test('baseline: a yearly bill is spread as 1/12 a month, not counted as a one-time cost', () => {

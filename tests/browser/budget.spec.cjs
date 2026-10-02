@@ -586,9 +586,10 @@ module.exports = [
       t.assert.match(await goal('Anniversary trip').locator('.bud-bill-head').textContent(), /Short by \$1,200\.00/);
       // Savings set aside stays cash in the forecast, so the forecast moves differently: say why.
       t.assert.match(await text(t.page, '#bud-change'), /Money set aside for goals stays in your cash in the forecast/);
-      t.assert.match(await t.page.textContent('#bud-cash-card'), /Not entered: forecasts show the change in cash only/);
-      await commit(t.page, '#bud-cash', '-120.50', () => window.HouseholdBudget.getState().plan.balances.jointCashCents === -12050);
-      t.assert.match(await t.page.textContent('#bud-cash-card'), /Forecasts start from −\$120\.50/);
+      // The sample's checking export carries a running balance, so forecasts start from the account balances
+      // the Plan page shows; the single joint-cash input only appears while no account balance is known.
+      t.assert.match(await t.page.textContent('#bud-cash-card'), /Forecasts start from the account balances on the Plan page: \$73,965\.80 as of Sep 30, 2026/);
+      t.assert.equal(await t.page.$('#bud-cash'), null, 'no single joint-cash input when account balances are known');
     },
   },
   {

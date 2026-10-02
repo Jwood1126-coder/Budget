@@ -12,12 +12,14 @@
     "engine/forecast.js",
     "engine/balances.js",
     "engine/flows.js",
+    "engine/timeline.js",
     "engine/state.js",
     "engine/attention.js"
   ],
   "ui": [
     "ui/core.js",
     "ui/components.js",
+    "ui/chart.js",
     "ui/router.js",
     "ui/shared.js",
     "ui/views/overview.js",
@@ -30,6 +32,7 @@
   ],
   "css": [
     "styles/base.css",
+    "styles/chart.css",
     "styles/overview.css",
     "styles/spending.css",
     "styles/budget.css",

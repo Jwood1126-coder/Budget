@@ -1,0 +1,125 @@
+/* ==========================================================================
+   Cash chart (src/ui/chart.js): balance lines and monthly flows on one timeline.
+   Uses the base tokens; the one addition is --series-5 for a fifth flow category
+   (validated with the existing series as adjacent stack neighbours, light and dark).
+   ========================================================================== */
+:root { --series-5: #e87ba4; }
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) { --series-5: #d55181; }
+}
+
+.key-line.series-5 { border-color: var(--series-5); }
+.key-swatch.series-5 { background: var(--series-5); }
+.key-line.series-net { border-color: var(--text); }
+.chart .line.series-5 { stroke: var(--series-5); }
+.chart .end-dot.series-5 { fill: var(--series-5); }
+.chart .seg.series-4 { fill: var(--series-4); }
+.chart .seg.series-5 { fill: var(--series-5); }
+
+/* ------------------------------------------------------------- frame */
+.cash-chart { position: relative; min-width: 0; }
+.cc-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-4); margin-bottom: var(--space-2); }
+.cc-top.is-title-hidden { justify-content: flex-end; }
+.cash-chart .cc-title { font-size: 1rem; font-weight: 700; color: var(--text); margin: 0; }
+.cc-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; margin-bottom: var(--space-2); }
+.cc-chip-group { display: contents; }
+.cc-chip-lead { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.cc-chip-group + .cc-chip-group .cc-chip-lead { margin-left: var(--space-2); }
+.cc-chip-label { font-size: .74rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-3); margin-right: 2px; }
+.cc-controls { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.cc-chip {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 30px; max-width: 100%;
+  padding: 3px 10px; border: 1px solid var(--border-strong); border-radius: 999px;
+  background: var(--surface); color: var(--text); font: inherit; font-size: .82rem; font-weight: 600; cursor: pointer;
+  overflow-wrap: anywhere; text-align: left;
+}
+.cc-chip:hover { background: var(--surface-3); }
+.cc-chip .key-line { width: 16px; border-top-width: 3px; }
+.cc-chip[aria-pressed="false"] { border-style: dashed; color: var(--text-3); background: transparent; }
+.cc-chip[aria-pressed="false"] .cc-chip-name { text-decoration: line-through; text-decoration-thickness: 1px; }
+.cc-chip[aria-pressed="false"] .key { opacity: .3; }
+.cc-axisrow { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px var(--space-4); margin: 0 0 6px; }
+.cc-axis-title { margin: 0; font-size: .78rem; font-weight: 650; color: var(--text-2); }
+.cc-keys { display: flex; flex-wrap: wrap; gap: 4px var(--space-3); margin: 0; font-size: .76rem; color: var(--text-3); }
+.cc-key-item { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.key-line.cc-key-solid { border-color: var(--text-2); }
+.key-line.cc-key-dotted { border-color: var(--text-2); border-top-style: dotted; border-top-width: 3px; }
+.key-swatch.cc-key-solid-swatch { background: var(--text-3); }
+
+/* ------------------------------------------------------------- plot */
+.cc-plot { position: relative; border-radius: 6px; touch-action: pan-y; -webkit-tap-highlight-color: transparent; }
+.cc-plot:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.cash-chart .cc-svg { width: 100%; height: auto; display: block; overflow: visible; user-select: none; -webkit-user-select: none; }
+.cash-chart .cc-plan-band { fill: var(--text-2); fill-opacity: .06; }
+.cash-chart .grid.zero { stroke: var(--border-strong); }
+.cash-chart .grid.zero.is-emph { stroke: var(--text-2); stroke-width: 1.25; }
+.cash-chart .cc-zero-over { stroke: var(--text-2); stroke-width: 1.25; }
+.cash-chart .axis { font-variant-numeric: tabular-nums; }
+.cash-chart .cc-year { font-weight: 650; fill: var(--text-2); }
+.cash-chart .cc-today { stroke: var(--text-2); stroke-width: 1; }
+.cash-chart .cc-marker-label { fill: var(--text-2); font-size: 11px; font-weight: 700; font-family: var(--font); }
+.cash-chart .cc-plan-label { fill: var(--text-3); }
+.cash-chart .line { stroke-width: 2; }
+.cash-chart .line.is-projected { stroke-dasharray: 6 5; }
+.cash-chart .line.is-gap { stroke-dasharray: .1 5; stroke-linecap: round; stroke-width: 2.5; }
+.cash-chart .cc-line-series.series-1 .line { stroke-width: 2.5; }
+.cash-chart .end-dot { stroke: var(--surface); stroke-width: 2; }
+.cash-chart .cc-end-label { font-variant-numeric: tabular-nums; }
+.cash-chart .cc-low-label { fill: var(--text); font-size: 11px; font-weight: 700; font-family: var(--font); font-variant-numeric: tabular-nums; paint-order: stroke; stroke: var(--surface); stroke-width: 3px; stroke-linejoin: round; }
+.cash-chart .cc-hatch { fill: var(--surface); opacity: .72; }
+.cash-chart .cc-net-halo { fill: none; stroke: var(--surface); stroke-width: 5; stroke-linejoin: round; stroke-linecap: round; }
+.cash-chart .cc-net-line { stroke: var(--text); stroke-width: 2; }
+.cash-chart .cc-net-dot { fill: var(--text); stroke: var(--surface); stroke-width: 2; }
+.cash-chart .cc-hover-band { fill: var(--text); fill-opacity: .07; }
+.cash-chart .cc-crosshair { stroke: var(--text-3); stroke-width: 1; }
+.cash-chart .cc-dot { stroke-width: 2.5; }
+.cash-chart.cash-chart[data-mode="flows"] .cc-crosshair { display: none; }
+/* Hidden by the legend: presentation only, nothing is recomputed. */
+.cash-chart .is-hidden { display: none; }
+
+/* ------------------------------------------------------------- readout (tooltip) */
+.cc-tip {
+  position: absolute; z-index: 15; left: 0; top: 0; pointer-events: none;
+  min-width: 180px; max-width: min(300px, 100%); padding: 8px 10px;
+  border-radius: 8px; background: var(--surface); color: var(--text);
+  border: 1px solid var(--border-strong); box-shadow: 0 6px 20px rgba(0, 0, 0, .18);
+  font-size: .8rem; line-height: 1.35;
+}
+.cc-tip-title { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 2px 10px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+.cc-tip-phase { font-size: .72rem; font-weight: 700; color: var(--text-2); text-transform: uppercase; letter-spacing: .04em; }
+.cc-tip-phase.is-plan { color: var(--brand); }
+.cc-tip-head { margin-top: 6px; font-size: .7rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-3); }
+.cc-tip-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; column-gap: 10px; padding: 1px 0; }
+.cc-tip-name { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); min-width: 0; overflow-wrap: anywhere; }
+.cc-tip-name .key-line { width: 12px; flex: 0 0 auto; border-top-width: 3px; }
+.cc-tip-name .key-line.series-muted, .cc-chip .key-line.series-muted { border-top-style: solid; }
+.cc-tip-value { font-variant-numeric: tabular-nums; color: var(--text); text-align: right; white-space: nowrap; }
+.cc-tip-status { font-size: .7rem; color: var(--text-3); white-space: nowrap; }
+.cc-tip-status.is-gap { color: var(--warn); font-weight: 700; }
+.cc-tip-row.is-in-total, .cc-tip-row.is-out-total { border-top: 1px solid var(--border); margin-top: 2px; padding-top: 2px; }
+.cc-tip-row.is-in-total .cc-tip-name, .cc-tip-row.is-out-total .cc-tip-name { color: var(--text); font-weight: 650; }
+.cc-tip-row.is-net { border-top: 2px solid var(--border-strong); margin-top: 6px; padding-top: 4px; }
+.cc-tip-row.is-net .cc-tip-name { color: var(--text); font-weight: 700; }
+.cc-tip-note { margin: 2px 0 2px 18px; font-size: .74rem; color: var(--text-3); }
+
+.cc-caption { margin: var(--space-2) 0 0; font-size: .82rem; color: var(--text-3); }
+.cash-chart .chart-table { margin-top: var(--space-2); }
+
+@media (max-width: 639px) {
+  /* Phones: a compact legend, so the plot stays in the first screen. */
+  .cc-legend { gap: 2px 4px; }
+  .cc-chip-group + .cc-chip-group .cc-chip-lead { margin-left: var(--space-1); }
+  .cc-chip { font-size: .76rem; padding: 2px 5px; gap: 5px; border-color: transparent; background: transparent; }
+  .cc-chip[aria-pressed="false"] { border-color: var(--border-strong); }
+  .cc-tip { min-width: 0; max-width: min(260px, 100%); font-size: .76rem; padding: 6px 8px; }
+}
+@media (max-width: 599px), (pointer: coarse) {
+  .cc-chip { min-height: 34px; }
+}
+@media (forced-colors: active) {
+  .cc-chip[aria-pressed="false"] { border-style: dashed; }
+  .cash-chart .line, .cash-chart .cc-net-line { stroke: CanvasText; }
+}
+@media print {
+  .cc-tip { display: none !important; }
+}

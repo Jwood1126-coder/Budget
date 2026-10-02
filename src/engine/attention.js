@@ -76,8 +76,9 @@
         items.push({ id: 'escrow-' + d.id, severity: 'info', title: `Does the ${d.label} payment include taxes and insurance?`, detail: 'If it does not, property tax and home insurance need their own budget lines.', route: '#/budget?section=debts', cta: 'Answer' });
       }
     }
-    if (plan.balances && plan.balances.jointCashCents === null) {
-      items.push({ id: 'balance', severity: 'decision', title: 'Enter today’s joint cash balance', detail: 'Bank exports do not include balances. Until you add it, forecasts show the change in cash, not how much you will have.', route: '#/budget?section=savings', cta: 'Add balance' });
+    const anyAccountBalance = plan.balances && plan.balances.accounts && Object.values(plan.balances.accounts).some(v => Number.isInteger(v));
+    if (plan.balances && plan.balances.jointCashCents === null && !anyAccountBalance) {
+      items.push({ id: 'balance', severity: 'decision', title: 'Enter today’s balances', detail: 'Bank exports do not include balances. Until you add them on the Plan page, the chart shows money in and out, not how much you will have.', route: '#/overview', cta: 'Add balances' });
     }
     for (const g of plan.savings || []) {
       if (g.monthlyCents === null || (g.targetCents === null && g.spendAtTarget)) {

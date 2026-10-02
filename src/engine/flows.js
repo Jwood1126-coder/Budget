@@ -22,8 +22,9 @@
  *
  * History is never changed: one-time expenses still count in the actual months; only the
  * baseline the plan starts from leaves them out. In the baseline months every purchase is one of:
- *   one-time   left out by the household, or found automatically: a purchase of $500 or more with
- *              no similar purchase from the same place in those months and no yearly repeat
+ *   one-time   left out by the household, or found automatically: a purchase of $500 or more from
+ *              a place that is not regular (not seen in most of those months), with no yearly
+ *              repeat; a place that charged twice in one month still counts as not regular
  *              (the household can say "count it as regular", which wins)
  *   yearly     the same place charged a similar amount about a year earlier or later: kept, but
  *              spread as 1/12 a month (a 3-month baseline would otherwise count it as 1/3 a month)
@@ -41,9 +42,9 @@
     'cardPurchases', 'cardRefunds', 'bankPurchases', 'bankRefunds', 'cardRepayments', 'debt', 'business',
     'savingsIn', 'savingsOut', 'investIn', 'investOut'];
   const ROLES = ['card', 'bank', 'repayment', 'debt', 'business', 'savings', 'investment', 'interest', 'credit', 'internal'];
-  /** One-time purchases: at least this big… */
+  /** One-time purchases: at least this big, from a place that is not regular (REGULAR_SHARE). */
   const ONE_OFF_MIN_CENTS = 50000;
-  /** …with no other purchase from the same place of at least this share of it in the baseline months. */
+  /** "Similar" for the yearly check: another purchase from the same place of at least this share of it. */
   const ONE_OFF_REPEAT_SHARE = 0.5;
   /** A similar purchase this many months before or after makes it a yearly bill, not a one-time cost. */
   const YEARLY_GAPS = [11, 12, 13];
@@ -194,10 +195,15 @@
    * averages add up the same way.
    * @returns {{ months: string[], count: number, start: string|null, end: string|null,
    *   total: { actual, planning }, avg: { actual, planning }, oneTime: object[], yearly: object[],
-   *   keptRegular: object[], kinds: { card: object, bank: object }, oneOffs: object[], credits: object[] }}
+   *   keptRegular: object[], kinds: { card: object, bank: object }, oneOffs: object[], credits: object[],
+   *   spends: object[], regularAt: number }}
    *   oneTime: { …row, auto } (auto = found automatically, not chosen); yearly: { …row, spreadCents }
    *   (what stays in the baseline months); keptRegular: big purchases the household said to count
    *   as regular; kinds.<role>: totals of { regular, yearly, everyday, oneTime } over the months.
+   *   spends: every card and bank-paid purchase and refund in the months with its `kind` and
+   *   `planCents` (what it adds to total.planning: 0 for one-time, the spread for yearly, else
+   *   its cents), so a drill-down adds up to the planning totals to the cent.
+   *   regularAt: the number of months a place must appear in to count as regular.
    */
   function baseline(rows, { count = 12, endMonth } = {}) {
     const used = rows.filter(r => r.actual && (!endMonth || r.month <= endMonth)).slice(-count);
@@ -227,29 +233,33 @@
     }
     const regularAt = Math.max(2, Math.ceil(n * REGULAR_SHARE));
     const kinds = { card: { regular: 0, yearly: 0, everyday: 0, oneTime: 0 }, bank: { regular: 0, yearly: 0, everyday: 0, oneTime: 0 } };
-    const oneTime = [], yearly = [], keptRegular = [];
+    const oneTime = [], yearly = [], keptRegular = [], classified = [];
     for (const x of spends) {
-      let kind;
+      let kind, planCents = x.cents;
       if (x.planningExcluded) {
         kind = 'oneTime';
+        planCents = 0;
         oneTime.push(Object.assign({}, x, { auto: false }));
-      } else if (x.cents >= ONE_OFF_MIN_CENTS && !purchases.some(o => similar(x, o))) {
+      } else if (x.cents >= ONE_OFF_MIN_CENTS && monthsOf.get(x.merchant).size < regularAt) {
         if (everywhere.some(o => similar(x, o) && YEARLY_GAPS.includes(gap(x.date, o.date)))) {
           kind = 'yearly';
           const spreadCents = Math.round(x.cents * Math.min(n, 12) / 12);
           totalPlanning[x.role + 'Purchases'] -= x.cents - spreadCents;
+          planCents = spreadCents;
           yearly.push(Object.assign({}, x, { spreadCents }));
         } else if (x.keepRegular) {
           kind = 'everyday';
           keptRegular.push(x);
         } else {
           kind = 'oneTime';
+          planCents = 0;
           totalPlanning[x.role + 'Purchases'] -= x.cents;
           oneTime.push(Object.assign({}, x, { auto: true }));
         }
       } else if (x.cents > 0 && monthsOf.get(x.merchant).size >= regularAt) kind = 'regular';
       else kind = 'everyday';
       kinds[x.role][kind] += x.cents;
+      classified.push(Object.assign({}, x, { kind, planCents }));
     }
     const byAmount = (a, b) => b.cents - a.cents || (a.date < b.date ? -1 : 1);
     return {
@@ -260,6 +270,7 @@
       oneTime: oneTime.sort(byAmount), yearly: yearly.sort(byAmount), keptRegular: keptRegular.sort(byAmount), kinds,
       oneOffs: used.flatMap(r => r.oneOffs),
       credits: used.flatMap(r => r.credits),
+      spends: classified, regularAt,
     };
   }
 
@@ -340,7 +351,7 @@
    *               − debt payments − business purchases − net savings − net investments
    * A negative net savings amount is a drawdown: it raises the remainder (and lowers savings).
    * @param {{ base: object, funding: object, home: object, people: string[] }} o
-   *   base: baseline(); funding: planFunding(); home: state.ui.home; people: partner ids shown
+   *   base: baseline(); funding: planFunding(); home: amounts the household set ({ p1InCents, cardCents, … }); people: partner ids shown
    * @returns {object} lines with value, baseline, basis and whether the household changed it
    */
   function scenario({ base, funding, home = {}, people = [] }) {

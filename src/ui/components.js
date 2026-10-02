@@ -148,9 +148,9 @@
     const step = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10;
     return step * mag;
   }
-  function ticks(min, max) {
+  function ticks(min, max, targetTicks = 4) {
     if (min === max) { max = min + 100; }
-    const step = niceStep(max - min);
+    const step = niceStep(max - min, targetTicks);
     const start = Math.floor(min / step) * step;
     const out = [];
     for (let v = start; v <= max + step * 0.001; v += step) out.push(Math.round(v));

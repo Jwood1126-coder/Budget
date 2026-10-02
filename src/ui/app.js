@@ -300,6 +300,7 @@
       html = UI.c.pageHeader({ title: 'Something went wrong' }) + UI.c.notice({ tone: 'bad', title: 'This view could not be displayed.', body: esc(err.message) + '<br>Your saved data is unchanged. Try another view, or reset this view from Data &amp; privacy.' });
     }
     container.innerHTML = html;
+    if (UI.chart) UI.chart.attach(container); // cash chart hover, keyboard and legend (idempotent)
 
     for (const d of $$('details[id]', container)) {
       if (openDetails.has(d.id)) d.open = true;
@@ -310,6 +311,8 @@
       if (a.dataset.nav === route.view) a.setAttribute('aria-current', 'page');
       else a.removeAttribute('aria-current');
     }
+    // The phone tab bar's "More" menu closes once a view has been chosen from it.
+    for (const d of $$('.nav-more-menu')) d.open = false;
     document.title = (view.title || 'Budget') + ' · ' + (app.state.plan.people?.length ? householdName() : 'Household budget');
     updateChrome(ctx);
 

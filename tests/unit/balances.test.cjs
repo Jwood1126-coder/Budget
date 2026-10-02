@@ -261,18 +261,52 @@ test('project with limits: no balance goes below $0; savings tops up checking; t
   assert.equal(d.firstSavingsShortMonth, '2026-12');
 });
 
-test('history: a balance typed in a few days after the export ends (or with no date) still anchors the history, and says what it assumes', () => {
+test('history: a balance dated after the export ends is used at its own date; the days in between are a labelled gap with no transactions assumed', () => {
   const txns = [buy('2026-06-10', 20000), ...toSavings('2026-06-15', 30000)];
   const ds = build(txns);
   // Today's savings balance, typed two days after the export ends on 30 June.
-  const h = B.history(eff(ds), ds, { entered: { sav: 1412345, chk: 250000 }, asOf: '2026-07-02' });
-  const june = h.months.indexOf('2026-06');
-  assert.equal(h.groups.savings.values[june], 1412345, 'used as the balance at the end of the export');
-  assert.equal(h.groups.savings.values[h.months.indexOf('2026-05')], 1412345 - 30000, 'and worked back with the transactions');
-  assert.equal(h.total.kind, 'balance');
+  const h = B.history(eff(ds), ds, { entered: { sav: 1412345, chk: 250000 }, asOf: '2026-07-02', months: ['2026-05', '2026-06', '2026-07'] });
   const sav = h.accounts.find(a => a.id === 'sav');
-  assert.match(sav.note, /Your export ends Jun 30, 2026, so it is used as the balance then: anything that moved in between is not in your data\./);
-  // Too far from the data to say anything: unknown, never guessed.
-  const far = B.history(eff(ds), ds, { entered: { sav: 1412345, chk: 250000 }, asOf: '2026-09-30' });
-  assert.equal(far.groups.savings.values[june], null);
+  assert.deepEqual(sav.anchor, { date: '2026-07-02', cents: 1412345, source: 'entered' }, 'the date is never moved');
+  assert.deepEqual(sav.gap, { side: 'after', from: '2026-07-01', to: '2026-07-02', days: 2 });
+  assert.equal(h.groups.savings.values[1], 1412345, 'June 30: nothing assumed to move in the gap');
+  assert.equal(h.groups.savings.values[0], 1412345 - 30000, 'and worked back with the transactions');
+  assert.equal(h.groups.savings.values[2], null, 'July 31 is after the balance date and not covered: unknown');
+  assert.equal(h.total.kind, 'balance');
+  assert.match(sav.note, /Your export ends Jun 30, 2026, the balance is dated Jul 2, 2026\. The 2 days from Jul 1, 2026 to Jul 2, 2026 are not in your data: no transactions are assumed in them\./);
+  assert.deepEqual(sav.last, { date: '2026-07-02', cents: 1412345 });
+  assert.deepEqual(sav.first, { date: '2025-12-31', cents: 1412345 - 30000 });
+  // Months later: still used at its own date, however long the gap; never moved, never dropped.
+  const far = B.history(eff(ds), ds, { entered: { sav: 1412345, chk: 250000 }, asOf: '2026-09-30', months: ['2026-06'] });
+  const farSav = far.accounts.find(a => a.id === 'sav');
+  assert.equal(farSav.anchor.date, '2026-09-30');
+  assert.equal(farSav.gap.days, 92);
+  assert.equal(far.groups.savings.values[0], 1412345, 'the gap is assumed empty and labelled, not guessed');
+  assert.match(farSav.note, /92 days/);
+});
+
+test('history: a balance dated before the export starts is used at its date; earlier months stay unknown', () => {
+  const txns = [buy('2026-01-10', 20000)];
+  const ds = build(txns);
+  const h = B.history(eff(ds), ds, { entered: { chk: 500000 }, enteredAsOf: { chk: '2025-11-20' }, months: ['2025-10', '2025-11', '2025-12', '2026-01'] });
+  const chk = h.accounts.find(a => a.id === 'chk');
+  assert.deepEqual(chk.gap, { side: 'before', from: '2025-11-21', to: '2025-12-31', days: 41 });
+  assert.deepEqual(h.groups.checking.values, [null, 500000, 500000, 480000], 'October is before anything is known');
+  assert.match(chk.note, /Your export starts Jan 1, 2026/);
+});
+
+test('history: each account uses its own balance date; a running balance wins unless the entered one is newer', () => {
+  const txns = [pay('2026-01-05', 300000, { balanceCents: 400000, sourceFile: 'a.csv', sourceRow: 1 }), buy('2026-02-10', 100000), ...toSavings('2026-02-15', 50000)];
+  const ds = build(txns, { chk: [{ start: '2026-01-01', end: '2026-02-28' }], sav: [{ start: '2026-01-01', end: '2026-02-28' }] });
+  const h = B.history(eff(ds), ds, { entered: { chk: 999999, sav: 150000 }, asOf: '2026-01-04', enteredAsOf: { sav: '2026-02-28' }, months: ['2026-01', '2026-02'] });
+  const chk = h.accounts.find(a => a.id === 'chk'), sav = h.accounts.find(a => a.id === 'sav');
+  assert.equal(chk.source, 'bank');
+  assert.deepEqual(h.groups.checking.values, [400000, 250000], 'the older entered checking balance does not override the bank');
+  assert.match(chk.note, /not newer than the export/);
+  assert.deepEqual(sav.anchor, { date: '2026-02-28', cents: 150000, source: 'entered' });
+  assert.deepEqual(h.groups.savings.values, [100000, 150000]);
+  const newer = B.history(eff(ds), ds, { entered: { chk: 260000 }, enteredAsOf: { chk: '2026-03-04' }, months: ['2026-02'] });
+  const c2 = newer.accounts.find(a => a.id === 'chk');
+  assert.deepEqual(c2.anchor, { date: '2026-03-04', cents: 260000, source: 'entered' }, 'a newer entered balance becomes the latest known balance');
+  assert.deepEqual(c2.last, { date: '2026-03-04', cents: 260000 });
 });

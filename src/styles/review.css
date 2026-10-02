@@ -319,3 +319,6 @@
   .rv-pager { grid-template-columns: auto 1fr auto; gap: var(--space-2); }
   .rv-item.is-target { margin: 0 calc(-1 * var(--space-2)); padding-left: var(--space-2); padding-right: var(--space-2); }
 }
+
+/* Small print lists (warnings under a correction, orphan edits). */
+.fine-list { margin: var(--space-3) 0 0; padding-left: 1.1rem; font-size: .84rem; color: var(--text-2); }
