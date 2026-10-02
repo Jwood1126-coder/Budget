@@ -375,12 +375,15 @@
   //   trends: the Trends chart: which series (TREND_SERIES), a moving average of 0/3/6 months, and a trend line.
   //   legacyDials (absent unless needed): { card?, bank? } signed cents set for the earlier card and
   //     bank dials, waiting to be carried over to essentials, flexible and irregular.
-  //   cardSplit (absent unless needed): { [essentials|flexible|irregular]: { cents, card } } the card
-  //     part of a direct amount, used while the dial still holds exactly `cents`.
+  //   cardSplit (absent unless needed): { [essentials|flexible|irregular]: { cents, card, fromCard?, fromBank? } }
+  //     the card part of a direct amount, used while the dial still holds exactly `cents`; fromCard /
+  //     fromBank mark it as carried over from the earlier card / bank amount until it is kept.
   const PLAN_ROW_FIELDS = [['included', optional(rule('bool', {}))], ['cents', optional(rule('cents', { signed: true }))]];
   const PLAN_ROW_RULE = rule('object', { fields: PLAN_ROW_FIELDS });
   const LEGACY_DIAL_FIELDS = RETIRED_DIALS.map(k => [k, optional(rule('cents', { signed: true }))]);
-  const CARD_SPLIT_FIELDS = [['cents', rule('cents', { signed: true, required: true })], ['card', rule('cents', { signed: true, required: true })]];
+  // fromCard / fromBank: the earlier card / bank amount it was carried over from (until kept or changed).
+  const CARD_SPLIT_FIELDS = [['cents', rule('cents', { signed: true, required: true })], ['card', rule('cents', { signed: true, required: true })],
+    ['fromCard', optional(rule('cents', { signed: true }))], ['fromBank', optional(rule('cents', { signed: true }))]];
   const CARD_SPLIT_RULE = rule('object', { fields: CARD_SPLIT_FIELDS });
   const SPEND_GROUP_RULE = oneOf(SPEND_GROUPS, null);
   const TRENDS_FIELDS = [
@@ -587,6 +590,7 @@
           if (isValidId(key) && (!r.keys || r.keys.includes(key)) && isObj(v) && Object.keys(v).every(f => r.fields.some(([n]) => n === f)) && Object.keys(out).length < r.max) {
             entry = {};
             for (const [f, fr] of r.fields) {
+              if (v[f] === undefined && fr.optional) continue;
               const res = check(fr, v[f], true);
               if (!res.ok) { entry = null; break; }
               entry[f] = res.value;
@@ -595,7 +599,7 @@
           if (!entry) { dropped.push(k); continue; }
           out[key] = entry;
         }
-        if (dropped.length && strict) return bad('Every entry needs one of: ' + (r.keys || []).join(', ') + ', with ' + r.fields.map(([n]) => n).join(' and ') + ' in whole cents.');
+        if (dropped.length && strict) return bad('Every entry needs one of: ' + (r.keys || []).join(', ') + ', with ' + r.fields.filter(([, fr]) => !fr.optional).map(([n]) => n).join(' and ') + ' in whole cents.');
         return ok(out, dropped.length ? 'dropped ' + noun + ' that were not valid (' + dropped.slice(0, 5).map(k => JSON.stringify(k)).join(', ') + ')' : null);
       }
       case 'boolmap': {

@@ -987,12 +987,37 @@ module.exports = [
       assert.equal(spend.reduce((s, k) => s + dialOf(exp, k).cardCents, 0), 420000, 'the card parts add up to the amount set');
       assert.equal(spend.reduce((s, k) => s + dialOf(exp, k).planCents, 0), 420000 + bankBase, 'the bank parts stay at their baseline');
       assert.equal(exp.plan.out.card, 420000);
-      // Once: nothing is left to carry over.
+      // Explained on each dial and once under the headline, until kept or changed.
+      const basisNote = 'Carried over from your earlier card spending setting of $4,200.00 (card parts of Essentials, Flexible and Irregular add up to it).';
+      const summary = 'Three dials carry your earlier card spending setting of $4,200.00 — review them, then Keep or Reset.';
+      const basisOf = k => page.textContent(`#plan-dial-${k}-basis`).then(x => x.replace(/\s+/g, ' ').trim());
+      for (const k of spend) assert.equal(await basisOf(k), basisNote + ' Keep', k);
+      assert.equal((await page.textContent('#plan-carried')).trim(), summary);
+      // Once: nothing is left to carry over, and the explanation is still there after a reload.
       await page.reload();
       await page.waitForSelector('#plan-root');
       const again = await timeline(page);
       assert.deepEqual(spend.map(k => dialOf(again, k).planCents), spend.map(k => dialOf(exp, k).planCents));
       assert.equal((await state(page)).meta.migrationNotes.filter(n => n === note).length, 1);
+      for (const k of spend) assert.equal(await basisOf(k), basisNote + ' Keep', k + ' after a reload');
+      assert.equal((await page.textContent('#plan-carried')).trim(), summary);
+      // Keep: the note goes, the amount stays.
+      await page.click('#plan-dial-flexible-keep');
+      await page.waitForFunction(() => !('fromCard' in (window.HouseholdBudget.getState().ui.plan.cardSplit.flexible || {})));
+      await page.waitForFunction(() => !document.getElementById('plan-dial-flexible-keep'));
+      assert.doesNotMatch(await basisOf('flexible'), /Carried over/);
+      assert.equal((await state(page)).ui.plan.dials.flexible, dialOf(exp, 'flexible').planCents);
+      assert.match((await page.textContent('#toast')).trim(), /^Flexible spending kept at \$/);
+      assert.equal((await page.textContent('#plan-carried')).trim(), summary.replace('Three dials carry', 'Two dials carry'));
+      // Reset: back to the baseline, no note.
+      await page.click('#plan-dial-essentials-reset');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().ui.plan.dials.essentials === undefined);
+      const reset = await timeline(page);
+      assert.deepEqual([dialOf(reset, 'essentials').source, dialOf(reset, 'essentials').planCents], ['baseline', dialOf(before, 'essentials').planCents]);
+      await page.waitForFunction(v => document.querySelector('#plan-dial-essentials').value === v, boxText(dialOf(before, 'essentials').planCents));
+      assert.doesNotMatch(await basisOf('essentials'), /Carried over/);
+      assert.equal((await page.textContent('#plan-carried')).trim(), 'One dial carries your earlier card spending setting of $4,200.00 — review it, then Keep or Reset.');
+      assert.equal(await basisOf('irregular'), 'Carried over from your earlier card spending setting of $4,200.00. Keep', 'the total is no longer claimed once a dial moved');
     },
   },
   {

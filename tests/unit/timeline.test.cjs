@@ -1268,7 +1268,7 @@ test('the earlier card amount is carried over by scaling the card part of the th
   const next = T.migrateDials(st, r);
   assert.deepEqual(next.ui.plan.dials, Object.fromEntries(SPEND.map(k => [k, mig.to[k]])));
   assert.equal(next.ui.plan.legacyDials, undefined);
-  assert.deepEqual(next.ui.plan.cardSplit, Object.fromEntries(SPEND.map(k => [k, { cents: mig.to[k], card: mig.parts[k].card }])));
+  assert.deepEqual(next.ui.plan.cardSplit, Object.fromEntries(SPEND.map(k => [k, { cents: mig.to[k], card: mig.parts[k].card, fromCard: X }])));
   assert.ok(next.meta.migrationNotes.includes(mig.note));
   const r2 = build(next);
   assert.deepEqual(SPEND.map(k => [r2.dialsByKey[k].source, r2.dialsByKey[k].cardCents, r2.dialsByKey[k].bankCents]), SPEND.map((k, i) => ['direct', parts[i], bank[i]]));
@@ -1379,4 +1379,56 @@ test('row changes and dial amounts from the earlier card dial are carried over t
   assert.ok(next.meta.migrationNotes.includes(r.migration.rowsNote) && next.meta.migrationNotes.includes(r.migration.dials.note));
   assert.equal(build(next).migration, null);
   assert.equal(build(next).plan.out.card, 250000, 'the direct amounts win over the row change, as the card dial did');
+});
+
+test('a carried-over amount stays explained until it is kept or changed: per dial and once for the headline; it survives a save and a second upgrade', () => {
+  const ds = household();
+  const { st, build } = legacyRig(ds, { card: 420000 });
+  const before = build(st);
+  assert.equal(before.carriedOver, null, 'nothing carried over yet');
+  assert.ok(before.dials.every(d => d.carriedOver === null));
+  const next = T.migrateDials(st, before);
+  const r = build(next);
+  const note = 'Carried over from your earlier card spending setting of $4,200.00 (card parts of Essentials, Flexible and Irregular add up to it).';
+  for (const k of SPEND) assert.deepEqual(r.dialsByKey[k].carriedOver, { from: 'card', cardTotalCents: 420000, bankTotalCents: null, note }, k);
+  assert.ok(r.dials.filter(d => !SPEND.includes(d.key)).every(d => d.carriedOver === null));
+  assert.deepEqual(r.carriedOver, { from: 'card', cardTotalCents: 420000, bankTotalCents: null, note, dials: SPEND,
+    summary: 'Three dials carry your earlier card spending setting of $4,200.00 — review them, then Keep or Reset.' });
+  // Saved and loaded (state.sanitize, then the engine's own settings), and upgraded again: unchanged.
+  const saved = E.state.sanitize(JSON.parse(JSON.stringify(next)), null, ds).state;
+  assert.deepEqual(saved.ui.plan.cardSplit, next.ui.plan.cardSplit);
+  assert.deepEqual(build(saved).carriedOver, r.carriedOver);
+  assert.equal(T.migrateDials(saved, build(saved)), saved, 'a second upgrade changes nothing');
+  assert.deepEqual(E.state.sanitize(saved, null, ds).state, saved);
+  // Keep one: its marker goes, the amount and its card part stay, so the others still add up.
+  const kept = T.acceptCarriedOver(next, 'flexible');
+  assert.deepEqual(kept.ui.plan.cardSplit.flexible, { cents: next.ui.plan.cardSplit.flexible.cents, card: next.ui.plan.cardSplit.flexible.card });
+  assert.equal(kept.ui.plan.dials.flexible, next.ui.plan.dials.flexible);
+  const rk = build(kept);
+  assert.equal(rk.dialsByKey.flexible.carriedOver, null);
+  assert.equal(rk.dialsByKey.flexible.cardCents, r.dialsByKey.flexible.cardCents, 'keeping changes no amount');
+  assert.equal(rk.dialsByKey.essentials.carriedOver.note, note);
+  assert.equal(rk.carriedOver.summary, 'Two dials carry your earlier card spending setting of $4,200.00 — review them, then Keep or Reset.');
+  assert.equal(rk.plan.out.card, 420000);
+  assert.equal(T.acceptCarriedOver(kept, 'flexible'), kept, 'nothing left to keep');
+  const allKept = T.acceptCarriedOver(next, SPEND);
+  assert.equal(build(allKept).carriedOver, null);
+  // Changing a dial or resetting it clears its marker; the note then stops claiming a total.
+  const changed = T.setDial(next, 'essentials', r.dialsByKey.essentials.planCents + 500);
+  const rc = build(changed);
+  assert.equal(rc.dialsByKey.essentials.carriedOver, null);
+  assert.equal(rc.dialsByKey.irregular.carriedOver.note, 'Carried over from your earlier card spending setting of $4,200.00.');
+  assert.equal(rc.carriedOver.summary, 'Two dials carry your earlier card spending setting of $4,200.00 — review them, then Keep or Reset.');
+  const reset = build(T.resetDial(next, 'irregular', r));
+  assert.deepEqual([reset.dialsByKey.irregular.source, reset.dialsByKey.irregular.carriedOver], ['baseline', null]);
+  assert.equal(build(T.resetPlan(next)).carriedOver, null);
+  // Card and bank together; one dial left alone because it was set.
+  const both = legacyRig(ds, { card: 300000, bank: 160000 });
+  const rb = both.build(T.migrateDials(both.st, both.build(both.st)));
+  assert.equal(rb.dialsByKey.flexible.carriedOver.note, 'Carried over from your earlier card spending setting of $3,000.00 and bank spending setting of $1,600.00 (card and bank parts of Essentials, Flexible and Irregular add up to them).');
+  assert.equal(rb.carriedOver.from, 'both');
+  const one = legacyRig(ds, { bank: 160000 }, { dials: { flexible: 1, irregular: 2 } });
+  const ro = one.build(T.migrateDials(one.st, one.build(one.st)));
+  assert.deepEqual(ro.carriedOver, { from: 'bank', cardTotalCents: null, bankTotalCents: 160000, note: 'Carried over from your earlier bank spending setting of $1,600.00.', dials: ['essentials'],
+    summary: 'One dial carries your earlier bank spending setting of $1,600.00 — review it, then Keep or Reset.' });
 });

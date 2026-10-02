@@ -163,7 +163,10 @@
     if (isObj(s.cardSplit)) {
       for (const k of SPEND_DIALS) {
         const v = own(s.cardSplit, k);
-        if (isObj(v) && isCents(v.cents) && isCents(v.card)) cardSplit[k] = { cents: v.cents, card: v.card };
+        if (!isObj(v) || !isCents(v.cents) || !isCents(v.card)) continue;
+        cardSplit[k] = { cents: v.cents, card: v.card };
+        // Marks an amount carried over from the earlier card/bank dials, until the household keeps or changes it.
+        for (const f of ['fromCard', 'fromBank']) if (isCents(v[f])) cardSplit[k][f] = v[f];
       }
     }
     return {
@@ -811,7 +814,46 @@
         basis: windowText + (n ? ' (debt payments, business purchases and investments)' : ''), hint: null, drill: null,
       }));
     }
-    return { dials, parts, windowText, legacy, superseded };
+    const carriedOver = carriedOverOf(dials, cfg);
+    return { dials, parts, windowText, legacy, superseded, carriedOver };
+  }
+
+  /**
+   * Spending dials that still hold exactly the amount carried over from the earlier card/bank
+   * dials (their ui.plan.cardSplit entry matches the dial and still has fromCard/fromBank) get
+   * `carriedOver: { from: 'card'|'bank'|'both', cardTotalCents, bankTotalCents, note }`; every
+   * other dial gets null. The note says the parts add up to what was set only when that is still
+   * true (all three dials hold their carried-over amounts and the parts sum to it).
+   * Returns the same for the screen's headline area, plus { dials, summary }, or null.
+   */
+  function carriedOverOf(dials, cfg) {
+    for (const d of dials) d.carriedOver = null;
+    const spend = SPEND_DIALS.map(k => dials.find(d => d.key === k)).filter(Boolean);
+    const holds = d => {
+      const sp = own(cfg.cardSplit, d.key);
+      return sp && d.source === 'direct' && sp.cents === d.planCents ? sp : null;
+    };
+    const marked = spend.filter(d => holds(d) && (isCents(holds(d).fromCard) || isCents(holds(d).fromBank)));
+    if (!marked.length) return null;
+    const first = holds(marked[0]);
+    const cardTotalCents = isCents(first.fromCard) ? first.fromCard : null;
+    const bankTotalCents = isCents(first.fromBank) ? first.fromBank : null;
+    const from = cardTotalCents !== null && bankTotalCents !== null ? 'both' : cardTotalCents !== null ? 'card' : 'bank';
+    const all = spend.length === SPEND_DIALS.length && spend.every(d => holds(d));
+    const addsUp = all && (cardTotalCents === null || spend.reduce((s, d) => s + holds(d).card, 0) === cardTotalCents)
+      && (bankTotalCents === null || spend.reduce((s, d) => s + holds(d).cents - holds(d).card, 0) === bankTotalCents);
+    const money = E.money.format;
+    const what = from === 'both' ? 'card spending setting of ' + money(cardTotalCents) + ' and bank spending setting of ' + money(bankTotalCents)
+      : from + ' spending setting of ' + money(from === 'card' ? cardTotalCents : bankTotalCents);
+    const note = 'Carried over from your earlier ' + what
+      + (addsUp ? ' (' + (from === 'both' ? 'card and bank parts' : from + ' parts') + ' of Essentials, Flexible and Irregular add up to ' + (from === 'both' ? 'them' : 'it') + ').' : '.');
+    const info = { from, cardTotalCents, bankTotalCents, note };
+    for (const d of marked) d.carriedOver = Object.assign({}, info);
+    const n = marked.length;
+    return Object.assign({}, info, {
+      dials: marked.map(d => d.key),
+      summary: ['One dial carries', 'Two dials carry', 'Three dials carry'][n - 1] + ' your earlier ' + what + ' — review ' + (n > 1 ? 'them' : 'it') + ', then Keep or Reset.',
+    });
   }
 
   /**
@@ -1319,7 +1361,7 @@
     // Pay saved in Budget for the first plan month (ended streams out, later ones not yet in).
     let funding = null;
     try { funding = E.flows.planFunding(plan, { month: planStart, timing: 'average' }); } catch (err) { funding = null; }
-    const { dials, parts, windowText, legacy, superseded } = buildDials({ base, people, cfg, byId, requested, funding });
+    const { dials, parts, windowText, legacy, superseded, carriedOver } = buildDials({ base, people, cfg, byId, requested, funding });
     const planValues = planMonth(dials, parts, people, false);
 
     // What happened so far in partly covered months (kept apart from the month's amounts).
@@ -1470,6 +1512,7 @@
       balances,
       series: seriesOf(monthRows, people),
       migration,
+      carriedOver,
       settings: cfg,
     };
   }
@@ -1820,17 +1863,35 @@
       const cents = mig.to[k];
       if (!isCents(cents) || isCents(own(planUi(next).dials, k))) continue;
       next = setDial(next, k, cents);
-      next = E.state.setPath(next, 'ui.plan.cardSplit.' + k, { cents, card: mig.parts[k].card });
+      // The card part, and what it was carried over from (shown until the household keeps or changes it).
+      const entry = { cents, card: mig.parts[k].card };
+      if (isCents(mig.from.card)) entry.fromCard = mig.from.card;
+      if (isCents(mig.from.bank)) entry.fromBank = mig.from.bank;
+      next = E.state.setPath(next, 'ui.plan.cardSplit.' + k, entry);
     }
     next = E.state.setPath(next, 'ui.plan.legacyDials', undefined);
     for (const k of LEGACY_DIALS) if (has(planUi(next).dials, k)) next = E.state.setPath(next, 'ui.plan.dials.' + k, undefined);
     return recordNote(next, mig.note);
   }
 
+  /**
+   * Keep a carried-over amount as it is (one dial key or a list): its "carried over" marker is
+   * removed, the amount and its card part stay. Nothing marked: the state is returned as it is.
+   */
+  function acceptCarriedOver(state, keys) {
+    let next = state;
+    for (const key of Array.isArray(keys) ? keys : [keys]) {
+      const sp = own(planUi(next).cardSplit, key);
+      if (!isObj(sp) || (!has(sp, 'fromCard') && !has(sp, 'fromBank'))) continue;
+      next = E.state.setPath(next, 'ui.plan.cardSplit.' + key, { cents: sp.cents, card: sp.card });
+    }
+    return next;
+  }
+
   E.timeline = {
     BASELINE_CHOICES, HORIZONS, PAST_CHOICES, MODES, DEFAULTS, TREND_MA, TREND_DEFAULTS, SPEND_GROUPS, SPEND_DIALS, LEGACY_DIALS, OUT_DIALS, MERCHANT_KEY, CHANGE_KINDS, CHANGE_GROUPS, SERIES,
     TINY_CATEGORY_CENTS, STABLE_MIN_CHARGES, STABLE_SPREAD, OTHER_CATEGORY, SIMPLE_LABEL, RULE, SIMPLE_RULE, ILLUSTRATIVE, DIAL_LABEL,
     build, anchors, settings, depositHint, prorate, toCSV, templates,
-    setDial, setRow, resetDial, resetPlan, setGroup, setIrregular, addChange, setChange, removeChange, acceptChanges, migrateRows, migrateDials,
+    setDial, setRow, resetDial, resetPlan, setGroup, setIrregular, addChange, setChange, removeChange, acceptChanges, migrateRows, migrateDials, acceptCarriedOver,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

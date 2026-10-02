@@ -124,6 +124,8 @@ button.plan-trend-chip:hover { background: var(--surface-3); }
 .plan-headline strong.tone-warn { color: var(--warn); }
 .plan-checking { margin-top: 2px; color: var(--text-2); }
 .plan-addup { margin-top: var(--space-1); font-size: .8rem; color: var(--text-3); }
+.plan-carried { margin-top: var(--space-1); font-size: .8rem; color: var(--text-2); }
+.dial-basis .dial-keep { display: flex; width: fit-content; margin: 2px 0 0 -6px; }
 
 /* ---- drill-down under essentials, flexible and irregular */
 .plan-drill { margin-top: var(--space-2); }

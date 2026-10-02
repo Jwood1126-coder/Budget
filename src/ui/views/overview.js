@@ -458,6 +458,8 @@
     const person = d.group === 'in' && typeof d.basisKind === 'string';
     const budgetLink = text => `<a class="dial-budget-link" id="${esc(id)}-budget" href="${esc(ctx.href('budget', { section: 'income' }))}">${esc(text)}</a>`;
     let basis = esc(d.basis);
+    // An amount carried over from the earlier card/bank dials says so until it is kept or changed.
+    if (d.carriedOver) basis = esc(d.carriedOver.note) + ' ' + c.button('Keep', { action: 'plan:keep-carried', variant: 'ghost', data: { dial: d.key }, cls: 'btn-small dial-keep', id: id + '-keep', ariaLabel: 'Keep ' + label + ' at ' + amt(d.planCents) + ' and remove this note' });
     if (person && d.basisKind === 'budget') basis += ' · ' + budgetLink('Change in Budget');
     if (person && d.needsConfirm) {
       const unknown = d.budget && Array.isArray(d.budget.unknown) ? d.budget.unknown : [];
@@ -647,9 +649,11 @@
   function sumOf(tl, vals) {
     const inKeys = tl.groups.in;
     const outKeys = tl.groups.out.filter(k => k !== 'savings');
+    // Dials still holding amounts carried over from the earlier card/bank dials: one quiet line.
+    const carried = tl.carriedOver ? `<p class="plan-carried" id="plan-carried">${esc(tl.carriedOver.summary)}</p>` : '';
     if (inKeys.concat(outKeys).some(k => !isCents(vals[k]))) {
       const text = 'Your money, all accounts: not known yet (no complete month to start from).';
-      return { html: `<p class="plan-headline" id="plan-headline">${esc(text)}</p>`, text };
+      return { html: `<p class="plan-headline" id="plan-headline">${esc(text)}</p>${carried}`, text };
     }
     const inTotal = inKeys.reduce((s, k) => s + vals[k], 0);
     const terms = [[1, inTotal, 'in']].concat(outKeys.map(k => [-1, vals[k], SUM_NAME[k] || k]));
@@ -670,7 +674,7 @@
     return {
       html: `<p class="plan-headline" id="plan-headline">Your money, all accounts: <strong class="${combined < 0 ? 'tone-warn' : ''}">${esc(signedAmt(combined))}</strong> a month on this plan</p>
         <p class="plan-checking" id="plan-checking">${esc(checking)}</p>
-        <p class="plan-addup" id="plan-addup">${esc(words.join(' ') + ' = ' + signedAmt(combined))}</p>`,
+        <p class="plan-addup" id="plan-addup">${esc(words.join(' ') + ' = ' + signedAmt(combined))}</p>${carried}`,
       text: head + '.',
       combined,
     };
@@ -978,6 +982,12 @@
       if (!d) return;
       focusNext = '#plan-dial-' + d.key;
       change(ctx, st => E.timeline.resetDial(st, d.key, tl), `${dialLabel(d)} is back to its baseline (${amt(d.baselineCents)}).`);
+    },
+    'plan:keep-carried': (ctx, el) => {
+      const d = model(ctx).dialsByKey[el.dataset.dial];
+      if (!d || !d.carriedOver) return;
+      focusNext = '#plan-dial-' + d.key;
+      change(ctx, st => E.timeline.acceptCarriedOver(st, d.key), `${dialLabel(d)} kept at ${amt(d.planCents)}.`);
     },
     'plan:use-average': (ctx, el) => {
       const d = model(ctx).dialsByKey[el.dataset.dial];

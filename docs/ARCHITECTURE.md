@@ -483,9 +483,12 @@ State = {
                           ma: 0|3|6 (3), trend: boolean (true) },     // the Trends chart
                 legacyDials?: { card?: signed cents, bank?: signed cents },  // absent unless waiting: amounts set for the
                                                                   // earlier card/bank dials, until Plan carries them over
-                cardSplit?: { [essentials|flexible|irregular]: { cents: signed cents, card: signed cents } } },
+                cardSplit?: { [essentials|flexible|irregular]: { cents: signed cents, card: signed cents,
+                              fromCard?: signed cents, fromBank?: signed cents } } },
                                                                   // absent unless needed: the card part of a direct amount,
-                                                                  // used while dials[key] === cents (set by migrateDials)
+                                                                  // used while dials[key] === cents (set by migrateDials);
+                                                                  // fromCard/fromBank mark it as carried over from the
+                                                                  // earlier card/bank amount until kept (acceptCarriedOver)
                                                  // the plan screen (BudgetEngine.timeline). Replaces the earlier ui.home:
                                                  // sanitize moves p1InCents/p2InCents/cardCents/bankCents/savedCents to
                                                  // dials p1/p2/card/bank/savings and baselineMonths/horizon to their
@@ -1110,7 +1113,10 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
   `plan` = `state.plan` (with `plan.changes`), `settings` = `state.ui.plan`, `today` 'YYYY-MM-DD'. Returns
   `{ today, todayMonth, planStart, lastComplete, firstMonth, lastMonth, horizon, months, window,
   people, dials, dialsByKey, groups, plan, changed, changedBy, changes, baseline, balances, series,
-  migration, settings }`:
+  migration, carriedOver, settings }`:
+  - `carriedOver`: null, or the spending dials' `carriedOver` once for the headline area, plus
+    `dials` (keys) and `summary`: "Three dials carry your earlier card spending setting of $4,200.00
+    — review them, then Keep or Reset." ("Two dials carry …", "One dial carries … — review it, …").
   - `planStart` = the month after the last month every spending account covers in full.
     `months` run from the first month with data (earlier when a balance is known before it) to
     `planStart + horizon − 1`: `{ month, status: 'actual'|'partial'|'plan', current, complete,
@@ -1148,7 +1154,15 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
     Spending dials (essentials, flexible, irregular) also carry `cardShare` (0..1), `cardCents` /
     `bankCents` (the plan amount split by how it was paid; a direct amount splits by `cardShare`,
     or by `settings.cardSplit[key].card` while the dial holds exactly `settings.cardSplit[key].cents`)
-    and `baselineCardCents` / `baselineBankCents`.
+    and `baselineCardCents` / `baselineBankCents`. Every dial has `carriedOver`: null, or — for a
+    spending dial still holding exactly an amount carried over from the earlier card/bank dials
+    (its `cardSplit` entry matches and has `fromCard`/`fromBank`) — `{ from: 'card'|'bank'|'both',
+    cardTotalCents|null, bankTotalCents|null, note }`, note e.g. "Carried over from your earlier
+    card spending setting of $4,200.00 (card parts of Essentials, Flexible and Irregular add up to
+    it)." (both: "…card spending setting of $X and bank spending setting of $Y (card and bank parts
+    of … add up to them)."). The parenthesis is there only while it is true: all three spending
+    dials still hold their carried-over amounts and the parts sum to what was set; otherwise the
+    note ends after the amount.
   - Grouping: a category is `essentials` when `categories.isEssential` says so, else `flexible`;
     `settings.groups[category]` overrides it, and `settings.groups['merchant:' + place]` moves every
     purchase of that place (all its categories) into a synthetic category row named after the place
@@ -1291,7 +1305,9 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
   `tl.migration.dials.note` to `meta.migrationNotes`; returns the same state when nothing is
   waiting). The plan screen runs `migrateDials(migrateRows(state, tl), tl)` once, as one change,
   and shows `tl.migration.note`. `setDial` removes the dial's `cardSplit` entry; `resetPlan` clears
-  `cardSplit`.
+  `cardSplit`. `acceptCarriedOver(state, key | keys)` ("Keep") removes only the
+  `fromCard`/`fromBank` marker: the amount and its card part stay, so card and bank totals do not
+  move; nothing marked → the same state.
 - `settings(raw)` (adds `groups`, `irregularOff`, `legacyDials` (`{ card?, bank? }`, amounts only;
   a `dials.card`/`bank` still in `raw` moves here and wins), `cardSplit` (valid entries only),
   `trends: { series, ma, trend }`; `mode` may be 'trends'), `prorate(cents, daysLeft, daysInMonth)`,

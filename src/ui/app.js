@@ -311,8 +311,6 @@
       if (a.dataset.nav === route.view) a.setAttribute('aria-current', 'page');
       else a.removeAttribute('aria-current');
     }
-    // The phone tab bar's "More" menu closes once a view has been chosen from it.
-    for (const d of $$('.nav-more-menu')) d.open = false;
     document.title = (view.title || 'Budget') + ' · ' + (app.state.plan.people?.length ? householdName() : 'Household budget');
     updateChrome(ctx);
 
@@ -320,6 +318,10 @@
     // stays the first Tab stop).
     const viewChanged = lastView !== null && lastView !== route.view;
     lastView = route.view;
+    // The phone tab bar's "More" menu closes once a view has been chosen from it — on a change of
+    // view only, so a re-render of the same view (an undoable update, a toast) never snaps it shut
+    // between a tap on "More" and a tap on the item.
+    if (viewChanged) for (const d of $$('.nav-more-menu')) d.open = false;
     const keep = fromHash && keepFocusOnNextRender;
     if ((focusHeading || viewChanged) && !keep) {
       const h = $('#page-title', container);

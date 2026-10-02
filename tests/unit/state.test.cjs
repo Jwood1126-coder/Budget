@@ -2140,7 +2140,11 @@ test('Plan settings: card and bank amounts set before spending was grouped wait 
 });
 
 test('Plan settings: the card part kept with a direct spending amount (ui.plan.cardSplit) is validated', () => {
-  let st = S.setPath(base(), 'ui.plan.cardSplit.essentials', { cents: 320000, card: 120000 });
+  let st = S.setPath(base(), 'ui.plan.cardSplit.essentials', { cents: 320000, card: 120000, fromCard: 420000 });
+  assert.deepEqual(st.ui.plan.cardSplit.essentials, { cents: 320000, card: 120000, fromCard: 420000 }, 'marked as carried over');
+  assert.deepEqual(S.sanitize(JSON.parse(JSON.stringify(st)), profile(), DS).state.ui.plan.cardSplit, st.ui.plan.cardSplit, 'the marker survives a save');
+  assert.throws(() => S.setPath(st, 'ui.plan.cardSplit.essentials', { cents: 1, card: 1, fromBank: 'x' }), isValidationError());
+  st = S.setPath(st, 'ui.plan.cardSplit.essentials', { cents: 320000, card: 120000 });
   st = S.setPath(st, 'ui.plan.cardSplit.irregular', { cents: -500, card: -500 });
   assert.deepEqual(st.ui.plan.cardSplit, { essentials: { cents: 320000, card: 120000 }, irregular: { cents: -500, card: -500 } });
   assert.deepEqual(S.sanitize(JSON.parse(JSON.stringify(st)), profile(), DS).state.ui.plan.cardSplit, st.ui.plan.cardSplit, 'kept through a save');
