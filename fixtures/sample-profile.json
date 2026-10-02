@@ -464,7 +464,16 @@
       }
     }
   ],
-  "references": [],
+  "references": [
+    {
+      "id": "spreadsheet-q3",
+      "label": "Jul–Sep 2026 total from our old spreadsheet (fictional)",
+      "start": "2026-07-01",
+      "end": "2026-09-30",
+      "spendingCents": 1424412,
+      "source": "Sample: an earlier spreadsheet that also counted store-card payments as spending"
+    }
+  ],
   "rulesNote": "Import rules for this sample household are in fixtures/sample-rules.json.",
   "notes": [
     "Everything in this profile is invented for the public sample.",

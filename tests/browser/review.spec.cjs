@@ -838,4 +838,17 @@ module.exports = [
       }
     },
   },
+  {
+    name: 'reconcile: a reference from the household profile is listed and its gap is explained as a possibility',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/review?queue=reconcile&ref=spreadsheet-q3');
+      await page.waitForSelector('#rv-rec-h');
+      const text = await page.textContent('#view');
+      assert.match(text, /From the household profile/);
+      assert.match(text, /Difference \+\$165\.00/);
+      assert.match(text, /within \$1 of .Debt payments/);
+      assert.match(text, /possibilities to check, not conclusions/);
+    },
+  },
 ];

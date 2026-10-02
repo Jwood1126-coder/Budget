@@ -200,7 +200,12 @@
   function allReferences(ctx) {
     const user = (ctx.state.references || []).map(r => ({ ...r, origin: 'user' }));
     const data = (ctx.dataset.references || []).map(r => ({ ...r, origin: 'data' }));
-    return [...user, ...data];
+    // References written into the household profile (e.g. a total from an earlier analysis).
+    const taken = new Set([...user, ...data].map(r => r.id));
+    const profile = ((ctx.profile && ctx.profile.references) || [])
+      .filter(r => r && r.id && !taken.has(r.id) && E.dates.isDate(r.start) && E.dates.isDate(r.end) && Number.isInteger(r.spendingCents))
+      .map(r => ({ ...r, origin: 'profile' }));
+    return [...user, ...data, ...profile];
   }
 
   function queueInfo(ctx, q) {
@@ -1199,11 +1204,11 @@
     const table = stackTable({
       caption: 'Reference totals and the app’s spending for the same dates',
       columns: [
-        { key: 'l', label: 'Name', html: x => `${goLink(ctx, esc(x.r.label), { queue: 'reconcile', ref: x.r.id }, { id: 'rv-ref-open-' + x.r.id, focus: 'rv-rec-h', current: selected && selected.ref && selected.ref.id === x.r.id })}<small>${esc(fmt.date(x.r.start))} – ${esc(fmt.date(x.r.end))} · ${esc(x.r.origin === 'user' ? 'Added by you' : 'From the data file' + (x.r.source ? ` (${x.r.source})` : ''))}</small>` },
+        { key: 'l', label: 'Name', html: x => `${goLink(ctx, esc(x.r.label), { queue: 'reconcile', ref: x.r.id }, { id: 'rv-ref-open-' + x.r.id, focus: 'rv-rec-h', current: selected && selected.ref && selected.ref.id === x.r.id })}<small>${esc(fmt.date(x.r.start))} – ${esc(fmt.date(x.r.end))} · ${esc(x.r.origin === 'user' ? 'Added by you' : (x.r.origin === 'profile' ? 'From the household profile' : 'From the data file') + (x.r.source ? ` (${x.r.source})` : ''))}</small>` },
         { key: 'ref', label: 'Reference total', align: 'right', html: x => money(x.r.spendingCents) },
         { key: 'app', label: 'App spending', align: 'right', html: x => (x.app === null ? 'Unknown<small>No data for these dates</small>' : `${money(x.app)}${x.d.incomplete.length ? '<small>Incomplete data</small>' : ''}`) },
         { key: 'd', label: 'Difference', align: 'right', html: x => (x.diff === null ? 'Unknown' : Math.abs(x.diff) < MATCH_TOLERANCE ? c.badge('Agree', 'good') : esc(fmt.diff(x.diff))) },
-        { key: 'x', label: 'Remove', html: x => (x.r.origin === 'user' ? `<button type="button" class="btn btn-ghost btn-small" id="rv-ref-rm-${esc(x.r.id)}" data-action="review:ref-remove" data-ref="${esc(x.r.id)}">Remove<span class="sr-only"> ${esc(x.r.label)}</span></button>` : '<span class="fine">Part of the data</span>') },
+        { key: 'x', label: 'Remove', html: x => (x.r.origin === 'user' ? `<button type="button" class="btn btn-ghost btn-small" id="rv-ref-rm-${esc(x.r.id)}" data-action="review:ref-remove" data-ref="${esc(x.r.id)}">Remove<span class="sr-only"> ${esc(x.r.label)}</span></button>` : `<span class="fine">${x.r.origin === 'profile' ? 'Part of the profile' : 'Part of the data'}</span>`) },
       ],
       rows,
       cls: 'rv-compact rv-refs-table',
