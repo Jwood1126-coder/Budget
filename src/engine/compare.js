@@ -204,6 +204,17 @@
 
   // ------------------------------------------------------------------ usual()
 
+  /** A full-coverage month 11–13 months earlier holding at least half of `cents` (and no more than double). */
+  function yearlyMatch(category, month, cents, ctx) {
+    for (const k of [12, 11, 13]) {
+      const m = E.months.add(month, -k);
+      if (ctx.cov(m).status !== 'full') continue;
+      const c = cell(ctx.data, m, category);
+      if (c && c.cents > 0 && c.cents >= cents * 0.5 && c.cents <= cents * 2) return { month: m, cents: c.cents };
+    }
+    return null;
+  }
+
   function judgeCategory(category, ctx) {
     const { month, rule, planning, data, baselineMonths, excludedMonths, trailing, selectedCoverage, cov, seasonalList } = ctx;
     const usableCount = baselineMonths.length;
@@ -237,7 +248,7 @@
     const basisText = 'average of ' + describeMonths(baselineMonths) + ', ' + plural(usableCount, 'full month')
       + (excludedMonths.length ? '; left out: ' + excludedMonths.map(e => label(e.month) + ' (' + lowerFirst(e.reason) + ')').join(', ') : '');
 
-    let signal;
+    let signal, yearly = null;
     let explanation;
     let diffCents = null;
     let pct = null;
@@ -300,6 +311,13 @@
       explanation = 'Paid in only 1 of the last ' + plural(usableCount, 'full month') + ' (' + label(irregular.month) + ': ' + money(irregular.cents)
         + "), so a monthly average isn't meaningful. " + label(month) + ' (' + money(actualCents) + ') is not marked higher or lower.'
         + (excludedMonths.length ? ' Left out: ' + excludedMonths.map(e => label(e.month) + ' (' + lowerFirst(e.reason) + ')').join(', ') + '.' : '');
+    } else if (averageCents === 0 && actualCents > 0 && (yearly = yearlyMatch(category, month, actualCents, ctx))) {
+      // Nothing in the trailing months, but a similar payment about a year earlier: a yearly
+      // bill (insurance, registration), not new spending. Same test as review.spikes.
+      signal = 'irregular';
+      irregular = yearly;
+      explanation = 'A similar payment about a year earlier (' + label(yearly.month) + ': ' + money(yearly.cents) + ') suggests a yearly bill, so '
+        + label(month) + ' (' + money(actualCents) + ') is not marked new or higher.';
     } else if (averageCents === 0) {
       diffCents = actualCents;
       signal = actualCents === 0 ? 'typical' : 'new';

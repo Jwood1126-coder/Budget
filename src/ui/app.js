@@ -116,6 +116,15 @@
     const txns = E.ledger.applyEdits(ds, st.ledgerEdits);
     const wi = st.ui.whatIf || {};
     const txnsWhatIf = (wi.excludePendingReimbursements || wi.excludeBusinessCandidates) ? E.ledger.applyEdits(ds, st.ledgerEdits, { whatIf: wi }) : null;
+    // Undecided duplicate candidates carry a flag so every list can show "Possible duplicate"
+    // and link to the duplicates queue (the import never removes them by itself).
+    try {
+      const dupIds = new Set(E.review.duplicateCandidates(txns, st.ledgerEdits).flatMap(d => d.ids));
+      for (const list of [txns, txnsWhatIf]) {
+        if (!list) continue;
+        for (const t of list) if (dupIds.has(t.id) && !(t.flags || []).includes('duplicate_candidate')) t.flags = [...(t.flags || []), 'duplicate_candidate'];
+      }
+    } catch (err) { console.error(err); }
     const months = E.ledger.months(ds);
     const coverageMap = E.ledger.coverageMap(ds);
     const latestComplete = E.ledger.latestCompleteMonth(ds);

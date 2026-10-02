@@ -1920,9 +1920,14 @@
     return s;
   }
 
-  function scenarioName(name) {
+  function scenarioName(name, state, exceptId) {
     const res = check(SCENARIO_FIELDS[0][1], name, true);
     if (!res.ok) fail(res.message, 'name');
+    // Names identify scenarios in side-by-side comparisons, so each one must be different.
+    const key = String(res.value).trim().toLowerCase();
+    if (state && state.scenarios.some(x => x.id !== exceptId && String(x.name || '').trim().toLowerCase() === key)) {
+      fail('Another scenario is already called "' + res.value + '". Choose a different name so they can be told apart.', 'name');
+    }
     return res.value;
   }
 
@@ -1948,7 +1953,7 @@
   function addScenario(state, name, opts) {
     const o = opts || {};
     const next = requireState(state);
-    const nm = scenarioName(name);
+    const nm = scenarioName(name, next);
     if (next.scenarios.length >= LIMITS.scenarios) fail('You can keep up to ' + LIMITS.scenarios + ' scenarios. Delete one you no longer need first.');
     const taken = new Set(next.scenarios.map(s => s.id));
     let id;
@@ -1988,7 +1993,7 @@
   function renameScenario(state, scenarioId, name, opts) {
     const next = requireState(state);
     const s = findScenario(next, scenarioId);
-    s.name = scenarioName(name);
+    s.name = scenarioName(name, next, scenarioId);
     touch(next, s, opts && opts.now);
     return next;
   }

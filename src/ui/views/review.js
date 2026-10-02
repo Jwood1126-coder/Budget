@@ -1733,7 +1733,18 @@
       if (!fields.length) return;
       if (el.dataset.focus) focusAfter = el.dataset.focus;
       else setFocusNext(el, el.dataset.stay === '1');
-      sh().editMany(ctx.app, fields.map(field => ({ txnId: id, field, value: null, reason: 'Reverted to the imported value' })), { message: el.dataset.message || 'Correction reverted to the imported values. The history is kept.' });
+      const changes = fields.map(field => ({ txnId: id, field, value: null, reason: 'Reverted to the imported value' }));
+      // A reimbursement decision applies to the charge and its matched deposit together, so
+      // reverting it on one side also clears it on the linked side.
+      if (fields.includes('reimbursement')) {
+        const t = ctx.txns.find(x => x.id === id);
+        const linked = new Set([...((t && t.matchIds) || []), ...ctx.txns.filter(x => (x.matchIds || []).includes(id)).map(x => x.id)]);
+        for (const other of linked) {
+          const oe = ctx.state.ledgerEdits[other];
+          if (oe && oe.reimbursement !== undefined && oe.reimbursement !== null) changes.push({ txnId: other, field: 'reimbursement', value: null, reason: 'Reverted together with the linked charge or deposit' });
+        }
+      }
+      sh().editMany(ctx.app, changes, { message: el.dataset.message || (changes.length > fields.length ? 'Correction reverted on both linked rows. The history is kept.' : 'Correction reverted to the imported values. The history is kept.') });
     },
 
     /** Add a reconciliation reference (state.references) and open its comparison. */

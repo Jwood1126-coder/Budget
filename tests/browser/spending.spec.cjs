@@ -496,7 +496,7 @@ module.exports = [
       const total = cents(await page.textContent('.sp-metrics .metric:first-child .metric-value'));
       const perMonth = cents(await page.textContent('.sp-metrics .metric:nth-child(2) .metric-value'));
       assert.equal(perMonth, Math.round(total / 3), 'per month = total ÷ 3 months with data, not ÷ 6');
-      assert.match(await page.textContent('.sp-metrics .metric:nth-child(2)'), /3 months with data/);
+      assert.match(await page.textContent('.sp-metrics .metric:nth-child(2)'), /Average of 3 complete months/);
       // Without the filter the same month is a partial month with its known amount.
       await open(t, '#/spending?period=2024-10');
       assert.notEqual(await page.textContent('.sp-metrics .metric:first-child .metric-value'), 'Unknown');

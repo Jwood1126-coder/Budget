@@ -1943,3 +1943,14 @@ test('importWorkbook: notes a workbook made for a different data set', () => {
   const same = E.state.importWorkbook(E.state.exportWorkbook(E.state.defaults(profile, ds), { datasetId: ds.datasetId }), profile, ds);
   assert.ok(!same.notes.some(n => /made for data set/.test(n)));
 });
+
+test('scenario names must be unique (case-insensitive) on create and rename', () => {
+  const profile = require('../../fixtures/sample-profile.json');
+  const st = E.state.defaults(profile, null);
+  const taken = st.scenarios[1].name;
+  assert.throws(() => E.state.addScenario(st, taken.toUpperCase()), err => err.name === 'ValidationError' && /already called/.test(err.message));
+  const added = E.state.addScenario(st, 'Something new');
+  const id = added.scenarios[added.scenarios.length - 1].id;
+  assert.throws(() => E.state.renameScenario(added, id, taken), err => err.name === 'ValidationError');
+  assert.doesNotThrow(() => E.state.renameScenario(added, id, 'Something new'), 'keeping its own name is fine');
+});

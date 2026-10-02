@@ -162,11 +162,14 @@ test('usual: an annual payment is irregular, not higher, in the month it is paid
   assert.equal(h.explanation, "Paid in only 1 of the last 12 full months (Mar 2025: $1,104), so a monthly average isn't meaningful. Mar 2026 ($1,104) is not marked higher or lower.");
 });
 
-test('usual: a baseline with no activity at all is still "new", not irregular', () => {
-  const r = usualFor(annual(2025, 2026), { month: '2026-03', window: 6 });
-  const h = cat(r, 'Home insurance');
-  assert.equal(h.monthsWithActivity, 0);
-  assert.equal(h.signal, 'new');
+test('usual: a baseline with no activity at all is "new" unless a similar payment was made a year earlier', () => {
+  const first = cat(usualFor(annual(2026), { month: '2026-03', window: 6 }), 'Home insurance');
+  assert.equal(first.monthsWithActivity, 0);
+  assert.equal(first.signal, 'new');
+  const yearly = cat(usualFor(annual(2025, 2026), { month: '2026-03', window: 6 }), 'Home insurance');
+  assert.equal(yearly.monthsWithActivity, 0);
+  assert.equal(yearly.signal, 'irregular', 'paid in Mar 2025 too: a yearly bill');
+  assert.deepEqual(yearly.irregular, { month: '2025-03', cents: 110400 });
 });
 
 test('usual: irregular needs at least 3 usable months; with fewer the usual rule applies', () => {
@@ -686,4 +689,13 @@ test('planVsActual: an irregular bill with no charge this month is "irregular", 
   const water = rows.find(r => r.category === 'Water & sewer');
   assert.equal(water.status, 'irregular');
   assert.equal(water.diffToPlanCents, -5500, 'the difference is still reported');
+});
+
+test('usual: a yearly bill with nothing in the trailing months is irregular, not new', () => {
+  const ds = E.ledger.normalizeDataset(require('../../fixtures/sample-data.json'));
+  const txns = E.ledger.applyEdits(ds, {});
+  const c = E.compare.usual(txns, ds, { month: '2026-03', window: 3 }).categories.find(x => x.category === 'Home insurance');
+  assert.equal(c.signal, 'irregular');
+  assert.equal(c.irregular.month, '2025-03');
+  assert.match(c.explanation, /yearly bill/);
 });

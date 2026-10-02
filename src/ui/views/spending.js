@@ -576,7 +576,8 @@
       if (r.cmp.baselineMonths.some(m => unknownForFilter(ctx, P, m))) return '<span class="muted">Not known</span><small>no export for this account before</small>';
       if (r.cmp.totals.averageCents === null) return '<span class="muted">No usual yet</span><small>no full months before</small>';
       const d = r.cmp.totals.diffCents, avg = r.cmp.totals.averageCents;
-      return `${esc(fmt.diff(d))}<small>vs ${money(avg)}${avg > 0 ? ' · ' + esc(fmt.pct((d * 100) / avg)) : ''}</small>`;
+      const n = r.cmp.usableCount;
+      return `${esc(fmt.diff(d))}<small>vs ${money(avg)}${avg > 0 ? ' · ' + esc(fmt.pct((d * 100) / avg)) : ''}</small><small>${n}-month avg${n < 2 ? ' (limited)' : ''}</small>`;
     };
     const total = sum(trend, r => r.spendCents || 0);
     const totalCount = sum(rows, r => r.n);
@@ -606,7 +607,7 @@
       ${unknownNotice(ctx, P, unknownMonths)}
       ${partialNote}
       ${c.card(chartBlock(chart) + legend, { title: 'Spending per month', subtitle: 'Select a column or a month to open it. Partial months are greyed out.', id: 'sp-chart' })}
-      ${c.card(table + `<p class="fine sp-after-table">“vs usual” compares each complete month with the average of the ${P.window} months before it (complete months only). It is history, not a target.</p>`, { title: 'Months', id: 'sp-months', cls: 'sp-months-wrap', actions: windowControl(P) })}
+      ${c.card(table + `<p class="fine sp-after-table">“vs usual” compares each complete month with the average of the complete months among the ${P.window} before it; each row says how many months that average uses. It is history, not a target.</p>`, { title: 'Months', id: 'sp-months', cls: 'sp-months-wrap', actions: windowControl(P) })}
     </div>`;
     return { crumbs, header, body };
   }
@@ -690,7 +691,9 @@
     const total = sum(rows, t => spendOf(t));
     const s = E.ledger.summarize(rows);
     const listHref = L.at({ period: month, list: '1' });
-    const unknown = unknownForFilter(ctx, P, month);
+    // A month that no export covers at all is unknown, not a $0 partial month.
+    const noData = cov.status === 'none' && !rows.length;
+    const unknown = unknownForFilter(ctx, P, month) || noData;
     const prev = E.months.add(month, -1), next = E.months.add(month, 1);
     const navBtn = (m, dir) => `<a class="btn btn-small btn-secondary" href="${esc(L.at({ period: m }))}" id="sp-${dir}">${dir === 'prev' ? '<span aria-hidden="true">‹</span> ' : ''}${esc(fmt.month(m))}<span class="sr-only">${dir === 'prev' ? ' (previous month)' : ' (next month)'}</span>${dir === 'next' ? ' <span aria-hidden="true">›</span>' : ''}</a>`;
     const actions = `<nav class="sp-monthnav" aria-label="Other months">${ctx.months.includes(prev) ? navBtn(prev, 'prev') : ''}${ctx.months.includes(next) ? navBtn(next, 'next') : ''}</nav>`;
@@ -698,7 +701,7 @@
       eyebrow: 'Spending',
       title: `${fmt.monthLong(month)} spending`,
       subtitle: unknown
-        ? `<strong class="tone-warn">Spending unknown.</strong> No export from ${esc(filterName(ctx, P))} covers this month.`
+        ? `<strong class="tone-warn">Spending unknown.</strong> ${noData ? 'No account export covers this month.' : `No export from ${esc(filterName(ctx, P))} covers this month.`}`
         : `${partial ? '<strong class="tone-warn">Partial month.</strong> ' : ''}<strong>${money(total)}</strong> counted spending in <a href="${esc(listHref)}">${count(rows.length, 'transaction')}</a>${s.refundsCents ? `, after ${money(s.refundsCents)} of refunds` : ''}.`,
       actions,
     };
@@ -753,7 +756,6 @@
     const cats = categoryTotals(rows);
     // Months whose spending is unknown for the account filter are left out of the average.
     const unknownMonths = per.months.filter(m => unknownForFilter(ctx, P, m));
-    const n = per.months.length - unknownMonths.length;
     const partials = per.months.filter(m => coverageOf(ctx, m).status !== 'full' && !unknownMonths.includes(m));
     const pv = P.period;
     const header = {
@@ -762,26 +764,33 @@
       subtitle: `<strong>${money(total)}</strong> counted spending in <a href="${esc(L.at({ period: pv, list: '1' }))}">${count(rows.length, 'transaction')}</a> over ${count(per.months.length, 'month')}.`,
     };
     const crumbs = [{ label: 'All months', href: L.at({ period: '' }) }, { label: per.all ? 'All months, one total' : per.short }];
-    const perMonth = cents => (n > 0 ? E.money.divide(cents, n) : null);
+    // Per-month averages use complete months only (as 'usual' does): a partial or uncovered month
+    // would otherwise count as a low-spending month. Totals still include every month.
+    const fullMonths = per.months.filter(m => !unknownMonths.includes(m) && coverageOf(ctx, m).status === 'full');
+    const fullSet = new Set(fullMonths);
+    const fullRows = rows.filter(t => fullSet.has(t.date.slice(0, 7)));
+    const fullBy = new Map(categoryTotals(fullRows).map(r => [r.key, r.cents]));
+    const fullTotal = sum(fullRows, t => spendOf(t));
+    const perMonthOf = (key) => (fullMonths.length ? E.money.divide(key === null ? fullTotal : (fullBy.get(key) || 0), fullMonths.length) : null);
     const table = c.table({
       caption: `Spending by category, ${per.label}`,
       columns: [
         { key: 'cat', label: 'Category', html: r => `<a href="${esc(L.at({ period: pv, cat: r.key }))}">${esc(r.key)}</a><small><a href="${esc(L.at({ period: pv, cat: r.key, list: '1' }))}">${count(r.count, 'transaction')}</a></small>` },
         { key: 'total', label: 'Total', align: 'right', html: r => money(r.cents) },
-        { key: 'per', label: 'Per month', align: 'right', html: r => ML('Per month') + money(perMonth(r.cents)) },
+        { key: 'per', label: 'Per month', align: 'right', html: r => ML('Per month') + money(perMonthOf(r.key)) },
         { key: 'share', label: 'Share', align: 'right', html: r => ML('Share') + sharePct(r.cents, total) },
       ],
       rows: cats,
       footer: {
         cat: `Total<small><a href="${esc(L.at({ period: pv, list: '1' }))}">${count(rows.length, 'transaction')}</a></small>`,
         total: money(total),
-        per: ML('Per month') + money(perMonth(total)),
+        per: ML('Per month') + money(perMonthOf(null)),
         share: total > 0 ? ML('Share') + '100%' : '',
       },
       emptyText: `No counted spending in ${per.label}.`,
       cls: 'sp-stack'
     });
-    const notes = `<p class="fine sp-after-table">Per month = total ÷ ${count(n, 'month')}${unknownMonths.length ? ` with data (${esc(describeMonths(unknownMonths))} unknown for ${esc(filterName(ctx, P))})` : ''}.${partials.length ? ` ${esc(describeMonths(partials))} ${partials.length === 1 ? 'is' : 'are'} partial, so per-month figures understate ${partials.length === 1 ? 'that month' : 'those months'}.` : ''} Periods are not compared with usual: pick a single month to compare it with the months before it.</p>`;
+    const notes = `<p class="fine sp-after-table">Per month = average of the ${count(fullMonths.length, 'complete month')}${fullMonths.length ? '' : ' (none in this period, so it is unknown)'}.${partials.length ? ` ${esc(describeMonths(partials))} ${partials.length === 1 ? 'is' : 'are'} partial: included in the totals but left out of the per-month average.` : ''}${unknownMonths.length ? ` ${esc(describeMonths(unknownMonths))} ${unknownMonths.length === 1 ? 'is' : 'are'} unknown for ${esc(filterName(ctx, P))}.` : ''} Periods are not compared with usual: pick a single month to compare it with the months before it.</p>`;
     let chart = '';
     if (per.months.length > 1) {
       const trend = E.compare.trend(scoped(ctx, P), ctx.dataset, { months: per.months });
@@ -795,7 +804,7 @@
     const reconcile = per.start ? `<p class="fine">Checking against a statement or an earlier total? <a id="sp-reconcile" href="${esc(ctx.href('review', { queue: 'reconcile', start: E.months.start(per.start), end: E.months.end(per.end) }))}">Reconcile this total</a> (${esc(fmt.date(E.months.start(per.start)))} – ${esc(fmt.date(E.months.end(per.end)))}).</p>` : '';
     const metrics = `<div class="metrics sp-metrics">
       ${c.metric({ label: 'Total spending', value: fmt.money(total), sub: `<a href="${esc(L.at({ period: pv, list: '1' }))}">${count(rows.length, 'transaction')}</a>` })}
-      ${c.metric({ label: 'Per month', value: fmt.money(perMonth(total)), sub: n > 0 ? `Total ÷ ${count(n, 'month')}${unknownMonths.length ? ' with data' : ''}` : `No month with data for ${esc(filterName(ctx, P))}` })}
+      ${c.metric({ label: 'Per month', value: fmt.money(perMonthOf(null)), sub: fullMonths.length ? `Average of ${count(fullMonths.length, 'complete month')}` : 'No complete month in this period' })}
       ${c.metric({ label: 'Months', value: String(per.months.length), sub: [partials.length ? count(partials.length, 'partial month') : '', unknownMonths.length ? count(unknownMonths.length, 'unknown month') : ''].filter(Boolean).join(' · ') || 'All complete', status: partials.length || unknownMonths.length ? c.badge(unknownMonths.length ? 'Includes unknown months' : 'Includes partial months', 'warn') : '' })}
     </div>`;
     const body = `<div class="stack">
@@ -885,7 +894,15 @@
     const header = {
       eyebrow: `Spending · ${per.type === 'none' ? 'All months' : per.short}${P.basis === 'bank' ? ' · bank category' : ''}`,
       title: cat,
-      subtitle: `<strong>${money(total)}</strong> in <a href="${esc(listHref)}">${count(rows.length, 'transaction')}</a>${periodTotal ? ` · ${sharePct(total, periodTotal)} of ${esc(per.label)} spending` : ''}${per.type !== 'month' && per.months.length > 1 ? ` · ${money(E.money.divide(total, per.months.length))} per month over ${count(per.months.length, 'month')}` : ''}.`,
+      subtitle: `<strong>${money(total)}</strong> in <a href="${esc(listHref)}">${count(rows.length, 'transaction')}</a>${periodTotal ? ` · ${sharePct(total, periodTotal)} of ${esc(per.label)} spending` : ''}${per.type !== 'month' && per.months.length > 1 ? (() => {
+        // Average over complete months only; partial or uncovered months are not low months.
+        const full = per.months.filter(m => coverageOf(ctx, m).status === 'full' && !unknownForFilter(ctx, P, m));
+        if (!full.length) return ' · per-month average unknown (no complete month)';
+        const fullSet = new Set(full);
+        const fullCents = sum(rows.filter(t => fullSet.has(t.date.slice(0, 7))), t => spendOf(t));
+        const left = per.months.length - full.length;
+        return ` · ${money(E.money.divide(fullCents, full.length))} per month over ${count(full.length, 'complete month')}${left ? ` (${count(left, 'partial or unknown month')} left out)` : ''}`;
+      })() : ''}.`,
     };
 
     const table = c.table({
