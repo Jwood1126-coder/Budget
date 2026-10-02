@@ -225,7 +225,10 @@
     const base = ctx.memo('fc-usual:' + win, () => E.compare.planningBaseline(ctx.txns, ctx.dataset, { window: win }));
     const row = base[category];
     if (!row || !row.usableCount) return null;
-    return { cents: row.actualAvgCents, months: row.months || [], count: row.usableCount };
+    // Planning hint: use the planning baseline (rows the household left out of planning, such as
+    // a one-off episode, do not count), falling back to the plain average.
+    const cents = row.adjustedAvgCents !== undefined && row.adjustedAvgCents !== null ? row.adjustedAvgCents : row.actualAvgCents;
+    return { cents, months: row.months || [], count: row.usableCount };
   }
 
   function spendingLink(ctx, category, months) {

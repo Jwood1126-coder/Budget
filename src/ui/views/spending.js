@@ -624,7 +624,7 @@
   function diffCell(x, partial) {
     if (partial) return '<span class="muted">—</span><small>not compared</small>';
     if (x.diffCents === null || x.diffCents === undefined) return '<span class="muted">—</span><small>not compared</small>';
-    return `${esc(fmt.diff(x.diffCents))}<small>${x.pct === null || x.pct === undefined ? 'no %' : esc(fmt.pct(x.pct))}</small>`;
+    return `${esc(fmt.diff(x.diffCents))}<small>${x.pct === null || x.pct === undefined ? 'no %' : esc(pctText(x.pct))}</small>`;
   }
 
   function baselineText(cmp) {
@@ -867,7 +867,23 @@
       <small>${p.cents === null ? `${esc(parts)}. ${link('Enter the amount in Budget')}` : bills ? `a month: ${esc(parts)}. ${link('Edit in Budget')}` : `a month, from your budget. ${link('Edit in Budget')}`}</small></div>`;
   }
 
+  /**
+   * Percentage for display. Just under the flag threshold it shows one truncated decimal (24.9%)
+   * so a typical row never reads as meeting the 25% rule.
+   */
+  function pctText(p) {
+    const limit = (E.compare.RULE && E.compare.RULE.minPct) || 25;
+    const a = Math.abs(p);
+    if (a < limit && Math.round(a) >= limit) return (p > 0 ? '+' : '−') + (Math.floor(a * 10) / 10).toFixed(1) + '%';
+    return fmt.pct(p);
+  }
+
   function compareTiles(ctx, P, L, x, month, cat) {
+    // A category with no spending in the selected month or its baseline is absent from the
+    // month's comparison; ask for it directly so complete $0 months read as $0, not 'unknown'.
+    if (!x && cat) {
+      try { x = E.compare.usual(scoped(ctx, P), ctx.dataset, { month, window: P.window, category: cat }).categories.find(c => c.category === cat) || null; } catch { x = null; }
+    }
     const targetTile = P.basis === 'bank' ? '' : planTile(ctx, cat, month);
     const usualValue = x ? (x.basis === 'last_year' && x.seasonal ? x.basisCents : x.averageCents) : null;
     const usualSub = !x ? 'No history for this category'
