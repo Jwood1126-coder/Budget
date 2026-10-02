@@ -674,3 +674,16 @@ test('usual: a large one-off after a single small month is flagged, not hidden a
   assert.equal(rep.signal, 'irregular');
   void months;
 });
+
+test('planVsActual: an irregular bill with no charge this month is "irregular", not "under"', () => {
+  const ds = E.ledger.normalizeDataset({
+    schemaVersion: 2, datasetId: 'pva-irregular', isSynthetic: true, currency: 'USD',
+    accounts: [{ id: 'chk', label: 'Checking', type: 'checking', scope: 'joint', ownerId: null, paidInFull: false, coverage: [{ start: '2026-03-01', end: '2026-09-30' }] }],
+    transactions: [{ id: 'w1', accountId: 'chk', date: '2026-07-10', description: 'SAMPLE WATER', merchant: 'Sample Water', amountCents: -16500, kind: 'spend', category: 'Water & sewer' }],
+  });
+  const plan = { targets: { 'Water & sewer': 5500 }, bills: [], settings: { comparisonWindow: 6 } };
+  const rows = E.compare.planVsActual(plan, E.ledger.applyEdits(ds, {}), ds, { month: '2026-09', window: 6 });
+  const water = rows.find(r => r.category === 'Water & sewer');
+  assert.equal(water.status, 'irregular');
+  assert.equal(water.diffToPlanCents, -5500, 'the difference is still reported');
+});

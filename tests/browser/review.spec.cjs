@@ -713,7 +713,6 @@ module.exports = [
       await page.waitForFunction(() => location.hash === '#/review?queue=uncertain');
       await page.waitForSelector('#rv-list');
       assert.equal(await page.$('#rv-item-' + r.depositId), null, 'the deposit no longer asks where it came from');
-      assert.match(await page.textContent('#rv-list'), /confirmed reimbursement/);
       assert.match(await page.textContent('#rv-tab-uncertain'), /Uncertain\s*1/);
 
       await page.click('#rv-tab-transfers');

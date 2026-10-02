@@ -602,6 +602,13 @@
     for (const r of known) {
       if (lowest.month === null || r.cumulativeCents < lowest.cumulativeCents) lowest = { month: r.month, cumulativeCents: r.cumulativeCents, balanceCents: r.balanceCents };
     }
+    // Lowest known balance, separately: balances may start later than the change in cash
+    // (a dated balance applies from the month after its date).
+    let lowestBalance = { month: null, balanceCents: null };
+    for (const r of rows) {
+      if (r.balanceCents === null) continue;
+      if (lowestBalance.month === null || r.balanceCents < lowestBalance.balanceCents) lowestBalance = { month: r.month, balanceCents: r.balanceCents };
+    }
     const last = rows[rows.length - 1];
     const firstNeg = rows.find(r => r.balanceCents !== null && r.balanceCents < 0);
     return {
@@ -613,6 +620,7 @@
       endCumulativeCents: last.cumulativeCents,
       endBalanceCents: last.balanceCents,
       lowest,
+      lowestBalance,
       negativeMonths: rows.filter(r => r.netCents !== null && r.netCents < 0).map(r => r.month),
       firstNegativeBalanceMonth: firstNeg ? firstNeg.month : null,
       contributionShortfallMonths: rows.filter(r => r.unassignedCents !== null && r.unassignedCents < 0).map(r => r.month),
@@ -715,6 +723,8 @@
       { key: 'endBalance', label: 'Cash at the end of ' + label(end), kind: 'money', values: pick(p => p.summary.endBalanceCents) },
       { key: 'lowest', label: 'Lowest point (change in cash)', kind: 'money', values: pick(p => p.summary.lowest.cumulativeCents) },
       { key: 'lowestMonth', label: 'Month of the lowest point', kind: 'month', values: pick(p => p.summary.lowest.month) },
+      { key: 'lowestBalance', label: 'Lowest balance', kind: 'money', values: pick(p => p.summary.lowestBalance.balanceCents) },
+      { key: 'lowestBalanceMonth', label: 'Month of the lowest balance', kind: 'month', values: pick(p => p.summary.lowestBalance.month) },
       { key: 'negativeMonths', label: 'Months with more going out than coming in', kind: 'count', values: pick(p => p.summary.negativeMonths.length) },
       { key: 'firstNegativeBalance', label: 'First month cash falls below $0', kind: 'month', values: pick(p => p.summary.firstNegativeBalanceMonth) },
       { key: 'contributionShortfall', label: 'Months savings contributions are not covered', kind: 'count', values: pick(p => p.summary.contributionShortfallMonths.length) },

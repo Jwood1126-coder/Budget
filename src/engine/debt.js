@@ -255,7 +255,10 @@
       add('payment', 'Monthly payment', 'Not entered', 'unknown');
       warnings.push('Monthly payment amount not entered.');
     } else {
-      const who = bill.fundedFrom === 'joint' ? 'joint' : bill.fundedFrom === 'p1' || bill.fundedFrom === 'p2' ? 'a personal account (' + bill.fundedFrom + ')' : null;
+      // opts.people maps person ids to names ({ p1: 'Alex' }) so the text never shows a raw id.
+      const names = opts && opts.people && typeof opts.people === 'object' ? opts.people : {};
+      const personal = id => (typeof names[id] === 'string' && names[id].trim() ? names[id].trim() + '’s personal account' : 'a personal account');
+      const who = bill.fundedFrom === 'joint' ? 'joint' : bill.fundedFrom === 'p1' || bill.fundedFrom === 'p2' ? personal(bill.fundedFrom) : null;
       add('payment', 'Monthly payment', money(payment) + ' a month' + (who ? ', paid from ' + who : ', paying account not confirmed'), bill.status === 'estimate' ? 'estimate' : bill.status === 'planned' ? 'planned' : 'confirmed');
       if (!who) warnings.push('Which account pays this is not confirmed.');
     }

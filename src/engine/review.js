@@ -266,6 +266,8 @@
     const uncertain = live.filter(t => {
       const e = editOf(t);
       if (e && (e.category != null || e.splits != null || e.kind != null)) return false; // already decided
+      // Rows the household decided not to count (reimbursed, business) need no category answer.
+      if (t.excluded === 'reimbursed' || t.excluded === 'business') return false;
       return t.confidence === 'low' || flagsOf(t).includes('needs_category_review') || (t.kind === 'spend' && t.category === UNC);
     });
 

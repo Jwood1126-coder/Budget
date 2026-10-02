@@ -1203,6 +1203,10 @@
         const outside = res.txns.filter(t => (coverageStart && t.date < coverageStart) || (coverageEnd && t.date > coverageEnd)).length;
         if (outside) warnings.push('"' + f.name + '": ' + outside + ' rows fall outside the declared coverage ' + coverageStart + ' – ' + coverageEnd + ' (imported anyway; check the dates).');
       }
+      if (!res.txns.length) {
+        warnings.push('"' + f.name + '": no transactions were read' + (res.skipped && res.skipped.length ? ' (' + res.skipped.length + ' rows skipped)' : '') +
+          (coverageStart && coverageEnd ? '. Its declared dates still count as covered for ' + account.label + '.' : '. ' + account.label + ' has no dates covered by this file, so months may show as incomplete; enter the dates the export covers if it was a quiet period.'));
+      }
       return { file: f, account, res, coverageStart, coverageEnd };
     });
 

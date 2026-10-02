@@ -1888,6 +1888,13 @@
       if (isIso(data.exportedAt)) notes.push('Workbook exported ' + data.exportedAt.slice(0, 10) + '.');
       const inner = Object.assign({}, data.state);
       if (!nonEmpty(inner.datasetId) && nonEmpty(data.datasetId)) inner.datasetId = data.datasetId;
+      const current = datasetIdOf(dataset);
+      const labelled = nonEmpty(data.datasetId) ? data.datasetId.trim() : null;
+      if (labelled && nonEmpty(inner.datasetId) && labelled !== inner.datasetId.trim()) {
+        notes.push('The workbook is labelled for data set "' + labelled + '" but its budget was saved with "' + inner.datasetId.trim() + '"; corrections are matched to transactions by id, so check them after importing.');
+      } else if (labelled && current && labelled !== current) {
+        notes.push('This workbook was made for data set "' + labelled + '", not the one open now ("' + current + '"). The plan and scenarios still apply; corrections only apply to transactions that are in both.');
+      }
       result = sanitize(inner, profile, dataset, opts);
     } else if (data.version === VERSION && isObj(data.plan)) {
       result = sanitize(data, profile, dataset, opts);

@@ -1499,3 +1499,13 @@ describe('hardening: extra edge cases', () => {
     assert.deepEqual(out.map(t => [t.pairId, t.subtype]), [['i', 'savings'], ['o', 'savings']]);
   });
 });
+
+test('buildDataset warns when a file contributes no transactions', () => {
+  const accounts = [{ id: 'chk', label: 'Joint checking', type: 'checking', scope: 'joint', ownerId: null, paidInFull: false, coverage: [] }];
+  const r = E.importer.buildDataset({ files: [{ name: 'empty.csv', text: 'Date,Description,Amount\n', accountId: 'chk' }], accounts, rules: null, datasetId: 'empty-test', isSynthetic: true, generatedAt: '2026-10-01' });
+  assert.equal(r.dataset.transactions.length, 0);
+  assert.ok(r.report.warnings.some(w => /empty\.csv.*no transactions were read/.test(w)), r.report.warnings.join(' | '));
+  const r2 = E.importer.buildDataset({ files: [{ name: 'quiet.csv', text: 'Date,Description,Amount\n', accountId: 'chk', coverageStart: '2026-09-01', coverageEnd: '2026-09-30' }], accounts, rules: null, datasetId: 'empty-test', isSynthetic: true, generatedAt: '2026-10-01' });
+  assert.ok(r2.report.warnings.some(w => /declared dates still count as covered/.test(w)));
+  assert.deepEqual(r2.dataset.accounts[0].coverage, [{ start: '2026-09-01', end: '2026-09-30' }]);
+});

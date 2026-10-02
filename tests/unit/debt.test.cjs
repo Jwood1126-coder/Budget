@@ -270,7 +270,7 @@ test('summary: non-housing debt has no escrow line', () => {
   const s = D.summary(car, { id: 'car', label: 'Car loan', monthlyCents: 24500, fundedFrom: 'p1', type: 'debt' });
   assert.equal(lineOf(s, 'escrow'), undefined);
   assert.ok(s.warnings.includes('Date of the balance not entered.'));
-  assert.match(lineOf(s, 'payment').value, /personal account \(p1\)/);
+  assert.match(lineOf(s, 'payment').value, /paid from a personal account$/);
 });
 
 test('summary: displayed APR range across several loans', () => {
@@ -338,4 +338,13 @@ test('summary: a planned payment bill is labelled planned, not confirmed', () =>
     { id: 'b', label: 'Planned loan', monthlyCents: 4000, status: 'planned', fundedFrom: 'joint' }, { month: '2026-10' });
   const line = r.lines.find(l => l.key === 'payment');
   assert.equal(line.status, 'planned');
+});
+
+test('summary: the payer is named from opts.people and never shown as a raw id', () => {
+  const debt = { id: 'car', label: 'Car loan', ownerId: 'p1', balanceCents: 500000, balanceStatus: 'approximate', aprPct: null, aprRange: null, aprStatus: 'unknown', paymentBillId: 'b', promo: null, loanCount: 1, repaymentPlan: null, termStatus: 'unknown', escrowIncluded: null, note: '' };
+  const bill = { id: 'b', label: 'Car loan', monthlyCents: 24500, status: 'existing', fundedFrom: 'p1' };
+  const named = E.debt.summary(debt, bill, { month: '2026-10', people: { p1: 'Alex' } }).lines.find(l => l.key === 'payment');
+  assert.match(named.value, /Alex’s personal account/);
+  const unnamed = E.debt.summary(debt, bill, { month: '2026-10' }).lines.find(l => l.key === 'payment');
+  assert.doesNotMatch(unnamed.value, /\(p1\)/);
 });

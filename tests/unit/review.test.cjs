@@ -576,3 +576,15 @@ test('hardening: duplicate candidates have one order whatever order the sort see
   try { reversed = R.duplicateCandidates(rows).map(d => d.ids.join('+')); } finally { Array.prototype.sort = original; }
   assert.deepEqual(reversed, expected);
 });
+
+test('queues: a confirmed reimbursement deposit leaves the uncertain queue', () => {
+  const ds = E.ledger.normalizeDataset(require('../../fixtures/sample-data.json'));
+  const deposit = ds.transactions.find(t => t.description === 'MOBILE DEPOSIT');
+  const charge = ds.transactions.find(t => (t.matchIds || []).includes(deposit.id) || (deposit.matchIds || []).includes(t.id));
+  assert.ok(deposit && charge, 'sample has the reimbursement pair');
+  const before = E.review.queues(ds, E.ledger.applyEdits(ds, {}), {});
+  assert.ok(before.uncertain.some(t => t.id === deposit.id), 'unknown deposit starts as uncertain');
+  const edits = { [charge.id]: E.review.editRecord(null, 'reimbursement', 'confirmed', 'Employer paid it back', '2026-10-01T00:00:00Z') };
+  const after = E.review.queues(ds, E.ledger.applyEdits(ds, edits), edits);
+  assert.ok(!after.uncertain.some(t => t.id === deposit.id), 'answered by the reimbursement decision');
+});

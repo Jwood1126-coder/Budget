@@ -41,13 +41,17 @@ async function main() {
   const filter = process.argv[2] || '';
   const { chromium } = loadPlaywright();
   const browser = await chromium.launch();
-  const specs = fs.readdirSync(__dirname).filter(f => f.endsWith('.spec.cjs')).sort();
+  let specs = fs.readdirSync(__dirname).filter(f => f.endsWith('.spec.cjs')).sort();
+  // 'run.cjs budget' runs budget.spec.cjs only (not every test whose name mentions budget).
+  const fileMatch = filter && specs.find(f => f === filter + '.spec.cjs' || f === filter);
+  if (fileMatch) specs = [fileMatch];
+  const nameFilter = fileMatch ? '' : filter;
   let passed = 0, failed = 0;
   const failures = [];
   for (const file of specs) {
     const tests = require(path.join(__dirname, file));
     for (const test of tests) {
-      if (filter && !test.name.includes(filter) && !file.includes(filter)) continue;
+      if (nameFilter && !test.name.includes(nameFilter) && !file.includes(nameFilter)) continue;
       const vps = test.viewport === 'both' ? ['desktop', 'phone'] : [test.viewport || 'desktop'];
       for (const vp of vps) {
         const label = `${file.replace('.spec.cjs', '')} › ${test.name} [${vp}]`;

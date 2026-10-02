@@ -339,7 +339,7 @@ main { padding: var(--space-6) var(--space-6) var(--space-7); max-width: 1240px;
 .chart .column.is-highlight { fill: var(--brand-strong); }
 .chart a:focus-visible .column, .chart a:hover .column { filter: brightness(1.15); }
 .chart-legend { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 var(--space-2); padding: 0; font-size: .82rem; color: var(--text-2); }
-.chart-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.chart-legend li { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
 .chart-table { margin-top: var(--space-2); font-size: .85rem; }
 .chart-table summary { cursor: pointer; color: var(--brand); font-weight: 600; }
 .chart-table .table-wrap { margin-top: var(--space-2); max-height: 360px; overflow: auto; }
@@ -385,6 +385,8 @@ main { padding: var(--space-6) var(--space-6) var(--space-7); max-width: 1240px;
 .inline-form select, .inline-form input:not([type="checkbox"]) { min-height: 38px; padding: 6px 8px; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font: inherit; width: 100%; }
 .inline-form-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; }
 @media (max-width: 599px) { .inline-form { grid-template-columns: minmax(0, 1fr); } }
+/* 16px form text on phones: smaller text makes iOS Safari zoom the page when a field is focused. */
+@media (max-width: 599px) { input, select, textarea { font-size: 16px !important; } }
 .nowrap { white-space: nowrap; }
 .section-nav { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0 0 var(--space-5); padding: 0; list-style: none; }
 .section-nav a { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--text-2); font-weight: 650; font-size: .86rem; text-decoration: none; }

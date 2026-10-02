@@ -55,9 +55,15 @@
     if (t.excluded) out.push(c.badge(EXCLUDED_LABEL[t.excluded] || 'Not counted', 'neutral'));
     if (t.planningExcluded) out.push(c.badge('Left out of planning baseline', 'info'));
     if (t.edited) out.push(c.badge('Corrected', 'good'));
+    const edit = t.edit || {};
     for (const f of t.flags || []) {
       if (!FLAG_BADGE[f]) continue;
+      // Once the household has answered, the import's question is no longer shown.
       if (f === 'needs_category_review' && t.edited) continue;
+      if (f === 'mixed_retail' && (edit.category || (Array.isArray(edit.splits) && edit.splits.length))) continue;
+      if (f === 'reimbursement_candidate' && ['confirmed', 'not_reimbursed'].includes(t.reimbursementStatus)) continue;
+      if (f === 'business_candidate' && ['business', 'household'].includes(t.businessStatus)) continue;
+      if (f === 'unpaired_transfer' && edit.kind) continue;
       out.push(c.badge(FLAG_BADGE[f][0], FLAG_BADGE[f][1]));
     }
     return compact ? out.slice(0, 2).join(' ') : out.join(' ');
@@ -100,7 +106,7 @@
       { key: 'date', label: 'Date', html: t => `<span class="nowrap">${esc(fmt.date(t.date))}</span>` },
       { key: 'merchant', label: 'Merchant', html: t => `${hrefFor ? `<a href="${esc(hrefFor(t))}">${esc(t.merchant)}</a>` : esc(t.merchant)}<small>${esc(t.description)}${showAccount ? ' · ' + esc(t.accountLabel || t.accountId) : ''}</small>` },
       { key: 'category', label: 'Category', html: t => `${esc(t.parts && t.parts.length > 1 ? 'Split: ' + t.parts.map(p => p.category).join(', ') : t.category)}<small>Bank: ${esc(t.sourceCategory || 'none')}${showKind ? ' · ' + esc(kindLabel(t)) : ''}</small>` },
-      { key: 'status', label: 'Status', html: t => badges(t, { compact: true }) || '<span class="fine">Counted</span>' },
+      { key: 'status', label: 'Status', html: t => badges(t, { compact: true }) || `<span class="fine">${t.kind === 'spend' ? 'Counted' : 'Not spending'}</span>` },
       { key: 'amount', label: 'Amount', align: 'right', html: t => `<span class="${t.kind === 'spend' && t.amountCents > 0 ? 'tone-good' : ''}">${esc(amountText(t))}</span>` },
     ];
     const foot = footer ? { date: `${rows.length} row${rows.length === 1 ? '' : 's'}`, amount: esc(fmt.money(counted)) + '<small>counted spending</small>' } : null;

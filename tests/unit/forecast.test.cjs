@@ -823,3 +823,16 @@ function basePlanForBalance() {
     settings: { incomeTiming: 'conservative', planningBaseline: 'actual', comparisonWindow: 3 },
   };
 }
+
+test('summary.lowestBalance only considers months with a known balance', () => {
+  const plan = basePlanForBalance();
+  plan.balances = { jointCashCents: 50000, asOf: '2026-10-31', note: '' };
+  plan.targets = { Groceries: 60000 };
+  const scenario = { id: 'baseline', name: 'Base', events: [{ id: 'big', type: 'one_time', label: 'Repair', month: '2026-12', amountCents: 300000, direction: 'expense', category: 'Home maintenance & repairs', goalId: null, note: '' }], assumptions: { incomeTiming: 'conservative', annualReturnPct: 0, costGrowthPct: 0, incomeGrowthPct: 0 } };
+  const p = E.forecast.project(plan, scenario, { startMonth: '2026-10', months: 4, scope: 'joint' });
+  assert.equal(p.rows[0].balanceCents, null, 'October is before the balance applies');
+  assert.equal(p.summary.lowestBalance.month, '2026-12');
+  assert.equal(p.summary.lowestBalance.balanceCents, p.rows[2].balanceCents);
+  const cmp = E.forecast.compare(plan, [scenario], { startMonth: '2026-10', months: 4, scope: 'joint' });
+  assert.ok(cmp.rows.some(r => r.key === 'lowestBalance'));
+});

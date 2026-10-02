@@ -171,7 +171,8 @@
    */
   function lineChart({ id, title, description = '', series, labels, format = v => fmt.money(v, { whole: true }), tableCaption }) {
     const narrow = isNarrow();
-    const W = narrow ? 420 : 760, H = narrow ? 240 : 260, padL = narrow ? 46 : 64, padR = narrow ? 58 : 96, padT = 16, padB = 32;
+    const tiny = narrow && root.innerWidth < 400;
+    const W = tiny ? 360 : narrow ? 420 : 760, H = narrow ? 240 : 260, padL = narrow ? 46 : 64, padR = narrow ? 58 : 96, padT = 16, padB = 32;
     const all = series.flatMap(s => s.values).filter(v => v !== null && v !== undefined);
     if (!all.length || !labels.length) return empty('Not enough known values to draw this chart yet.');
     const t = ticks(Math.min(0, ...all), Math.max(0, ...all));
@@ -181,7 +182,7 @@
     const grid = t.map(v => `<line class="grid${v === 0 ? ' zero' : ''}" x1="${padL}" x2="${W - padR}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}"/><text class="axis" x="${padL - 8}" y="${(y(v) + 4).toFixed(1)}" text-anchor="end">${esc(compactMoney(v))}</text>`).join('');
     const every = Math.max(1, Math.ceil(labels.length / (narrow ? 4 : 8)));
     // Show evenly spaced labels; the last label replaces a near neighbour instead of colliding with it.
-    const showX = i => i === labels.length - 1 || (i % every === 0 && labels.length - 1 - i >= every * 0.6);
+    const showX = i => i === labels.length - 1 || (i % every === 0 && labels.length - 1 - i >= every);
     const xlab = labels.map((m, i) => showX(i) ? `<text class="axis" x="${x(i).toFixed(1)}" y="${H - 10}" text-anchor="middle">${esc(fmt.month(m))}</text>` : '').join('');
     const lines = series.map((s, si) => {
       let d = '', pen = false;
@@ -252,7 +253,7 @@
       const tip = esc(JSON.stringify([[title, format(it.value)], ...(it.note ? [['', it.note]] : [])]));
       const mark = `<path class="column${highlight === it.label ? ' is-highlight' : ''}${it.muted ? ' is-muted' : ''}" d="${path}"/>`;
       const hit = `<rect class="hit-col" x="${(cx - band / 2).toFixed(1)}" y="${padT}" width="${band.toFixed(1)}" height="${H - padT - padB}" data-tip-title="${esc(fmt.monthLong(it.label))}" data-tip-rows="${tip}"/>`;
-      return it.href ? `<a href="${esc(it.href)}" aria-label="${esc(fmt.monthLong(it.label) + ': ' + format(it.value))}">${mark}${hit}</a>${label}` : mark + hit + label;
+      return it.href ? `<a href="${esc(it.href)}" tabindex="-1" aria-label="${esc(fmt.monthLong(it.label) + ': ' + format(it.value))}">${mark}${hit}</a>${label}` : mark + hit + label;
     }).join('');
     return `<figure class="chart">
       <svg class="column-chart" viewBox="0 0 ${W} ${H}" role="group" aria-label="${esc(title)}">${grid}${cols}</svg>

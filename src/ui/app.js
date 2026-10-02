@@ -24,7 +24,7 @@
   const app = {
     build: null, profile: null, dataset: null, state: null,
     loadNotes: [], datasetError: null, dataSource: 'embedded',
-    storage: null, storageOk: true, undoStack: [], derived: null, renderTimer: null,
+    storage: null, storageOk: true, undoStack: [], undoFocus: [], derived: null, renderTimer: null, loadedMeta: null, profileMeta: null,
   };
 
   // ------------------------------------------------------------------ storage
@@ -57,9 +57,19 @@
     if (app.storage) {
       try {
         const loaded = app.storage.getItem(LOADED_DATASET_KEY);
-        if (loaded) { rawData = JSON.parse(loaded).dataset; app.dataSource = 'browser'; }
+        if (loaded) {
+          const parsed = JSON.parse(loaded);
+          rawData = parsed.dataset;
+          app.dataSource = 'browser';
+          app.loadedMeta = Object.fromEntries(Object.entries(parsed).filter(([k]) => k !== 'dataset'));
+        }
         const loadedProfile = app.storage.getItem(LOADED_PROFILE_KEY);
-        if (loadedProfile) { profile = JSON.parse(loadedProfile).profile; app.profileSource = 'browser'; }
+        if (loadedProfile) {
+          const parsed = JSON.parse(loadedProfile);
+          profile = parsed.profile;
+          app.profileSource = 'browser';
+          app.profileMeta = Object.fromEntries(Object.entries(parsed).filter(([k]) => k !== 'profile'));
+        }
       } catch (err) {
         app.loadNotes.push('Could not read files loaded earlier in this browser: ' + err.message);
       }
@@ -153,6 +163,10 @@
   // ------------------------------------------------------------------ rendering
   let lastView = null;
   let keepFocusOnNextRender = false;
+  const DATE_INPUTS = 'input[type="month"][data-bind], input[type="date"][data-bind]';
+  const NON_TYPING_KEYS = ['Tab', 'Shift', 'Escape', 'Enter', 'Control', 'Alt', 'Meta'];
+  let pendingFocusId = null;
+  let renderSeq = 0;
 
   function render({ focusHeading = false, fromHash = false } = {}) {
     const route = UI.router.current();
@@ -180,10 +194,6 @@
       if (openDetails.has(d.id)) d.open = true;
       else if (closedDetails.has(d.id)) d.open = false;
     }
-    if (view.afterRender) {
-      try { view.afterRender(container, ctx); } catch (err) { console.error(err); }
-    }
-
     // Navigation state
     for (const a of $$('[data-nav]')) {
       if (a.dataset.nav === route.view) a.setAttribute('aria-current', 'page');
@@ -208,7 +218,18 @@
         if (caret && typeof el.setSelectionRange === 'function') { try { el.setSelectionRange(caret[0], caret[1]); } catch { /* not a text input */ } }
       }
     }
+    if (pendingFocusId) {
+      const target = document.getElementById(pendingFocusId) || $('#page-title', container);
+      if (target) target.focus({ preventScroll: false });
+      pendingFocusId = null;
+    }
+    // Views run after the generic focus restore, so they can deliberately move focus.
+    if (view.afterRender) {
+      try { view.afterRender(container, ctx); } catch (err) { console.error(err); }
+    }
     if (fromHash) keepFocusOnNextRender = false;
+    renderSeq += 1;
+    document.documentElement.dataset.renderSeq = String(renderSeq); // lets tests wait for a real render
     if (app.state.ui.lastRoute !== location.hash && location.hash) {
       app.state = { ...app.state, ui: { ...app.state.ui, lastRoute: location.hash } };
       save();
@@ -237,7 +258,11 @@
       : 'No transaction data loaded';
     $('#navNote').textContent = app.storageOk ? 'Changes save in this browser only. Use Data & privacy to share them.' : 'Browser storage is unavailable: export a workbook to keep changes.';
     let count = 0;
-    try { count = ctx.reviewQueues().counts?.open ?? 0; } catch { count = 0; }
+    try {
+      const c = ctx.reviewQueues().counts || {};
+      // Items that need a household decision; paired transfers and yearly bills are not counted.
+      count = (c.uncertain || 0) + (c.duplicates || 0) + (c.transfers || 0) + (c.reimbursements || 0) + (c.business || 0) + (c.spikes || 0);
+    } catch { count = 0; }
     const rc = $('#reviewCount');
     rc.hidden = !count;
     rc.textContent = count > 99 ? '99+' : String(count);
@@ -255,8 +280,10 @@
     if (!next || next === prev) return false;
     next.meta = { ...next.meta, updatedAt: new Date().toISOString() };
     if (undoable) {
+      const active = document.activeElement;
       app.undoStack.push(prev);
-      if (app.undoStack.length > 30) app.undoStack.shift();
+      app.undoFocus.push(active && active.id ? active.id : null);
+      if (app.undoStack.length > 30) { app.undoStack.shift(); app.undoFocus.shift(); }
     }
     app.state = next;
     if (rederive !== false && (prev.ledgerEdits !== next.ledgerEdits || prev.ui.whatIf !== next.ui.whatIf || rederive)) derive();
@@ -269,16 +296,20 @@
 
   function undo() {
     const prev = app.undoStack.pop();
+    const focusId = app.undoFocus.pop();
     if (!prev) return;
     app.state = prev;
     derive();
     save();
     toast('Change undone.');
+    // The toast's Undo button disappears, so return focus to where the change was made.
+    pendingFocusId = focusId || 'page-title';
     scheduleRender();
   }
 
   function replaceState(newState, message) {
     app.undoStack.push(app.state);
+    app.undoFocus.push(null);
     app.state = newState;
     derive();
     save();
@@ -289,6 +320,9 @@
   // ------------------------------------------------------------------ feedback
   function toast(message, { undo: canUndo = false, timeout = 6000 } = {}) {
     const el = $('#toast');
+    const dlg = $('#dialog');
+    const host = dlg && dlg.open ? dlg : document.body; // the modal's top layer would hide it otherwise
+    if (el.parentNode !== host) host.appendChild(el);
     el.innerHTML = `<span>${esc(message)}</span>${canUndo ? '<button type="button" data-action="undo">Undo</button>' : ''}`;
     el.hidden = false;
     clearTimeout(toast.timer);
@@ -326,15 +360,22 @@
       case 'month':
         if (!raw) return null;
         if (!E.months.isMonth(raw)) throw new E.ValidationError('Choose a month (YYYY-MM).');
+        if (!plausibleYear(raw)) throw new E.ValidationError('Check the year: ' + raw.slice(0, 4) + ' does not look right.');
         return raw;
       case 'date':
         if (!raw) return null;
         if (!E.dates.isDate(raw)) throw new E.ValidationError('Choose a date.');
+        if (!plausibleYear(raw)) throw new E.ValidationError('Check the year: ' + raw.slice(0, 4) + ' does not look right.');
         return raw;
       case 'bool': return !!raw;
       case 'select': return raw === '__null__' ? null : raw;
       default: return String(raw).trim();
     }
+  }
+
+  function plausibleYear(value) {
+    const y = Number(String(value).slice(0, 4));
+    return y >= 1990 && y <= 2200;
   }
 
   function setFieldError(el, message) {
@@ -425,7 +466,15 @@
     });
     document.addEventListener('change', ev => {
       const el = ev.target;
-      if (el.matches('[data-bind]')) commitBinding(el);
+      if (el.matches('[data-bind]')) {
+        // Chrome fires change for every typed part of a month/date ("0002-05" while typing 2028).
+        // Typed values wait for Enter or leaving the field; a value picked from the calendar
+        // (no keystrokes) applies at once.
+        // A view may dispatch its own (untrusted) change once typing is finished: that one applies.
+        if (el.matches(DATE_INPUTS) && el.dataset.typed && ev.isTrusted) return;
+        delete el.dataset.typed;
+        commitBinding(el);
+      }
       else if (el.matches('input[data-action], select[data-action]')) runAction(el, ev);
     });
     document.addEventListener('input', ev => {
@@ -435,11 +484,20 @@
       }
     });
     document.addEventListener('keydown', ev => {
+      if (ev.target.matches && ev.target.matches(DATE_INPUTS) && !NON_TYPING_KEYS.includes(ev.key)) ev.target.dataset.typed = '1';
       if (ev.key === 'Enter' && ev.target.matches('input[data-bind]')) {
         ev.preventDefault();
+        delete ev.target.dataset.typed;
         commitBinding(ev.target);
       }
       if (ev.target.matches('svg[data-chart="line"]')) chartKey(ev);
+    });
+    document.addEventListener('focusout', ev => {
+      const el = ev.target;
+      if (el.matches && el.matches(DATE_INPUTS) && el.dataset.typed) {
+        delete el.dataset.typed;
+        commitBinding(el);
+      }
     });
     document.addEventListener('submit', ev => {
       const form = ev.target;
@@ -572,7 +630,8 @@
   /** Persist a dataset loaded in the browser and reload the app around it. */
   function useLoadedDataset(dataset, meta = {}) {
     const normalized = E.ledger.normalizeDataset(dataset);
-    if (app.storage) {
+    if (!app.storage) throw new E.ValidationError('This browser is not letting the page store data (private window or storage turned off), so loaded files would be lost on reload. Use the command-line import and a private build instead.');
+    {
       try {
         app.storage.setItem(LOADED_DATASET_KEY, JSON.stringify({ dataset: normalized, loadedAt: new Date().toISOString(), ...meta }));
       } catch (err) {
@@ -582,8 +641,13 @@
     root.location.reload();
   }
 
-  function useLoadedProfile(profile) {
-    if (app.storage) app.storage.setItem(LOADED_PROFILE_KEY, JSON.stringify({ profile, loadedAt: new Date().toISOString() }));
+  function useLoadedProfile(profile, meta = {}) {
+    if (!app.storage) throw new E.ValidationError('This browser is not letting the page store data (private window or storage turned off), so the profile would be lost on reload. Put it in private/household-profile.json and rebuild instead.');
+    try {
+      app.storage.setItem(LOADED_PROFILE_KEY, JSON.stringify({ profile, loadedAt: new Date().toISOString(), ...meta }));
+    } catch (err) {
+      throw new E.ValidationError('This browser could not store the profile (' + err.message + ').');
+    }
     root.location.reload();
   }
 

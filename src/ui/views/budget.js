@@ -929,6 +929,7 @@
       case 'under': return c.badge('Under by ' + money(-row.diffToPlanCents), 'good');
       case 'on_plan': return c.badge('On plan', 'good');
       case 'partial_month': return c.badge('Month incomplete', 'info');
+      case 'irregular': return c.badge('Not due this month', 'info');
       default: return c.badge('No target', 'neutral');
     }
   }
@@ -1241,7 +1242,7 @@
     const pathOf = f => `plan.debts[id=${d.id}].${f}`;
     const msg = what => `${d.label}: ${what} saved.`;
     let sum = null;
-    try { sum = E.debt.summary(d, bill, { month: ctx.forecastStart }); } catch (err) { sum = null; }
+    try { sum = E.debt.summary(d, bill, { month: ctx.forecastStart, people: ctx.people }); } catch (err) { sum = null; }
     const housing = !!(bill && (bill.type === 'housing' || bill.category === 'Mortgage')) || /mortgage|home loan/i.test(d.label || '');
 
     const facts = (sum ? sum.lines : []).filter(l => !['promo', 'escrow', 'paymentsLeft'].includes(l.key)).map(l => {

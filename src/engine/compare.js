@@ -499,6 +499,7 @@
     const scoped = opts.scope === 'all' || opts.scope === 'household' ? txns : txns.filter(t => t.accountScope !== 'personal');
 
     const comparison = usual(scoped, dataset, { month, window });
+    const signalBy = new Map(comparison.categories.map(c => [c.category, c.signal]));
     const usable = comparison.usableCount > 0;
     const usualBy = new Map(comparison.categories.map(c => [c.category, c.averageCents]));
     const adjusted = planningBaseline(scoped, dataset, { endMonth: E.months.add(month, -1), window });
@@ -527,6 +528,7 @@
       let status;
       if (partial) status = 'partial_month';
       else if (plannedCents === null) status = 'no_plan';
+      else if (actualCents === 0 && signalBy.get(category) === 'irregular') status = 'irregular'; // e.g. a quarterly bill not due this month
       else status = diffToPlanCents > 0 ? 'over' : diffToPlanCents < 0 ? 'under' : 'on_plan';
       return {
         category,

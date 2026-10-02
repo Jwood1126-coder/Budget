@@ -1933,3 +1933,13 @@ test('workbook import: an earlier page that holds no saved budget gets a specifi
   const html = '<!doctype html><html><body><script id="budget-state" type="application/json">{"copyId":"local-private","state":null}</script></body></html>';
   assert.throws(() => S.importWorkbook(html, profile(), DS), isValidationError(/no saved budget inside/));
 });
+
+test('importWorkbook: notes a workbook made for a different data set', () => {
+  const profile = require('../../fixtures/sample-profile.json');
+  const ds = E.ledger.normalizeDataset(require('../../fixtures/sample-data.json'));
+  const wb = E.state.exportWorkbook(E.state.defaults(profile, ds), { datasetId: 'other' });
+  const r = E.state.importWorkbook(wb, profile, ds);
+  assert.ok(r.notes.some(n => /data set "other"/.test(n)), r.notes.join(' | '));
+  const same = E.state.importWorkbook(E.state.exportWorkbook(E.state.defaults(profile, ds), { datasetId: ds.datasetId }), profile, ds);
+  assert.ok(!same.notes.some(n => /made for data set/.test(n)));
+});
