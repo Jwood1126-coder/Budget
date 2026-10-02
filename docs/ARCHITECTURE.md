@@ -46,6 +46,7 @@ src/
     debt.js              debt facts, promo check, illustrations  (BudgetEngine.debt)
     forecast.js          scenario projection + comparison        (BudgetEngine.forecast)
     balances.js          balances over time, patterns, Home's projection (BudgetEngine.balances)
+    flows.js             spending by role and how it was paid, money into joint by person, savings in/out, the baseline and Home's plan (BudgetEngine.flows)
     state.js             saved-state schema, migration, storage  (BudgetEngine.state)
     attention.js         "needs attention" list (Review)         (BudgetEngine.attention)
   ui/
@@ -398,7 +399,10 @@ State = {
   references: Reference[],               // user-entered reconciliation references
   checklist: { [id]: boolean },
   ui: { scope: 'joint'|'household', lastRoute: string, whatIf: { excludePendingReimbursements: boolean, excludeBusinessCandidates: boolean },
-        home: { inCents, p1InCents, p2InCents, outCents, savedCents: cents|null, horizon: 12|24|60 },  // Home's what-if; null = the usual amount
+        home: { inCents, p1InCents, p2InCents, cardCents, bankCents: cents ≥ 0|null, savedCents: signed cents|null,
+                outCents: cents|null,            // the earlier single spending amount: kept, no longer used
+                baselineMonths: 3|6|12, fundingWho: 'both'|'p1'|'p2', chartView: 'money'|'balances', horizon: 12|24|60 },
+                                                 // Home's plan; null = the baseline (Budget pay, recent averages); 0 is an amount
                                                                     // (p1/p2InCents when money in can be told apart by person, else inCents)
         dismissed: { [noticeId]: boolean } },
   meta: { createdAt, updatedAt, migratedFrom: null|0..4,           // 0 = unversioned earlier budget
@@ -897,6 +901,40 @@ Projection = {
   — `deltas` compare money rows with the first column (null when either is unknown).
 - Also exported: `MAX_MONTHS = 120`, `EVENT_TYPES`.
 
+### BudgetEngine.flows
+Joint accounts only. Every counted row gets one role: `card` (purchases and refunds on a card or
+financing account), `bank` (spending paid from checking or another cash account, the mortgage
+included), `repayment` (checking → card: settles purchases already counted, never spending),
+`debt`, `business` (purchases marked as business costs), `savings`, `investment`, `interest`,
+`credit` (money in, attributed to p1 / p2 or not assigned) and `internal` (between own accounts).
+- `breakdown(txns, dataset, { months, coverageMap, plan })` → per month (full coverage only)
+  `{ actual, planning, oneOffs, credits, spends }`. Base amounts: p1, p2 (and their provisional
+  parts), unassigned, interest, card/bank purchases and refunds, card repayments, debt, business,
+  savings in/out, investments in/out; derived: cardNet, bankNet, consumption, funding (p1 + p2),
+  moneyIn, savingsNet, investNet, left. `actual` counts every row; `planning` leaves out rows the
+  household left out of the planning baseline. Agrees with `balances.monthlyFlows` to the cent.
+- `baseline(rows, { count })` → the last `count` complete months: totals (actual and planning) and
+  averages built from averaged base amounts, so they add up the same way. Purchases are sorted
+  into one-time (left out by the household, or found: $500 or more, no similar purchase from the
+  same place in those months, none 11–13 months apart; "include" on the row wins), yearly (a
+  similar purchase 11–13 months apart: spread as 1/12 a month), regular (same place in at least
+  60% of the months) and everyday. One-time purchases leave the plan only; history keeps them.
+- `planFunding(plan, { month, timing })` → per partner: the streams active that month with gross
+  (pay stub, reference only), take-home, kept personally and joint, per paycheck and per month
+  (same count as the Budget: semimonthly 2, biweekly 2 typical or 26/12 average), ended streams
+  (old pay) for comparison, and `jointCents` (the partner's joint contribution).
+- `scenario({ base, funding, home, people })` → one effective amount per line (the household's
+  setting, else the baseline) and `remainder` = funding + other planned income − card − bank −
+  debt − business − savings − investments. Planned card and bank spending are never below $0;
+  savings is signed (a drawdown raises the remainder).
+`balances.history` takes an entered balance dated up to 45 days after an account's export ends
+(or before it starts) as the balance at that end, and says so in the account's note.
+`balances.project(..., limits)` keeps real balances at $0 or more: savings tops up checking, a
+drawdown stops when savings is empty, and the rest is reported as `uncovered`.
+Ledger edits gain `person: 'p1'|'p2'|'none'` (whose money a deposit is; 'none' = neither), applied
+by `applyEdits` as `personId` with `personBasis` 'edit' (a rule's person has basis 'rule').
+Income streams gain `grossPerPaycheckCents` (optional, reference only).
+
 ### BudgetEngine.balances
 Joint cash accounts only (checking, savings, other; cards and loans are not balances to spend).
 - `cashAccounts(dataset) -> [{ id, label, type, group: 'checking'|'savings', coverage }]`
@@ -1017,7 +1055,7 @@ Joint cash accounts only (checking, savings, other; cards and loans are not bala
 
 | Route | View |
 | --- | --- |
-| `#/overview` | Home: comfortable to save/spend this month, balances now, where the current track leads, what-if sliders, month-by-month pattern |
+| `#/overview` | Home: four amounts (money into joint, card spending, bank-paid bills, net to savings) and the plan remainder; sliders with exact amounts; money each month or balances over time; how the plan adds up, the spending baseline, money into joint by person, savings in and out |
 | `#/spending?period=2026-09&cat=Groceries&merchant=…&txn=…&q=…&window=3` | month → category → merchant → transaction drilldown with breadcrumbs |
 | `#/budget?section=income|bills|targets|savings|debts` | edit plan inputs; planned vs actual; consequences |
 | `#/forecast?scenario=…&compare=a,b&horizon=36` | scenarios, events, projections, side-by-side |

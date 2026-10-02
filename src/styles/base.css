@@ -29,6 +29,7 @@
   --series-1: #2a78d6;
   --series-2: #eb6834;
   --series-3: #148a5f;        /* a line on white needs 3:1 */
+  --series-4: #7a4fc9;
   --grid: #e6e9ef;
   --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .08);
   --radius: 12px;
@@ -67,6 +68,7 @@
     --series-1: #3987e5;
     --series-2: #d95926;
     --series-3: #199e70;
+    --series-4: #a585ea;
     --grid: #2e3138;
     --shadow: 0 1px 2px rgba(0, 0, 0, .4);
   }
@@ -326,7 +328,16 @@ main { padding: var(--space-6) var(--space-6) var(--space-7); max-width: 1240px;
 .key-line.series-1 { border-color: var(--series-1); }
 .key-line.series-2 { border-color: var(--series-2); }
 .key-line.series-3 { border-color: var(--series-3); }
+.key-line.series-4 { border-color: var(--series-4); }
+.key-line.series-bad { border-color: var(--bad); }
 .key-line.series-muted { border-color: var(--text-3); border-top-style: dotted; }
+.key-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; flex: 0 0 auto; }
+.key-swatch.series-1 { background: var(--series-1); }
+.key-swatch.series-2 { background: var(--series-2); }
+.key-swatch.series-3 { background: var(--series-3); }
+.key-swatch.series-4 { background: var(--series-4); }
+.key-swatch.series-muted { background: var(--text-3); }
+.key-swatch.is-hatched { background: repeating-linear-gradient(45deg, var(--text-3) 0 3px, var(--surface) 3px 6px); border: 1px solid var(--text-3); }
 .key-line.key-dashed { border-color: var(--text-2); border-top-style: dashed; }
 
 /* ------------------------------------------------------------- charts */
@@ -340,10 +351,14 @@ main { padding: var(--space-6) var(--space-6) var(--space-7); max-width: 1240px;
 .chart .line.series-1 { stroke: var(--series-1); }
 .chart .line.series-2 { stroke: var(--series-2); }
 .chart .line.series-3 { stroke: var(--series-3); }
+.chart .line.series-4 { stroke: var(--series-4); }
+.chart .line.series-bad { stroke: var(--bad); stroke-width: 2.5; }
 .chart .end-dot { stroke: var(--surface); stroke-width: 2; }
 .chart .end-dot.series-1 { fill: var(--series-1); }
 .chart .end-dot.series-2 { fill: var(--series-2); }
 .chart .end-dot.series-3 { fill: var(--series-3); }
+.chart .end-dot.series-4 { fill: var(--series-4); }
+.chart .end-dot.series-bad { fill: var(--bad); }
 .chart .end-label { fill: var(--text-2); font-size: 11px; font-weight: 650; font-family: var(--font); }
 .chart .crosshair { stroke: var(--text-3); stroke-width: 1; }
 .chart .line.is-projected { stroke-dasharray: 6 5; }
@@ -357,6 +372,12 @@ main { padding: var(--space-6) var(--space-6) var(--space-7); max-width: 1240px;
 .chart .column.is-muted { fill: var(--border-strong); }
 .chart .column.is-highlight { fill: var(--brand-strong); }
 .chart a:focus-visible .column, .chart a:hover .column { filter: brightness(1.15); }
+.chart .seg.series-1 { fill: var(--series-1); }
+.chart .seg.series-2 { fill: var(--series-2); }
+.chart .seg.series-3 { fill: var(--series-3); }
+.chart .seg.series-muted { fill: var(--text-3); }
+.chart .hatch { fill: var(--surface); opacity: .75; }
+.chart .col-total { fill: var(--text-2); font-size: 11px; font-weight: 650; font-family: var(--font); }
 .chart-legend { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 var(--space-2); padding: 0; font-size: .82rem; color: var(--text-2); }
 .chart-legend li { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
 .chart-table { margin-top: var(--space-2); font-size: .85rem; }

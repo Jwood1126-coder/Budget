@@ -286,6 +286,103 @@
     </figure>`;
   }
 
+  /**
+   * Stacked columns over months: each column stacks `stacks` (positive parts up from zero,
+   * negative parts down), with the stack's total printed above it. An optional `side` series is a
+   * narrower column beside each stack (e.g. money nobody is assigned to: shown apart, never added
+   * in). `stacks[i].hatched` (cents per month, part of that segment) is drawn striped and named
+   * `hatchedName` in the legend, tooltip and table. Null = not known (no column).
+   * stacks: [{ name, cls, values: (cents|null)[], hatched?: (cents|null)[] }]; side: { name, cls, values } | null
+   */
+  function stackedColumnChart({ id, title, labels, stacks, side = null, totalName = 'Total', format = v => fmt.money(v, { whole: true }), tableCaption, hatchedName = 'provisional', summary = '' }) {
+    const known = v => v !== null && v !== undefined;
+    const n = labels.length;
+    if (!n || !stacks.some(s => s.values.some(known)) && !(side && side.values.some(known))) return empty('Not enough known values to draw this chart yet.');
+    const narrow = isNarrow();
+    const W = narrow ? 420 : 760, H = narrow ? 240 : 250, padL = narrow ? 46 : 60, padR = 12, padT = 22, padB = 30;
+    const totals = labels.map((m, i) => (stacks.some(s => known(s.values[i])) ? stacks.reduce((sum, s) => sum + (known(s.values[i]) ? s.values[i] : 0), 0) : null));
+    let lo = 0, hi = 0;
+    labels.forEach((m, i) => {
+      let up = 0, down = 0;
+      for (const s of stacks) { const v = s.values[i]; if (known(v)) { if (v >= 0) up += v; else down += v; } }
+      const sv = side && known(side.values[i]) ? side.values[i] : 0;
+      lo = Math.min(lo, down, sv); hi = Math.max(hi, up, sv);
+    });
+    const t = ticks(lo, hi);
+    const min = t[0], max = t[t.length - 1];
+    const y = v => padT + (1 - (v - min) / (max - min || 1)) * (H - padT - padB);
+    const band = (W - padL - padR) / n;
+    const group = Math.min(44, band * 0.74);
+    const bw = side ? group * 0.68 : Math.min(28, band * 0.6);
+    const sw = side ? group * 0.26 : 0;
+    const pid = esc((id || UI.dom.domId('stack', title)) + '-hatch');
+    const grid = t.map(v => `<line class="grid${v === 0 ? ' zero' : ''}" x1="${padL}" x2="${W - padR}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}"/><text class="axis" x="${padL - 8}" y="${(y(v) + 4).toFixed(1)}" text-anchor="end">${esc(compactMoney(v))}</text>`).join('');
+    const every = Math.max(1, Math.ceil(n / (narrow ? 6 : 12)));
+    const showTotals = n <= (narrow ? 6 : 14);
+    let yearShown = null;
+    const hasHatch = stacks.some(s => (s.hatched || []).some(v => known(v) && v !== 0));
+    const rect = (x, y1, y2, w, cls, extra = '') => `<rect class="${cls}" x="${x.toFixed(1)}" y="${Math.min(y1, y2).toFixed(1)}" width="${w.toFixed(1)}" height="${Math.max(1, Math.abs(y2 - y1)).toFixed(1)}"${extra}/>`;
+    const cols = labels.map((m, i) => {
+      const cx = padL + band * i + band / 2;
+      const x0 = side ? cx - group / 2 : cx - bw / 2;
+      let out = '';
+      let up = 0, down = 0;
+      for (const s of stacks) {
+        const v = s.values[i];
+        if (!known(v) || v === 0) continue;
+        const from = v >= 0 ? up : down, to = from + v;
+        out += rect(x0, y(from), y(to), bw, 'seg ' + s.cls);
+        const h = s.hatched && known(s.hatched[i]) ? s.hatched[i] : 0;
+        if (h) out += rect(x0, y(to), y(to - h), bw, 'hatch-overlay', ` fill="url(#${pid})"`);
+        if (v >= 0) up = to; else down = to;
+      }
+      if (side && known(side.values[i]) && side.values[i] !== 0) out += rect(x0 + bw + group * 0.06, y(0), y(side.values[i]), sw, 'seg side ' + side.cls);
+      if (showTotals && known(totals[i])) out += `<text class="col-total" x="${(x0 + bw / 2).toFixed(1)}" y="${(y(Math.max(0, up)) - 5).toFixed(1)}" text-anchor="middle">${esc(compactMoney(totals[i]))}</text>`;
+      const shown = i % every === 0 || i === n - 1;
+      let text = fmt.month(m);
+      if (shown) {
+        const year = String(m).slice(0, 4);
+        if (year === yearShown) text = text.replace(/ \d{4}$/, '');
+        yearShown = year;
+      }
+      const label = shown ? `<text class="axis" x="${cx.toFixed(1)}" y="${H - 10}" text-anchor="middle">${esc(text)}</text>` : '';
+      const rows = stacks.map(s => {
+        const v = s.values[i], h = s.hatched && known(s.hatched[i]) ? s.hatched[i] : 0;
+        return [s.name, format(known(v) ? v : null) + (h ? ' (' + format(h) + ' ' + hatchedName + ')' : ''), s.cls];
+      });
+      if (stacks.length > 1) rows.push([totalName, format(totals[i])]);
+      if (side) rows.push([side.name, format(known(side.values[i]) ? side.values[i] : null), side.cls]);
+      const hit = `<rect class="hit-col" x="${(cx - band / 2).toFixed(1)}" y="${padT}" width="${band.toFixed(1)}" height="${H - padT - padB}" data-tip-title="${esc(fmt.monthLong(m))}" data-tip-rows="${esc(JSON.stringify(rows))}"/>`;
+      return out + hit + label;
+    }).join('');
+    const legend = `<ul class="chart-legend">${stacks.map(s => `<li><span class="key key-swatch ${esc(s.cls)}" aria-hidden="true"></span>${esc(s.name)}</li>`).join('')}${side ? `<li><span class="key key-swatch ${esc(side.cls)}" aria-hidden="true"></span>${esc(side.name)} (beside, not added in)</li>` : ''}${hasHatch ? `<li><span class="key key-swatch is-hatched" aria-hidden="true"></span>Striped: ${esc(hatchedName)}</li>` : ''}</ul>`;
+    const cols2 = [{ key: 'm', label: 'Month' }, ...stacks.map((s, si) => ({ key: 's' + si, label: s.name, align: 'right' })), ...(stacks.length > 1 ? [{ key: 'tot', label: totalName, align: 'right' }] : []), ...(side ? [{ key: 'side', label: side.name, align: 'right' }] : [])];
+    const tableRows = labels.map((m, i) => {
+      const r = { m: fmt.monthLong(m) };
+      stacks.forEach((s, si) => {
+        const v = s.values[i], h = s.hatched && known(s.hatched[i]) ? s.hatched[i] : 0;
+        r['s' + si] = format(known(v) ? v : null) + (h ? ' (' + format(h) + ' ' + hatchedName + ')' : '');
+      });
+      r.tot = format(totals[i]);
+      if (side) r.side = format(known(side.values[i]) ? side.values[i] : null);
+      return r;
+    });
+    const sum = vals => vals.filter(known).reduce((a, b) => a + b, 0);
+    const footer = { m: 'Total' };
+    stacks.forEach((s, si) => { footer['s' + si] = esc(format(sum(s.values))); });
+    footer.tot = esc(format(sum(totals)));
+    if (side) footer.side = esc(format(sum(side.values)));
+    return `<figure class="chart" id="${esc(id || UI.dom.domId('stack', title))}">
+      ${legend}
+      <svg class="column-chart stacked-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title + '. ' + (summary || '') + ' A table follows.')}">
+        <defs><pattern id="${pid}" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)"><rect class="hatch" width="2.5" height="6"/></pattern></defs>
+        ${grid}${cols}
+      </svg>
+      ${summary ? `<figcaption class="fine">${esc(summary)}</figcaption>` : ''}
+      <details class="chart-table"><summary>Show as a table</summary>${table({ caption: tableCaption || title, columns: cols2, rows: tableRows, footer })}</details>
+    </figure>`;
+  }
+
   // ------------------------------------------------------------------ form fields
   /** Extra attributes for bound fields: data-message (toast text, enables Undo) and data-* pairs. */
   function extraAttrs(message, data) {
@@ -355,6 +452,6 @@
 
   UI.c = {
     pageHeader, breadcrumbs, card, badge, notice, metric, empty, disclosure, segmented, button, linkButton,
-    table, barList, lineChart, columnChart, moneyField, selectField, monthField, textField, certainty, compactMoney, ticks,
+    table, barList, lineChart, columnChart, stackedColumnChart, moneyField, selectField, monthField, textField, certainty, compactMoney, ticks,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

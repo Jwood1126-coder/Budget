@@ -96,7 +96,7 @@ test('defaults: compares the baseline with the first other scenario', () => {
 
 test('defaults: joint scope, overview route, what-ifs off and epoch timestamps', () => {
   const st = base();
-  assert.deepEqual(st.ui, { scope: 'joint', lastRoute: '#/overview', whatIf: { excludePendingReimbursements: false, excludeBusinessCandidates: false }, home: { inCents: null, p1InCents: null, p2InCents: null, outCents: null, savedCents: null, horizon: 24 }, dismissed: {} });
+  assert.deepEqual(st.ui, { scope: 'joint', lastRoute: '#/overview', whatIf: { excludePendingReimbursements: false, excludeBusinessCandidates: false }, home: { inCents: null, p1InCents: null, p2InCents: null, outCents: null, savedCents: null, cardCents: null, bankCents: null, baselineMonths: 12, fundingWho: 'both', chartView: 'money', horizon: 24 }, dismissed: {} });
   assert.deepEqual(st.meta, { createdAt: '1970-01-01T00:00:00.000Z', updatedAt: '1970-01-01T00:00:00.000Z', migratedFrom: null, migrationNotes: [], legacySnapshot: null });
   assert.equal(st.scenarios[1].createdAt, '1970-01-01T00:00:00.000Z');
 });
@@ -640,7 +640,7 @@ test('sanitize: references, checklist, ui and meta are validated', () => {
   const r = S.sanitize(raw, profile(), DS);
   assert.deepEqual(r.state.references.map(x => x.id), ['q3']);
   assert.deepEqual(r.state.checklist, { balances: true });
-  assert.deepEqual(r.state.ui, { scope: 'household', lastRoute: '#/forecast?horizon=36', whatIf: { excludePendingReimbursements: true, excludeBusinessCandidates: false }, home: { inCents: null, p1InCents: null, p2InCents: null, outCents: null, savedCents: null, horizon: 24 }, dismissed: { tip1: true } });
+  assert.deepEqual(r.state.ui, { scope: 'household', lastRoute: '#/forecast?horizon=36', whatIf: { excludePendingReimbursements: true, excludeBusinessCandidates: false }, home: { inCents: null, p1InCents: null, p2InCents: null, outCents: null, savedCents: null, cardCents: null, bankCents: null, baselineMonths: 12, fundingWho: 'both', chartView: 'money', horizon: 24 }, dismissed: { tip1: true } });
   assert.equal(r.state.meta.createdAt, NOW);
   assert.equal(r.state.meta.updatedAt, '1970-01-01T00:00:00.000Z');
   assert.equal(r.state.meta.migratedFrom, null);
@@ -1979,13 +1979,63 @@ test('balances: per-account entered balances and the Home what-if are validated 
   st = S.setPath(st, 'ui.home.savedCents', 50000);
   st = S.setPath(st, 'ui.home.horizon', 60);
   st = S.setPath(st, 'ui.home.p2InCents', 0);
-  assert.deepEqual(st.ui.home, { inCents: null, p1InCents: null, p2InCents: 0, outCents: null, savedCents: 50000, horizon: 60 });
+  assert.deepEqual(st.ui.home, { inCents: null, p1InCents: null, p2InCents: 0, outCents: null, savedCents: 50000, cardCents: null, bankCents: null, baselineMonths: 12, fundingWho: 'both', chartView: 'money', horizon: 60 });
   assert.throws(() => S.setPath(st, 'ui.home.horizon', 7), isValidationError());
   const raw = JSON.parse(JSON.stringify(st));
   raw.plan.balances.accounts = { 'joint-savings': 100, 'bad id!': 5, other: 'lots' };
   raw.ui.home = { inCents: -5, horizon: 3 };
   const r = S.sanitize(raw, profile(), DS);
   assert.deepEqual(r.state.plan.balances.accounts, { 'joint-savings': 100 });
-  assert.deepEqual(r.state.ui.home, { inCents: null, p1InCents: null, p2InCents: null, outCents: null, savedCents: null, horizon: 24 });
+  assert.deepEqual(r.state.ui.home, { inCents: null, p1InCents: null, p2InCents: null, outCents: null, savedCents: null, cardCents: null, bankCents: null, baselineMonths: 12, fundingWho: 'both', chartView: 'money', horizon: 24 });
   assert.ok(r.notes.some(n => /dropped balances/.test(n)));
+});
+
+test('Home plan amounts: a savings drawdown with cents survives saving, loading, sanitizing and unrelated edits; zero stays zero', () => {
+  let st = base();
+  st = S.setPath(st, 'ui.home.savedCents', -123648);
+  assert.equal(st.ui.home.savedCents, -123648, 'a negative net savings amount is a drawdown, not an error');
+  st = S.setPath(st, 'ui.home.cardCents', 234567);
+  st = S.setPath(st, 'ui.home.bankCents', 0);
+  st = S.setPath(st, 'ui.home.p1InCents', 398800);
+  assert.equal(st.ui.home.savedCents, -123648, 'unrelated edits keep it');
+  assert.equal(st.ui.home.bankCents, 0, 'zero is an amount, not "use the baseline"');
+  // Through storage and back.
+  const store = new Map();
+  const storage = { getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k), key: i => Array.from(store.keys())[i] ?? null, get length() { return store.size; } };
+  const saved = S.saveToStorage(storage, st);
+  assert.ok(saved.ok !== false, 'saved');
+  const loaded = S.loadFromStorage(storage, st.datasetId, profile(), DS).state;
+  assert.equal(loaded.ui.home.savedCents, -123648);
+  assert.equal(loaded.ui.home.cardCents, 234567);
+  assert.equal(loaded.ui.home.bankCents, 0);
+  assert.equal(loaded.ui.home.p1InCents, 398800);
+  // A saved copy from before these fields existed loses nothing and gains the defaults.
+  const raw = JSON.parse(JSON.stringify(st));
+  raw.ui.home = { inCents: null, p1InCents: 300000, p2InCents: null, outCents: 450000, savedCents: -5000, horizon: 12 };
+  const r = S.sanitize(raw, profile(), DS);
+  assert.deepEqual(r.state.ui.home, { inCents: null, p1InCents: 300000, p2InCents: null, outCents: 450000, savedCents: -5000, cardCents: null, bankCents: null, baselineMonths: 12, fundingWho: 'both', chartView: 'money', horizon: 12 });
+  // Planned card and bank spending can't be negative; savings can.
+  assert.throws(() => S.setPath(st, 'ui.home.cardCents', -100), isValidationError(/\$0 or more/));
+  assert.throws(() => S.setPath(st, 'ui.home.bankCents', -1), isValidationError(/\$0 or more/));
+  assert.throws(() => S.setPath(st, 'ui.home.savedCents', 1.5), isValidationError(/whole cents/));
+  assert.throws(() => S.setPath(st, 'ui.home.baselineMonths', 5), isValidationError());
+});
+
+test('ledger edits: whose money a deposit is (p1, p2 or none) is kept; anything else is dropped with a note', () => {
+  const st = base();
+  const raw = JSON.parse(JSON.stringify(st));
+  raw.ledgerEdits = { a1: { person: 'p2', history: [] }, a2: { person: 'none', history: [] }, a3: { person: 'p9', history: [] } };
+  const r = S.sanitize(raw, profile(), DS);
+  assert.equal(r.state.ledgerEdits.a1.person, 'p2');
+  assert.equal(r.state.ledgerEdits.a2.person, 'none');
+  assert.ok(!r.state.ledgerEdits.a3, 'an unknown person is dropped');
+  assert.ok(r.notes.some(n => /ledgerEdits\[a3\]\.person/.test(n)));
+});
+
+test('income streams take an optional gross pay per paycheck (whole cents, never negative)', () => {
+  let st = base();
+  const id = st.plan.incomes.find(i => i.kind === 'paycheck').id;
+  st = S.setPath(st, `plan.incomes[id=${id}].grossPerPaycheckCents`, 412340);
+  assert.equal(st.plan.incomes.find(i => i.id === id).grossPerPaycheckCents, 412340);
+  assert.throws(() => S.setPath(st, `plan.incomes[id=${id}].grossPerPaycheckCents`, -1), isValidationError());
 });

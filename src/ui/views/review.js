@@ -64,13 +64,14 @@
 
   const FIELD_LABEL = {
     category: 'Category', kind: 'Kind', subtype: 'Type', splits: 'Split', duplicate: 'Duplicate',
-    reimbursement: 'Reimbursement', business: 'Business', planningBaseline: 'Planning baseline', note: 'Note',
+    reimbursement: 'Reimbursement', business: 'Business', planningBaseline: 'Planning baseline', person: 'Whose money', note: 'Note',
   };
   const VALUE_LABEL = {
     duplicate: { exclude: 'Not counted (duplicate)', keep: 'Not a duplicate' },
     reimbursement: { pending: 'Pending', confirmed: 'Reimbursed (not counted)', not_reimbursed: 'Not reimbursed' },
     business: { pending: 'Pending', business: 'Business (not counted)', household: 'Household' },
     planningBaseline: { exclude: 'Left out of planning baseline', include: 'Kept in planning baseline' },
+    person: { p1: 'First partner', p2: 'Second partner', none: 'Neither partner' },
   };
 
   /** Answers for money moving in or out without a matching account. */

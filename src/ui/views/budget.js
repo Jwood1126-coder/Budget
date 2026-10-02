@@ -668,7 +668,9 @@
     const amountFields = isContribution
       ? moneyField({ id: fid('inc-joint', s.id), label: 'Amount per transfer into joint', path: pathOf('jointPerPaycheckCents'), cents: joint, message: msg('amount per transfer'), placeholder: 'Unknown',
         help: 'Blank means unknown, not $0.' })
-      : moneyField({ id: fid('inc-net', s.id), label: 'Take-home per paycheck', path: pathOf('netPerPaycheckCents'), cents: net, message: msg('take-home pay'), placeholder: 'Unknown',
+      : moneyField({ id: fid('inc-gross', s.id), label: 'Gross pay per paycheck (optional)', path: pathOf('grossPerPaycheckCents'), cents: E.money.isCents(s.grossPerPaycheckCents) ? s.grossPerPaycheckCents : null, message: msg('gross pay'), placeholder: 'Not entered',
+        help: 'From a pay stub, for reference only: the plan uses what reaches joint.' })
+        + moneyField({ id: fid('inc-net', s.id), label: 'Take-home per paycheck', path: pathOf('netPerPaycheckCents'), cents: net, message: msg('take-home pay'), placeholder: 'Unknown',
         help: 'Full net pay, before any of it is split off. Blank means unknown.' })
         + moneyField({ id: fid('inc-joint', s.id), label: 'Amount reaching joint per paycheck', path: pathOf('jointPerPaycheckCents'), cents: joint, message: msg('amount reaching joint'), placeholder: 'Unknown',
           help: hasContribution ? `Blank is read as no direct deposit to joint: ${esc(possessive(person))} joint money comes through the transfer below.` : 'The part deposited straight into a joint account.' });

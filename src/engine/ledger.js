@@ -512,6 +512,15 @@
         else warnings.push('Blank category edit ignored.');
       }
       const baseNote = typeof t.note === 'string' ? t.note : '';
+      // Whose money a deposit is: a household rule may name the person at import ('rule'); the
+      // household's own correction wins ('edit', where 'none' means neither partner).
+      const basePersonId = t.personId === 'p1' || t.personId === 'p2' ? t.personId : null;
+      let personId = basePersonId;
+      let personBasis = basePersonId ? 'rule' : null;
+      if (edit && (edit.person === 'p1' || edit.person === 'p2' || edit.person === 'none')) {
+        personId = edit.person === 'none' ? null : edit.person;
+        personBasis = 'edit';
+      }
       return Object.assign({}, t, {
         flags: Array.isArray(t.flags) ? t.flags.slice() : [],
         matchIds: Array.isArray(t.matchIds) ? t.matchIds.slice() : [],
@@ -523,6 +532,9 @@
         subtype,
         note: edit && nonEmpty(edit.note) ? edit.note : baseNote,
         baseNote,
+        personId,
+        basePersonId,
+        personBasis,
         edited: hasEditFields(edit),
         edit: edit ? E.util.clone(edit) : null,
         accountType: account ? account.type : null,

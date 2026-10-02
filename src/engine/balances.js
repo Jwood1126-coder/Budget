@@ -26,6 +26,12 @@
 
   const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
   const isCents = v => Number.isSafeInteger(v);
+  /**
+   * An entered balance dated up to this many days after the account's export ends (or before it
+   * starts) is used at that end: people type today's balance, a few days after their last export.
+   * What moved in between is not in the data, and the note says so.
+   */
+  const ENTERED_GAP_DAYS = 45;
 
   /** Joint cash accounts in the data (cards and loans are not balances you can spend from). */
   function cashAccounts(dataset) {
@@ -88,7 +94,16 @@
       }
       for (const [day, list] of byDay) out.push({ day, cents: endOfDay(list), source: 'bank' });
     } else if (isCents(entered) && E.dates.isDate(asOf)) {
-      out.push({ day: E.dates.dayNumber(asOf), cents: entered, source: 'entered' });
+      let day = E.dates.dayNumber(asOf);
+      let gap = null;
+      const ranges = Array.isArray(account.coverage) ? account.coverage : [];
+      if (ranges.length) {
+        const first = Math.min(...ranges.map(r => E.dates.dayNumber(r.start)));
+        const last = Math.max(...ranges.map(r => E.dates.dayNumber(r.end)));
+        if (day > last && day - last <= ENTERED_GAP_DAYS) { gap = { asOf, usedAt: E.dates.fromDayNumber(last) }; day = last; }
+        else if (day < first - 1 && first - 1 - day <= ENTERED_GAP_DAYS) { gap = { asOf, usedAt: E.dates.fromDayNumber(first - 1) }; day = first - 1; }
+      }
+      out.push({ day, cents: entered, source: 'entered', gap });
     }
     return out.sort((a, b) => a.day - b.day);
   }
@@ -133,10 +148,12 @@
         if (!coveredBetween(a.coverage, end, after.day)) return null;
         return after.cents - flowBetween(end, after.day);
       });
+      const gap = anchors.length && anchors[0].gap;
       const note = source === 'bank' ? 'From the running balance in the bank export.'
         : source === 'entered' ? 'From the balance you entered for ' + E.dates.label(opts.asOf) + ', worked back and forward with the transactions.'
+          + (gap ? ' Your export ' + (gap.usedAt < gap.asOf ? 'ends ' : 'starts the day after ') + E.dates.label(gap.usedAt) + ', so it is used as the balance then: anything that moved in between is not in your data.' : '')
           : 'No balance known: shows the change since ' + (base.length ? E.dates.label(E.dates.fromDayNumber(base[0].day + 1)) : 'the first export') + ', not the balance.';
-      return { id: a.id, label: a.label, group: a.group, source, values, note };
+      return { id: a.id, label: a.label, group: a.group, source, values, note, gap: gap || null };
     });
     const groups = {};
     for (const g of GROUPS) {
@@ -181,7 +198,8 @@
 
   /**
    * Who a deposit into the joint accounts comes from: returns txn → 'p1' | 'p2' | null (other).
-   *   1. The person a household rule or transfer hint named on the row (personId).
+   *   0. The household's own correction on the row (personBasis 'edit'; 'none' = neither partner).
+   *   1. The person a household rule or transfer hint named on the row (personId, basis 'rule').
    *   2. A partner's transfer (contribution) with no person: the one person whose budget has a
    *      contribution stream (several: the one whose per-transfer amount matches).
    *   3. A paycheck deposit with no person: the one person whose paycheck reaches joint (a paycheck
@@ -189,6 +207,8 @@
    *   4. Any other deposit (not interest) of exactly one person's usual deposit amount (a paycheck's
    *      joint portion or a transfer), e.g. a partner's transfer the import rules do not recognise yet.
    * Interest, refunds and anything unmatched stay "other".
+   * The returned function also has `.explain(t)` → { who, basis }: basis 'edit' and 'rule' are the
+   * household's own word; 'income' (2–3) and 'amount' (4) are inferred, so they are provisional.
    */
   function incomeAttribution(plan) {
     const incomes = (plan && Array.isArray(plan.incomes) ? plan.incomes : []).filter(i => i && (i.personId === 'p1' || i.personId === 'p2'));
@@ -206,13 +226,18 @@
       const people = Array.from(new Set(incomes.filter(i => Number.isInteger(i.jointPerPaycheckCents) && i.jointPerPaycheckCents > 0 && i.jointPerPaycheckCents === cents).map(i => i.personId)));
       return people.length === 1 ? people[0] : null;
     };
-    return t => {
-      if (t.personId === 'p1' || t.personId === 'p2') return t.personId;
-      if (t.kind === 'transfer' && t.subtype === 'contribution') return pick(contributors, t.amountCents);
-      if (t.kind === 'income' && t.subtype === 'payroll') return pick(payers, t.amountCents);
-      if (t.kind === 'income' && t.subtype === 'interest') return null;
-      return t.amountCents > 0 ? byAmount(t.amountCents) : null;
+    const inferred = (who, basis) => ({ who, basis: who ? basis : null });
+    const explain = t => {
+      if (t.personBasis === 'edit') return { who: t.personId === 'p1' || t.personId === 'p2' ? t.personId : null, basis: 'edit' };
+      if (t.personId === 'p1' || t.personId === 'p2') return { who: t.personId, basis: 'rule' };
+      if (t.kind === 'transfer' && t.subtype === 'contribution') return inferred(pick(contributors, t.amountCents), 'income');
+      if (t.kind === 'income' && t.subtype === 'payroll') return inferred(pick(payers, t.amountCents), 'income');
+      if (t.kind === 'income' && t.subtype === 'interest') return { who: null, basis: null };
+      return inferred(t.amountCents > 0 ? byAmount(t.amountCents) : null, 'amount');
     };
+    const attribute = t => explain(t).who;
+    attribute.explain = explain;
+    return attribute;
   }
 
   /**
@@ -299,9 +324,24 @@
 
   /**
    * Month-by-month projection from the latest balances.
+   * Each month: checking += in − out − saved and savings += saved (saved < 0 is a drawdown).
+   *
+   * With `limits` (use them when the starting amounts are real balances), a balance never goes
+   * below $0, as in real life:
+   *   - a drawdown can only take what savings holds; the rest never reaches checking;
+   *   - when checking would go below $0, savings tops it up;
+   *   - what neither can cover is a shortfall (it would have to be borrowed or spending cut),
+   *     added up in `uncovered`, never shown as a negative balance.
+   * Without limits (amounts are only "change since…", balances unknown) it is plain arithmetic.
    * @param {{ startMonth: string, months: number, start: { checking: number|null, savings: number|null },
-   *           inCents: number, outCents: number, savedCents: number }} o startMonth = first projected month
-   * @returns {{ rows: { month, checking, savings, total }[], firstShortMonth: string|null, monthlyLeftCents: number }}
+   *           inCents: number, outCents: number, savedCents: number,
+   *           limits?: { checking?: boolean, savings?: boolean } }} o startMonth = first projected month
+   * @returns {{ rows: { month, checking, savings, total, uncovered, fromSavings }[], firstShortMonth: string|null,
+   *   firstSavingsShortMonth: string|null, savingsEmptyMonth: string|null, firstUncoveredMonth: string|null,
+   *   uncoveredCents: number, coveredFromSavingsCents: number, monthlyLeftCents: number, limited: boolean }}
+   *   firstShortMonth: the first month checking would go below $0 (with limits: the first month it
+   *   needed savings or ran short). firstSavingsShortMonth: the first month savings would go below $0
+   *   (without limits) or was emptied (with limits).
    */
   function project(o) {
     if (!E.months.isMonth(o.startMonth)) throw new E.ValidationError('A projection needs a start month.', 'startMonth');
@@ -309,20 +349,47 @@
     for (const k of ['inCents', 'outCents', 'savedCents']) {
       if (!isCents(o[k])) throw new E.ValidationError('A projection needs whole-cent amounts for money in, out and saved.', k);
     }
+    const lim = isObj(o.limits) ? o.limits : {};
+    const floorChecking = lim.checking === true, floorSavings = lim.savings === true;
     const left = o.inCents - o.outCents - o.savedCents;
     let checking = isCents(o.start && o.start.checking) ? o.start.checking : 0;
     let savings = isCents(o.start && o.start.savings) ? o.start.savings : 0;
     const rows = [];
-    let firstShortMonth = null;
+    let firstShortMonth = null, firstSavingsShortMonth = null, savingsEmptyMonth = null, firstUncoveredMonth = null;
+    let uncovered = 0, fromSavings = 0;
     for (let i = 0; i < n; i++) {
       const month = E.months.add(o.startMonth, i);
       checking += left;
       savings += o.savedCents;
-      if (firstShortMonth === null && checking < 0) firstShortMonth = month;
-      rows.push({ month, checking, savings, total: checking + savings });
+      if (floorSavings && savings < 0) {
+        // A drawdown bigger than what is left in savings: only what is there reaches checking.
+        checking += savings;
+        savings = 0;
+        if (savingsEmptyMonth === null) savingsEmptyMonth = month;
+      }
+      if (checking < 0 && firstShortMonth === null) firstShortMonth = month;
+      if (floorChecking && checking < 0) {
+        if (floorSavings && savings > 0) {
+          const move = Math.min(savings, 0 - checking);
+          savings -= move;
+          checking += move;
+          fromSavings += move;
+          if (savings === 0 && savingsEmptyMonth === null) savingsEmptyMonth = month;
+        }
+        if (checking < 0) {
+          uncovered += 0 - checking;
+          checking = 0;
+          if (firstUncoveredMonth === null) firstUncoveredMonth = month;
+        }
+      }
+      if (savings < 0 && firstSavingsShortMonth === null) firstSavingsShortMonth = month;
+      rows.push({ month, checking, savings, total: checking + savings, uncovered, fromSavings });
     }
-    return { rows, firstShortMonth, monthlyLeftCents: left };
+    return {
+      rows, firstShortMonth, firstSavingsShortMonth: floorSavings ? savingsEmptyMonth : firstSavingsShortMonth, savingsEmptyMonth, firstUncoveredMonth,
+      uncoveredCents: uncovered, coveredFromSavingsCents: fromSavings, monthlyLeftCents: left, limited: floorChecking || floorSavings,
+    };
   }
 
-  E.balances = { CASH_TYPES, GROUPS, cashAccounts, coveredBetween, endOfDay, history, incomeAttribution, monthlyFlows, usual, comfortable, project };
+  E.balances = { CASH_TYPES, GROUPS, ENTERED_GAP_DAYS, cashAccounts, coveredBetween, endOfDay, history, incomeAttribution, monthlyFlows, usual, comfortable, project };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

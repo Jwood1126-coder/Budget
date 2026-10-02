@@ -180,6 +180,7 @@
     ['kind', oneOf(['paycheck', 'contribution', 'other'], 'paycheck')],
     ['netPerPaycheckCents', CENTS],
     ['jointPerPaycheckCents', CENTS],
+    ['grossPerPaycheckCents', CENTS],       // from a pay stub; detail only, never joint funding
     ['frequency', oneOf(FREQUENCIES.concat(['unknown']), 'unknown')],
     ['frequencyStatus', oneOf(['confirmed', 'observed', 'unknown'], 'unknown')],
     ['anchorDate', DATE],
@@ -320,12 +321,25 @@
   const WHATIF_FIELDS = [['excludePendingReimbursements', bool(false)], ['excludeBusinessCandidates', bool(false)]];
   const WHATIF_DEFAULT = { excludePendingReimbursements: false, excludeBusinessCandidates: false };
 
-  // Home's "what if": amounts per month for the projection (null = the usual amount from recent
-  // months) and how far ahead to look.
-  // p1InCents/p2InCents: each partner's money into joint (used when income can be told apart by
-  // person); inCents: all money in (used when it cannot).
-  const HOME_FIELDS = [['inCents', CENTS], ['p1InCents', CENTS], ['p2InCents', CENTS], ['outCents', CENTS], ['savedCents', CENTS], ['horizon', oneOf([12, 24, 60], 24)]];
-  const HOME_DEFAULT = { inCents: null, p1InCents: null, p2InCents: null, outCents: null, savedCents: null, horizon: 24 };
+  // Home's plan: monthly amounts in whole cents (null = the baseline: the current Budget pay for
+  // each partner, the recent-month averages for the rest) and how far ahead to look.
+  //   p1InCents/p2InCents: each partner's money into joint; inCents: all money in (used when no
+  //     partner's pay can be told apart).
+  //   cardCents: net card spending (purchases minus refunds; card repayments are not spending).
+  //   bankCents: bills and other spending paid straight from the bank (mortgage included).
+  //   savedCents: net transfers into savings; negative = drawing savings down. Signed on purpose:
+  //     a drawdown must survive every save.
+  //   outCents: the earlier single "spending" amount, kept so an older saved copy loses nothing;
+  //     Home now sets card and bank spending separately.
+  //   baselineMonths: how many recent complete months the baselines average.
+  //   fundingWho: whose joint funding the "by person" chart shows.
+  //   chartView: the main chart shows money each month (who paid in, spending, savings) or balances.
+  const HOME_FIELDS = [
+    ['inCents', CENTS], ['p1InCents', CENTS], ['p2InCents', CENTS], ['outCents', CENTS], ['savedCents', SIGNED_CENTS],
+    ['cardCents', CENTS], ['bankCents', CENTS], ['baselineMonths', oneOf([3, 6, 12], 12)],
+    ['fundingWho', oneOf(['both', 'p1', 'p2'], 'both')], ['chartView', oneOf(['money', 'balances'], 'money')], ['horizon', oneOf([12, 24, 60], 24)]
+  ];
+  const HOME_DEFAULT = { inCents: null, p1InCents: null, p2InCents: null, outCents: null, savedCents: null, cardCents: null, bankCents: null, baselineMonths: 12, fundingWho: 'both', chartView: 'money', horizon: 24 };
 
   const UI_FIELDS = [
     ['scope', oneOf(['joint', 'household'], 'joint')],
@@ -349,7 +363,7 @@
   const FIELD_NAMES = {
     label: 'Name', name: 'Name', description: 'Description', note: 'Note', category: 'Category',
     monthlyCents: 'Monthly amount', amountCents: 'Amount', targetCents: 'Target', savedCents: 'Saved so far',
-    netPerPaycheckCents: 'Take-home per paycheck', jointPerPaycheckCents: 'Amount reaching joint per paycheck',
+    netPerPaycheckCents: 'Take-home per paycheck', jointPerPaycheckCents: 'Amount reaching joint per paycheck', grossPerPaycheckCents: 'Gross pay per paycheck',
     balanceCents: 'Balance', jointCashCents: 'Joint cash', spendingCents: 'Spending',
     startMonth: 'Start month', endMonth: 'End month', month: 'Month', targetMonth: 'Target month', expiresMonth: 'Promotion end month',
     anchorDate: 'A recent payday', balanceAsOf: 'Balance date', asOf: 'Date', start: 'Start date', end: 'End date',
@@ -847,7 +861,8 @@
     duplicate: ['exclude', 'keep'],
     reimbursement: ['pending', 'confirmed', 'not_reimbursed'],
     business: ['pending', 'business', 'household'],
-    planningBaseline: ['exclude', 'include']
+    planningBaseline: ['exclude', 'include'],
+    person: ['p1', 'p2', 'none']             // whose money a deposit is ('none' = neither partner)
   };
   const EDIT_KEYS = ['category', 'categoryReason', 'kind', 'kindReason', 'subtype', 'splits'].concat(Object.keys(EDIT_ENUMS), ['note', 'history']);
 

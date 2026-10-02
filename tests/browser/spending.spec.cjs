@@ -280,19 +280,21 @@ module.exports = [
     async run(t) {
       const { page, assert } = t;
       await t.open('#/overview');
-      await page.click('#home-pattern-card .chart-table summary');
-      const row = await page.$$eval('#home-pattern-card tbody tr', trs => {
+      await page.click('#home-recon > summary');
+      const heads = await page.$$eval('#home-recon .home-recon-months thead th', ths => ths.map(th => th.textContent.trim()));
+      const row = await page.$$eval('#home-recon .home-recon-months tbody tr', trs => {
         const r = trs.find(tr => tr.firstElementChild.textContent.trim() === 'Sep 2026');
-        return Array.from(r.children).slice(1).map(td => td.textContent.trim());
+        return Array.from(r.children).map(td => td.textContent.trim());
       });
-      const [homeIn, homeOut, homeSaved] = row.map(v => cents(v.replace(/(\$[\d,]+)$/, '$1.00')));
+      const col = name => cents(row[heads.indexOf(name)].replace(/^\+/, '').replace(/(\$[\d,]+)$/, '$1.00'));
       await open(t, '#/spending?period=2026-09&kind=all');
       const tile = label => page.locator('.sp-metrics .metric', { has: page.locator(`.metric-label:text-is("${label}")`) }).locator('.metric-value').textContent().then(cents);
-      const spent = await tile('Spending');
       const whole = c => Math.round(c / 100);
-      assert.equal(whole(homeIn), whole(await tile('Coming in')), 'money in = Coming in');
-      assert.equal(whole(homeOut), whole(spent + await tile('Debt payments')), 'spending on Home = spending + debt payments');
-      assert.equal(whole(homeSaved), whole(await tile('Saved (net)')), 'to savings = saved (net)');
+      // Cards + paid from the bank = all spending; card payments from checking are in neither.
+      assert.ok(Math.abs(whole(col('Cards') + col('Bank-paid')) - whole(await tile('Spending'))) <= 1, 'cards + bank-paid = Spending');
+      assert.ok(Math.abs(whole(col('Into joint (both)') + col('Other money in')) - whole(await tile('Coming in'))) <= 1, 'money in = Coming in');
+      assert.equal(whole(col('Debt & business')), whole(await tile('Debt payments')), 'debt payments');
+      assert.ok(Math.abs(whole(col('Net to savings') + col('Investments')) - whole(await tile('Saved (net)'))) <= 1, 'savings + investments = Saved (net)');
     },
   },
   {

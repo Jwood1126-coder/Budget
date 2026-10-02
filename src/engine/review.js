@@ -10,14 +10,15 @@
 (function (root) {
   const E = root.BudgetEngine || (root.BudgetEngine = {});
 
-  const EDIT_FIELDS = ['category', 'kind', 'subtype', 'splits', 'duplicate', 'reimbursement', 'business', 'planningBaseline', 'note'];
+  const EDIT_FIELDS = ['category', 'kind', 'subtype', 'splits', 'duplicate', 'reimbursement', 'business', 'planningBaseline', 'person', 'note'];
   /** Fields that change what a transaction counts as; a reason keeps the audit trail useful. */
   const REASON_REQUIRED = ['category', 'kind', 'splits'];
   const ENUMS = {
     duplicate: ['exclude', 'keep'],
     reimbursement: ['pending', 'confirmed', 'not_reimbursed'],
     business: ['pending', 'business', 'household'],
-    planningBaseline: ['exclude', 'include']
+    planningBaseline: ['exclude', 'include'],
+    person: ['p1', 'p2', 'none']
   };
   const DUPLICATE_DAYS = 3;
   const DUPLICATE_SIMILARITY = 0.6;

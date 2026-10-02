@@ -11,6 +11,7 @@
     "engine/debt.js",
     "engine/forecast.js",
     "engine/balances.js",
+    "engine/flows.js",
     "engine/state.js",
     "engine/attention.js"
   ],

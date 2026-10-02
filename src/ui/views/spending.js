@@ -85,7 +85,7 @@
 
   const FIELD_LABEL = {
     category: 'Category', kind: 'Kind', subtype: 'Subtype', splits: 'Split', duplicate: 'Duplicate',
-    reimbursement: 'Reimbursement', business: 'Business', planningBaseline: 'Planning baseline', note: 'Note',
+    reimbursement: 'Reimbursement', business: 'Business', planningBaseline: 'Planning baseline', person: 'Whose money', note: 'Note',
   };
 
   // ------------------------------------------------------------------ small helpers
@@ -1170,10 +1170,11 @@
     }
   }
 
-  function histValue(field, v) {
+  function histValue(field, v, person = id => id) {
     if (v === null || v === undefined || v === '') return 'imported value';
     if (field === 'splits' && Array.isArray(v)) return 'split: ' + v.map(p => `${p.category} ${fmt.money(p.cents)}`).join(', ');
     if (field === 'planningBaseline') return v === 'exclude' ? 'left out of planning' : 'included in planning';
+    if (field === 'person') return v === 'none' ? 'neither partner' : person(v);
     if (typeof v === 'object') return JSON.stringify(v);
     return String(v);
   }
@@ -1296,7 +1297,7 @@
       columns: [
         { key: 'at', label: 'When', html: h => `<span class="nowrap">${esc(histWhen(h.at))}</span>` },
         { key: 'field', label: 'What changed', html: h => esc(FIELD_LABEL[h.field] || humanize(h.field)) },
-        { key: 'change', label: 'From → to', html: h => `${esc(histValue(h.field, h.from))} <span aria-hidden="true">→</span><span class="sr-only"> to </span> <strong>${esc(histValue(h.field, h.to))}</strong>` },
+        { key: 'change', label: 'From → to', html: h => `${esc(histValue(h.field, h.from, ctx.person))} <span aria-hidden="true">→</span><span class="sr-only"> to </span> <strong>${esc(histValue(h.field, h.to, ctx.person))}</strong>` },
         { key: 'reason', label: 'Reason', html: h => (h.reason ? esc(h.reason) : '<span class="muted">None given</span>') },
       ],
       rows: history,

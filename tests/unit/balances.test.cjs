@@ -195,12 +195,13 @@ test('comfortable: what was left over in three of every four months, rounded dow
 test('project: plain arithmetic, and the month checking would run out', () => {
   const p = B.project({ startMonth: '2026-10', months: 3, start: { checking: 100000, savings: 50000 }, inCents: 500000, outCents: 520000, savedCents: 40000 });
   assert.equal(p.monthlyLeftCents, -60000);
-  assert.deepEqual(p.rows, [
+  assert.deepEqual(p.rows.map(r => ({ month: r.month, checking: r.checking, savings: r.savings, total: r.total })), [
     { month: '2026-10', checking: 40000, savings: 90000, total: 130000 },
     { month: '2026-11', checking: -20000, savings: 130000, total: 110000 },
     { month: '2026-12', checking: -80000, savings: 170000, total: 90000 },
   ]);
   assert.equal(p.firstShortMonth, '2026-11');
+  assert.equal(p.limited, false, 'without limits it is plain arithmetic (amounts that are only a change can go below zero)');
   assert.throws(() => B.project({ startMonth: '2026-10', months: 3, start: {}, inCents: 1.5, outCents: 0, savedCents: 0 }), E.ValidationError);
   assert.throws(() => B.project({ startMonth: 'soon', months: 3, start: {}, inCents: 0, outCents: 0, savedCents: 0 }), E.ValidationError);
 });
@@ -220,4 +221,58 @@ test('sample: month-end checking matches the bank’s own last balance, and the 
   const left = year.reduce((s, f) => s + f.leftCents, 0);
   const change = h.groups.checking.values[h.months.indexOf('2026-09')] - h.groups.checking.values[h.months.indexOf('2025-09')];
   assert.ok(Math.abs(left - change) < 300000, `pattern ${left} vs balance change ${change}`);
+});
+
+test('project with limits: no balance goes below $0; savings tops up checking; the rest is an uncovered shortfall', () => {
+  // Checking 1,000.00 and savings 500.00, 600.00 a month more going out than coming in, still moving 400.00 to savings.
+  const p = B.project({ startMonth: '2026-10', months: 4, start: { checking: 100000, savings: 50000 }, inCents: 500000, outCents: 520000, savedCents: 40000, limits: { checking: true, savings: true } });
+  assert.deepEqual(p.rows.map(r => [r.month, r.checking, r.savings, r.uncovered]), [
+    ['2026-10', 40000, 90000, 0],
+    ['2026-11', 0, 110000, 0],      // checking short 200.00: savings covers it
+    ['2026-12', 0, 90000, 0],       // short 600.00 again (after 400.00 went in): covered
+    ['2027-01', 0, 70000, 0],
+  ]);
+  assert.ok(p.rows.every(r => r.checking >= 0 && r.savings >= 0), 'no negative balance in any month');
+  assert.equal(p.firstShortMonth, '2026-11');
+  assert.equal(p.coveredFromSavingsCents, 20000 + 60000 + 60000);
+  assert.equal(p.firstUncoveredMonth, null);
+
+  // Spending far above income: savings empties, then the rest is uncovered, never a negative balance.
+  const q = B.project({ startMonth: '2026-10', months: 3, start: { checking: 50000, savings: 30000 }, inCents: 300000, outCents: 400000, savedCents: 0, limits: { checking: true, savings: true } });
+  assert.deepEqual(q.rows.map(r => [r.month, r.checking, r.savings, r.uncovered]), [
+    ['2026-10', 0, 0, 20000],       // short 1,000.00: 500.00 in checking + 300.00 from savings, 200.00 uncovered
+    ['2026-11', 0, 0, 120000],
+    ['2026-12', 0, 0, 220000],
+  ]);
+  assert.equal(q.savingsEmptyMonth, '2026-10');
+  assert.equal(q.firstUncoveredMonth, '2026-10');
+  assert.equal(q.uncoveredCents, 220000);
+  // Every cent is accounted for: start + 3 months of the plan = end balances − what was not covered.
+  assert.equal(50000 + 30000 + 3 * (300000 - 400000), q.rows[2].total - q.uncoveredCents);
+
+  // A planned drawdown bigger than savings: only what is there reaches checking.
+  const d = B.project({ startMonth: '2026-10', months: 3, start: { checking: 10000, savings: 25000 }, inCents: 200000, outCents: 210000, savedCents: -10000, limits: { checking: true, savings: true } });
+  assert.deepEqual(d.rows.map(r => [r.checking, r.savings, r.uncovered]), [
+    [10000, 15000, 0],              // 100.00 short, 100.00 drawn from savings
+    [10000, 5000, 0],
+    [5000, 0, 0],                   // only 50.00 was left to draw
+  ]);
+  assert.equal(d.savingsEmptyMonth, '2026-12');
+  assert.equal(d.firstSavingsShortMonth, '2026-12');
+});
+
+test('history: a balance typed in a few days after the export ends (or with no date) still anchors the history, and says what it assumes', () => {
+  const txns = [buy('2026-06-10', 20000), ...toSavings('2026-06-15', 30000)];
+  const ds = build(txns);
+  // Today's savings balance, typed two days after the export ends on 30 June.
+  const h = B.history(eff(ds), ds, { entered: { sav: 1412345, chk: 250000 }, asOf: '2026-07-02' });
+  const june = h.months.indexOf('2026-06');
+  assert.equal(h.groups.savings.values[june], 1412345, 'used as the balance at the end of the export');
+  assert.equal(h.groups.savings.values[h.months.indexOf('2026-05')], 1412345 - 30000, 'and worked back with the transactions');
+  assert.equal(h.total.kind, 'balance');
+  const sav = h.accounts.find(a => a.id === 'sav');
+  assert.match(sav.note, /Your export ends Jun 30, 2026, so it is used as the balance then: anything that moved in between is not in your data\./);
+  // Too far from the data to say anything: unknown, never guessed.
+  const far = B.history(eff(ds), ds, { entered: { sav: 1412345, chk: 250000 }, asOf: '2026-09-30' });
+  assert.equal(far.groups.savings.values[june], null);
 });
