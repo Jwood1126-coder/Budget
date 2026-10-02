@@ -1098,7 +1098,7 @@
     const lines = [];
     if (JSON.stringify(cur.plan) === JSON.stringify(next.plan)) lines.push('The plan (pay, bills, targets, goals and debts) is the same as now.');
     else {
-      try { lines.push(...E.plan.whatChanged(cur.plan, next.plan, { scope: ctx.scope }).lines); } catch { lines.push('The plan is different from the one in this browser.'); }
+      try { lines.push(...E.plan.whatChanged(cur.plan, next.plan, { scope: ctx.scope, month: ctx.forecastStart }).lines); } catch { lines.push('The plan is different from the one in this browser.'); }
     }
     const names = st => st.scenarios.map(s => s.name);
     const a = names(cur), b = names(next);

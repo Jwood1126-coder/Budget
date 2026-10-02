@@ -4,14 +4,26 @@
   "household": {
     "name": "Alex & Sam (sample)",
     "people": [
-      { "id": "p1", "name": "Alex" },
-      { "id": "p2", "name": "Sam" }
+      {
+        "id": "p1",
+        "name": "Alex"
+      },
+      {
+        "id": "p2",
+        "name": "Sam"
+      }
     ]
   },
   "plan": {
     "people": [
-      { "id": "p1", "name": "Alex" },
-      { "id": "p2", "name": "Sam" }
+      {
+        "id": "p1",
+        "name": "Alex"
+      },
+      {
+        "id": "p2",
+        "name": "Sam"
+      }
     ],
     "incomes": [
       {
@@ -24,7 +36,10 @@
         "frequency": "biweekly",
         "frequencyStatus": "confirmed",
         "anchorDate": "2024-10-04",
-        "semimonthlyDays": [15, 31],
+        "semimonthlyDays": [
+          15,
+          31
+        ],
         "monthlyDay": null,
         "assumedPerMonthIfUnknown": 2,
         "status": "confirmed",
@@ -42,7 +57,10 @@
         "frequency": "unknown",
         "frequencyStatus": "unknown",
         "anchorDate": null,
-        "semimonthlyDays": [15, 31],
+        "semimonthlyDays": [
+          15,
+          31
+        ],
         "monthlyDay": null,
         "assumedPerMonthIfUnknown": 2,
         "status": "unknown",
@@ -60,7 +78,10 @@
         "frequency": "semimonthly",
         "frequencyStatus": "observed",
         "anchorDate": null,
-        "semimonthlyDays": [1, 15],
+        "semimonthlyDays": [
+          1,
+          15
+        ],
         "monthlyDay": null,
         "assumedPerMonthIfUnknown": 2,
         "status": "observed",
@@ -233,7 +254,10 @@
         "balanceAsOf": null,
         "balanceStatus": "statement",
         "aprPct": null,
-        "aprRange": [3.73, 6.28],
+        "aprRange": [
+          3.73,
+          6.28
+        ],
         "aprStatus": "displayed",
         "paymentBillId": "p1-student-loans",
         "promo": null,
@@ -397,6 +421,16 @@
           "endMonth": "2027-07",
           "jointPerPaycheckCents": null,
           "note": "Unknown: Sam's pay during leave. The contribution into joint for these months is left blank instead of assuming full pay or none."
+        },
+        {
+          "id": "p2-leave-pay",
+          "type": "income_change",
+          "label": "Sam parental leave: pay",
+          "streamId": "p2-pay",
+          "startMonth": "2027-05",
+          "endMonth": "2027-07",
+          "netPerPaycheckCents": null,
+          "note": "Unknown: Sam's take-home pay during leave. In the whole-household view these months stay unknown instead of assuming full pay."
         },
         {
           "id": "childcare",

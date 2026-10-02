@@ -331,23 +331,38 @@
       const entry = { personId: pid, name, allocationCents: null, billsCents, contributionsCents, spendingCents: null, leftoverCents: null, shortfallCents: 0, source: 'missing', unknownBecause: null, note: '' };
 
       if (f && f.hasPaycheck && f.allocationKnown && contributionsCents !== null) {
-        // The allocation pays personal bills and any transfer to joint first; the rest is
-        // counted once as personal spending (assumed spent, never also left over).
+        // The allocation pays personal bills and any transfer to joint first. What is left is
+        // personal spending: the entered personal-spending estimate when there is one (the rest
+        // then stays in that person's account and counts toward what remains), otherwise all of
+        // it is assumed spent. Either way it is counted once, never also as left over.
         entry.allocationCents = f.allocationCents;
         entry.leftoverCents = f.allocationCents - billsCents - contributionsCents;
-        entry.spendingCents = Math.max(0, entry.leftoverCents);
         entry.shortfallCents = Math.max(0, -entry.leftoverCents);
-        entry.source = 'allocation';
-        entry.note = 'Personal share of pay after personal bills' + (contributionsCents ? ' and transfers to joint' : '') + '; counted once as personal spending.';
+        const estimate = arr(plan.personalSpending).find(p => p && p.personId === pid);
+        const estimateCents = estimate ? knownOrNull(estimate.monthlyCents) : null;
+        if (estimateCents !== null) {
+          entry.spendingCents = estimateCents;
+          entry.keptCents = Math.max(0, entry.leftoverCents) - Math.min(estimateCents, Math.max(0, entry.leftoverCents));
+          entry.source = 'allocation_estimate';
+          entry.note = 'Personal share of pay after personal bills' + (contributionsCents ? ' and transfers to joint' : '') + ': ' + money(Math.max(0, entry.leftoverCents)) +
+            '. Using the personal-spending estimate of ' + money(estimateCents) + '; ' + (entry.keptCents > 0 ? money(entry.keptCents) + ' stays in ' + possessive(name) + ' account each month.' : 'nothing is left over.');
+          if (scope === 'household' && estimateCents > Math.max(0, entry.leftoverCents)) {
+            acc.warnings.push(possessive(name) + ' personal-spending estimate (' + money(estimateCents) + ') is more than the personal share left after bills (' + money(Math.max(0, entry.leftoverCents)) + '); the difference must come from other personal money.');
+          }
+        } else {
+          entry.spendingCents = Math.max(0, entry.leftoverCents);
+          entry.keptCents = 0;
+          entry.source = 'allocation';
+          entry.note = 'Personal share of pay after personal bills' + (contributionsCents ? ' and transfers to joint' : '') + '; all of it assumed spent.';
+          if (scope === 'household' && entry.spendingCents > 0) {
+            acc.assumptions.push('All of ' + possessive(name) + ' personal share left after bills (' + money(entry.spendingCents) + ') is assumed spent. Enter a personal-spending estimate to see how much stays in their account, and what paying off a personal loan frees up.');
+          }
+        }
         if (unknownBills.length) entry.note += ' Includes the unknown amount of ' + unknownBills.join(', ') + '.';
         if (entry.shortfallCents > 0) {
           acc.warnings.push(possessive(name) + ' personal bills' + (contributionsCents ? ' and transfers to joint' : '') + ' (' + money(billsCents + contributionsCents) +
             ') are more than the personal share of pay (' + money(f.allocationCents) + ') by ' + money(entry.shortfallCents) +
             '. Check whether other personal money covers this.');
-        }
-        const estimate = arr(plan.personalSpending).find(p => p && p.personId === pid);
-        if (scope === 'household' && estimate && knownOrNull(estimate.monthlyCents) !== null) {
-          acc.assumptions.push(possessive(name) + ' personal spending is the personal share of pay left after personal bills (' + money(entry.spendingCents) + '); the separate personal-spending estimate is not added on top.');
         }
       } else if (f && f.hasPaycheck && f.allocationKnown && contributionsCents === null) {
         // The personal share of pay is known but not how much of it goes to joint, so what is left

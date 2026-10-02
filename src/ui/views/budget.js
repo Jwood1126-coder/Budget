@@ -197,8 +197,9 @@
 
   // ------------------------------------------------------------------ derived data
   function planOpts(ctx) {
-    // "Actual paydays" needs a month: use the first month after the data (where the forecast starts).
-    return ctx.state.plan.settings.incomeTiming === 'actual' ? { month: ctx.forecastStart } : {};
+    // The plan describes the first month after the data (where the forecast starts): ended or
+    // not-yet-started incomes and bills are left out, and 'actual paydays' counts that month.
+    return { month: ctx.forecastStart };
   }
   /** How income is counted. The summary shows one month; the forecast counts every month. */
   function timingText(ctx, timing, { forecast = false } = {}) {
@@ -318,8 +319,7 @@
     if (!prev || !prev.plan || prev.plan === st.plan) return null;
     if (JSON.stringify(prev.plan) === JSON.stringify(st.plan)) return null;
     return ctx.memo('budget-change:' + stack.length, () => {
-      const eitherActual = prev.plan.settings?.incomeTiming === 'actual' || st.plan.settings.incomeTiming === 'actual';
-      const opts = { scope: ctx.scope, month: eitherActual ? ctx.forecastStart : undefined };
+      const opts = { scope: ctx.scope, month: ctx.forecastStart };
       let wc;
       try { wc = E.plan.whatChanged(prev.plan, st.plan, opts); } catch (err) { return null; }
       const lines = wc.lines.slice();
@@ -378,7 +378,7 @@
     }).filter(Boolean);
     if (!moved.length) return '';
     const names = listText(moved.map(m => m.name));
-    return `In the whole-household view, all of ${moved.length === 1 ? possessive(names) : "each person's"} pay that does not reach joint counts as personal spending, so ${moved.length === 1 ? `${possessive(names)} personal spending` : 'personal spending'} changed by ${moved.map(m => signed(m.delta)).join(' and ')} too${known(ch.wc.remainingDeltaCents) && ch.wc.remainingDeltaCents === 0 ? ' and Remaining did not change' : ''}. Remaining moves when the money reaching joint or the joint costs change.`;
+    return `In the whole-household view, all of ${moved.length === 1 ? possessive(names) : "each person's"} pay that does not reach joint counts as personal spending, so ${moved.length === 1 ? `${possessive(names)} personal spending` : 'personal spending'} changed by ${moved.map(m => signed(m.delta)).join(' and ')} too${known(ch.wc.remainingDeltaCents) && ch.wc.remainingDeltaCents === 0 ? ' and Remaining did not change' : ''}. That is because no personal-spending estimate is entered, so all of it is assumed spent; enter one under Income to see how much stays in their account.`;
   }
 
   // ------------------------------------------------------------------ summary panel

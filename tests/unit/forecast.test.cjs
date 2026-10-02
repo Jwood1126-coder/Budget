@@ -836,3 +836,22 @@ test('summary.lowestBalance only considers months with a known balance', () => {
   const cmp = E.forecast.compare(plan, [scenario], { startMonth: '2026-10', months: 4, scope: 'joint' });
   assert.ok(cmp.rows.some(r => r.key === 'lowestBalance'));
 });
+
+test('household: an unknown transfer during leave makes outflow unknown, never smaller than the baseline', () => {
+  const profile = require('../../fixtures/sample-profile.json');
+  const st = E.state.defaults(profile, null);
+  const plan = E.util.clone(st.plan);
+  const pay = plan.incomes.find(i => i.personId === 'p2' && i.kind === 'paycheck');
+  Object.assign(pay, { netPerPaycheckCents: 200000, frequency: 'biweekly', frequencyStatus: 'confirmed', anchorDate: '2026-10-09' });
+  const baseline = st.scenarios[0];
+  const baby = st.scenarios.find(s => s.events.some(e => e.type === 'income_change'));
+  const opts = { startMonth: '2026-10', months: 12, scope: 'household' };
+  const b = E.forecast.project(plan, baseline, opts);
+  const k = E.forecast.project(plan, baby, opts);
+  assert.equal(k.summary.totalOutCents, null, 'unknown months make the total unknown');
+  assert.ok(k.summary.totalOutKnownCents !== undefined);
+  const cmp = E.forecast.compare(plan, [baseline, baby], opts);
+  const out = cmp.rows.find(r => r.key === 'totalOut');
+  assert.equal(out.values[1], null);
+  assert.ok(out.deltas[1] === null, 'no saving can come from an unknown');
+});

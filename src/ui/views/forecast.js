@@ -878,17 +878,20 @@
     let body = '';
     let intro = '';
     if (kind === 'leave') {
-      const streams = plan.incomes || [];
-      intro = 'Changes one income for the months of leave. Leave the amounts blank if you do not know them yet: those months are then listed as unknown instead of guessed.';
-      body = fld('fc-tpl-stream', 'Whose income changes', `<select id="fc-tpl-stream" name="streamId" aria-describedby="fc-tpl-stream-help fc-tpl-stream-error">${streams.map(x => `<option value="${esc(x.id)}">${esc(x.label)}</option>`).join('')}</select>`, 'For a transfer from a personal account, only the joint amount matters.')
+      // Leave changes everything a person brings in: their take-home pay AND what reaches joint
+      // (a paycheck's joint share or a transfer from their own account). One change per income.
+      const people = (plan.people || []).filter(pp => (plan.incomes || []).some(x => x.personId === pp.id && (x.kind === 'paycheck' || x.kind === 'contribution')));
+      const streamsOf = pid => (plan.incomes || []).filter(x => x.personId === pid && (x.kind === 'paycheck' || x.kind === 'contribution'));
+      intro = 'Changes everything the person brings in during leave: their take-home pay and what reaches the joint account. Leave the amounts blank if you do not know them yet: those months are then listed as unknown instead of guessed.';
+      body = fld('fc-tpl-stream', 'Who is on leave', `<select id="fc-tpl-stream" name="personId" aria-describedby="fc-tpl-stream-help fc-tpl-stream-error">${people.map(pp => `<option value="${esc(pp.id)}">${esc(pp.name)} (${esc(streamsOf(pp.id).map(x => x.label).join(' + '))})</option>`).join('')}</select>`, 'Each of their incomes gets its own change, so the joint view and the whole-household view both reflect the leave.')
         + fld('fc-tpl-start', 'First month of leave', month('fc-tpl-start', 'startMonth'), 'Required.')
         + fld('fc-tpl-end', 'Last month of leave', month('fc-tpl-end', 'endMonth'), 'Blank = the change keeps going.')
-        + fld('fc-tpl-joint', 'Reaching joint per paycheck during leave', moneyIn('fc-tpl-joint', 'joint'), 'Blank = unknown.')
-        + fld('fc-tpl-net', 'Take-home per paycheck during leave', moneyIn('fc-tpl-net', 'net'), 'Paychecks only. Blank = unknown.');
+        + fld('fc-tpl-joint', 'Reaching joint per paycheck or transfer during leave', moneyIn('fc-tpl-joint', 'joint'), 'Blank = unknown.')
+        + fld('fc-tpl-net', 'Take-home per paycheck during leave', moneyIn('fc-tpl-net', 'net'), 'Blank = unknown.');
     } else if (kind === 'debt') {
       const bills = (plan.bills || []).slice().sort((a, b) => (a.type === 'debt' ? 0 : 1) - (b.type === 'debt' ? 0 : 1));
       intro = 'Stops a bill from a month on, for example the month after the final loan payment.';
-      body = fld('fc-tpl-bill', 'Bill that ends', `<select id="fc-tpl-bill" name="billId" aria-describedby="fc-tpl-bill-help fc-tpl-bill-error">${bills.map(b => `<option value="${esc(b.id)}">${esc(b.label)}${b.type === 'debt' ? ' (debt)' : ''}</option>`).join('')}</select>`, 'Bills paid from a personal account change only the whole-household view.')
+      body = fld('fc-tpl-bill', 'Bill that ends', `<select id="fc-tpl-bill" name="billId" aria-describedby="fc-tpl-bill-help fc-tpl-bill-error">${bills.map(b => `<option value="${esc(b.id)}">${esc(b.label)}${b.type === 'debt' ? ' (debt)' : ''}</option>`).join('')}</select>`, 'A bill paid from a personal account changes only the whole-household view, and only if that person’s personal spending is estimated in Budget; otherwise the freed money is assumed spent.')
         + fld('fc-tpl-start', 'First month without the payment', month('fc-tpl-start', 'startMonth'), 'Required.');
     } else if (kind === 'target') {
       const targets = Object.keys(plan.targets || {});
@@ -1508,14 +1511,27 @@
       let ev;
       try {
         if (kind === 'leave') {
-          const stream = (plan.incomes || []).find(x => x.id === data.get('streamId'));
-          if (!stream) throw Object.assign(new E.ValidationError('Choose the income that changes.'), { inputId: 'fc-tpl-stream' });
+          const pid = String(data.get('personId') || '');
+          const streams = (plan.incomes || []).filter(x => x.personId === pid && (x.kind === 'paycheck' || x.kind === 'contribution'));
+          if (!streams.length) throw Object.assign(new E.ValidationError('Choose who is on leave.'), { inputId: 'fc-tpl-stream' });
           const startMonth = monthOf('startMonth', 'fc-tpl-start', true);
           const endMonth = monthOf('endMonth', 'fc-tpl-end', false);
           if (endMonth && endMonth < startMonth) throw Object.assign(new E.ValidationError('The last month cannot be before the first.'), { inputId: 'fc-tpl-end' });
-          const who = stream.personId ? ctx.person(stream.personId) : stream.label;
-          ev = { type: 'income_change', label: `${who} parental leave`, streamId: stream.id, startMonth, endMonth, jointPerPaycheckCents: centsOf('joint', 'fc-tpl-joint'), note: '' };
-          if (stream.kind !== 'contribution') ev.netPerPaycheckCents = centsOf('net', 'fc-tpl-net');
+          const who = ctx.person(pid);
+          const joint = centsOf('joint', 'fc-tpl-joint');
+          const net = centsOf('net', 'fc-tpl-net');
+          const evs = streams.map(stream => {
+            const e = { type: 'income_change', label: streams.length > 1 ? `${who} parental leave: ${stream.kind === 'contribution' ? 'transfer to joint' : 'pay'}` : `${who} parental leave`, streamId: stream.id, startMonth, endMonth, note: '' };
+            if (stream.kind === 'contribution') e.jointPerPaycheckCents = joint;
+            else {
+              e.netPerPaycheckCents = net;
+              // A paycheck that normally sends nothing to joint (the person transfers instead) keeps that.
+              if (stream.jointPerPaycheckCents !== null && stream.jointPerPaycheckCents !== 0) e.jointPerPaycheckCents = joint;
+            }
+            return e;
+          });
+          ev = evs[0];
+          ev.__more = evs.slice(1);
         } else if (kind === 'debt') {
           const bill = (plan.bills || []).find(b => b.id === data.get('billId'));
           if (!bill) throw Object.assign(new E.ValidationError('Choose the bill that ends.'), { inputId: 'fc-tpl-bill' });
@@ -1529,12 +1545,16 @@
           ev = { type: 'target_change', label: `${category} target`.slice(0, LIMITS.label || 80), category, startMonth, endMonth, monthlyCents: centsOf('amount', 'fc-tpl-amount'), note: '' };
         } else return;
         let newId = null;
+        const more = ev.__more || [];
+        delete ev.__more;
+        const all = [ev, ...more];
         ctx.app.update(st => {
           const before = new Set(st.scenarios.find(x => x.id === s.id).events.map(e => e.id));
-          const next = E.state.addEvent(st, s.id, ev, { now: nowIso() });
+          let next = st;
+          for (const e of all) next = E.state.addEvent(next, s.id, e, { now: nowIso() });
           newId = next.scenarios.find(x => x.id === s.id).events.find(e => !before.has(e.id)).id;
           return next;
-        }, { message: `Added “${ev.label}” to “${s.name}”.${eventGaps(ev).length ? ' Blank amounts are listed as missing.' : ''}` });
+        }, { message: all.length > 1 ? `Added ${all.length} leave changes to “${s.name}” (${all.map(e => e.label).join('; ')}).${all.some(e => eventGaps(e).length) ? ' Blank amounts are listed as missing.' : ''}` : `Added “${ev.label}” to “${s.name}”.${eventGaps(ev).length ? ' Blank amounts are listed as missing.' : ''}` });
         ui.adding = null;
         pendingFocus = domId('fc-ev', newId);
       } catch (err) {

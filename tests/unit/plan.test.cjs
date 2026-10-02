@@ -190,12 +190,33 @@ test('household: an unknown-funding bill next to a fully counted personal share 
   assert.ok(!P.monthly(knownPayPlan(), { scope: 'joint' }).assumptions.some(a => /counted twice/.test(a)));
 });
 
-test('household: allocation leftover is not added again from a personal-spending estimate', () => {
+test('household: an entered personal-spending estimate replaces the all-spent assumption (counted once)', () => {
   const plan = knownPayPlan();
-  plan.personalSpending = [{ personId: 'p1', monthlyCents: 50000, note: 'guess' }];
+  const base = P.monthly(plan, { scope: 'household' });
+  assert.equal(person(base, 'p1').spendingCents, 18550, 'without an estimate the whole leftover is assumed spent');
+  assert.ok(base.assumptions.some(a => /assumed spent/.test(a)));
+  plan.personalSpending = [{ personId: 'p1', monthlyCents: 10000, note: 'estimate' }];
   const s = P.monthly(plan, { scope: 'household' });
-  assert.equal(person(s, 'p1').spendingCents, 18550);
-  assert.ok(s.assumptions.some(a => /not added on top/.test(a)));
+  const alex = person(s, 'p1');
+  assert.equal(alex.spendingCents, 10000);
+  assert.equal(alex.keptCents, 8550, 'the rest stays in the personal account');
+  assert.equal(s.remainingCents - base.remainingCents, 8550, 'kept money counts toward what remains, once');
+  plan.personalSpending = [{ personId: 'p1', monthlyCents: 50000, note: 'high' }];
+  const hi = P.monthly(plan, { scope: 'household' });
+  assert.equal(person(hi, 'p1').spendingCents, 50000);
+  assert.ok(hi.warnings.some(w => /estimate .* is more than the personal share/.test(w)));
+});
+
+test('household: paying off a personal loan frees money only when personal spending is estimated', () => {
+  // Same month, with the loan still running vs already paid off.
+  const running = knownPayPlan();
+  running.bills.push({ id: 'alex-car', label: 'Alex car', monthlyCents: 10000, fundedFrom: 'p1', type: 'debt', status: 'existing', endMonth: null });
+  const paidOff = knownPayPlan();
+  paidOff.bills.push({ id: 'alex-car', label: 'Alex car', monthlyCents: 10000, fundedFrom: 'p1', type: 'debt', status: 'existing', endMonth: '2027-07' });
+  const opts = { scope: 'household', month: '2027-08' };
+  assert.equal(P.monthly(paidOff, opts).remainingCents, P.monthly(running, opts).remainingCents, 'all-spent assumption: no visible effect');
+  for (const p of [running, paidOff]) p.personalSpending = [{ personId: 'p1', monthlyCents: 5000, note: 'estimate' }];
+  assert.equal(P.monthly(paidOff, opts).remainingCents - P.monthly(running, opts).remainingCents, 10000, 'the freed payment stays in the household');
 });
 
 test('household: personal bills above the allocation give a shortfall warning, not a verdict', () => {
@@ -279,10 +300,12 @@ test('household: with the transfer unknown, a personal-spending estimate is not 
   assert.equal(person(s, 'p2').spendingCents, null);
   assert.equal(s.remainingCents, null);
   assert.ok(s.missing.some(x => x.id === 'personal:p2'));
-  // The same plan with the transfer known counts the allocation, not the estimate.
+  // With the transfer known, the estimate is used and the rest of the share is kept.
   const known = knownPayPlan();
   known.personalSpending = [{ personId: 'p2', monthlyCents: 10000, note: 'guess' }];
-  assert.equal(person(P.monthly(known, { scope: 'household' }), 'p2').spendingCents, 35000);
+  const p2 = person(P.monthly(known, { scope: 'household' }), 'p2');
+  assert.equal(p2.spendingCents, 10000);
+  assert.equal(p2.keptCents, 25000);
 });
 
 test('household: a known remaining amount is reported with no unknown reason', () => {

@@ -1376,7 +1376,7 @@ test('updateEvent: invalid changes are refused; type changes start from the patc
 
 test('removeEvent: removes one change, refuses unknown ids', () => {
   const next = S.removeEvent(base(), 'baby-arrives', 'childcare');
-  assert.deepEqual(byId(next.scenarios, 'baby-arrives').events.map(e => e.id), ['baby-supplies', 'birth-costs', 'p2-leave']);
+  assert.deepEqual(byId(next.scenarios, 'baby-arrives').events.map(e => e.id), ['baby-supplies', 'birth-costs', 'p2-leave', 'p2-leave-pay']);
   assert.throws(() => S.removeEvent(base(), 'baby-arrives', 'ghost'), isValidationError(/no longer exists/));
 });
 

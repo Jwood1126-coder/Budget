@@ -55,11 +55,20 @@
   function unbudgeted(ctx, month) {
     if (!month) return { total: 0, list: [] };
     const win = ctx.state.plan.settings.comparisonWindow || 3;
-    const cmp = ctx.memo('overview-cmp:' + month + win, () => E.compare.usual(ctx.txns, ctx.dataset, { month, window: win }));
+    // Planning baseline: rows the household left out of planning (a one-off episode) don't count,
+    // and categories without a regular monthly pattern (irregular, new) are not projected as monthly.
+    const cmp = ctx.memo('overview-cmp-plan:' + month + win, () => E.compare.usual(ctx.txns, ctx.dataset, { month, window: win, planning: true }));
     const targets = ctx.state.plan.targets || {};
     const billCats = new Set((ctx.state.plan.bills || []).filter(b => b.category && b.monthlyCents !== null && (ctx.scope === 'household' || b.fundedFrom === 'joint')).map(b => b.category));
-    const list = cmp.categories.filter(x => (x.averageCents || 0) > 0 && !billCats.has(x.category) && !(typeof targets[x.category] === 'number'));
+    const list = cmp.categories.filter(x => (x.averageCents || 0) > 0 && !['irregular', 'new'].includes(x.signal) && !billCats.has(x.category) && !(typeof targets[x.category] === 'number'));
     return { total: list.reduce((a, x) => a + x.averageCents, 0), list };
+  }
+
+  /** Name the basis the plan column really uses (a 3-paycheck month is not "typical"). */
+  function planHeading(plan) {
+    if (plan.timing === 'actual' && plan.month) return 'Plan · ' + fmt.month(plan.month) + ' paydays';
+    if (plan.timing === 'average') return 'Plan · average month';
+    return 'Plan · typical month';
   }
 
   function flowTable(ctx, plan, actual, month) {
@@ -88,7 +97,7 @@
     ];
     const actualHead = actual ? `Actual · ${fmt.month(month)}` : 'Actual';
     return `<div class="flow-table" role="table" aria-label="Plan compared with actual">
-      <div class="flow-row flow-head" role="row"><span role="columnheader"></span><span role="columnheader">Plan · typical month</span><span role="columnheader">${esc(actualHead)}${ctx.scope === 'household' ? '<small>joint accounts only</small>' : ''}</span></div>
+      <div class="flow-row flow-head" role="row"><span role="columnheader"></span><span role="columnheader">${esc(planHeading(plan))}</span><span role="columnheader">${esc(actualHead)}${ctx.scope === 'household' ? '<small>joint accounts only</small>' : ''}</span></div>
       ${rows.map(r => `<div class="flow-row${r.total ? ' flow-total' : ''}" role="row"><span role="rowheader"><strong>${esc(r.label)}</strong><small>${esc(r.sub)}</small></span><span role="cell" class="num">${r.plan}</span><span role="cell" class="num">${r.actual}</span></div>`).join('')}
     </div>`;
   }
@@ -120,20 +129,39 @@
     const cmp = ctx.memo('overview-cmp:' + month + win, () => E.compare.usual(ctx.txns, ctx.dataset, { month, window: win }));
     const items = cmp.categories.filter(x => x.actualCents !== 0).slice(0, 8).map(x => {
       const flag = ['higher', 'seasonal_higher'].includes(x.signal) ? c.badge(fmt.diff(x.diffCents, { whole: true }), 'warn', { title: x.explanation })
-        : ['lower', 'seasonal_lower'].includes(x.signal) ? c.badge(fmt.diff(x.diffCents, { whole: true }), 'info', { title: x.explanation }) : '';
-      return {
-        label: x.category,
-        value: x.actualCents,
-        reference: x.averageCents,
-        href: ctx.href('spending', { period: month, cat: x.category }),
-        sub: x.averageCents === null ? 'No usual amount yet' : `Usual ${fmt.money(x.averageCents, { whole: true })}`,
-        badge: flag,
-      };
+        : ['lower', 'seasonal_lower'].includes(x.signal) ? c.badge(fmt.diff(x.diffCents, { whole: true }), 'info', { title: x.explanation })
+          : x.signal === 'irregular' ? c.badge('Irregular', 'neutral', { title: x.explanation }) : '';
+      // Seasonal categories are compared with the same month last year, as in Spending; an
+      // irregular bill has no meaningful monthly average, so no marker is drawn.
+      const lastYear = x.basis === 'last_year' && x.seasonal && x.seasonal.lastYearCents !== null;
+      const reference = x.signal === 'irregular' ? null : lastYear ? x.seasonal.lastYearCents : x.averageCents;
+      const sub = x.signal === 'irregular' && x.irregular ? `Irregular · last paid ${fmt.month(x.irregular.month)} (${fmt.money(x.irregular.cents, { whole: true })})`
+        : lastYear ? `Same month last year ${fmt.money(x.seasonal.lastYearCents, { whole: true })} (seasonal)`
+          : x.averageCents === null ? 'No usual amount yet' : `Usual ${fmt.money(x.averageCents, { whole: true })}`;
+      return { label: x.category, value: x.actualCents, reference, href: ctx.href('spending', { period: month, cat: x.category }), sub, badge: flag };
     });
     const flagged = cmp.categories.filter(x => ['higher', 'seasonal_higher'].includes(x.signal));
     const body = `${c.barList({ items, label: 'Spending by category, ' + fmt.month(month), referenceName: `Usual (${cmp.usableCount}-month average)` })}
-      <p class="fine">Usual = average of ${cmp.usableCount} full month${cmp.usableCount === 1 ? '' : 's'} before ${esc(fmt.month(month))}${cmp.baselineMonths.length ? ` (${esc(fmt.month(cmp.baselineMonths[0]))} – ${esc(fmt.month(cmp.baselineMonths[cmp.baselineMonths.length - 1]))})` : ''}. A category is marked only when it differs by at least $100 <em>and</em> 25%. ${flagged.length ? `${flagged.length} marked higher than usual.` : ''}</p>`;
+      <p class="fine">Usual = average of ${cmp.usableCount} full month${cmp.usableCount === 1 ? '' : 's'} before ${esc(fmt.month(month))}${cmp.baselineMonths.length ? ` (${esc(fmt.month(cmp.baselineMonths[0]))} – ${esc(fmt.month(cmp.baselineMonths[cmp.baselineMonths.length - 1]))})` : ''}. Heating and cooling are compared with the same month last year instead. A category is marked only when it differs by at least $100 <em>and</em> 25%. ${flagged.length ? `${flagged.length} marked higher than usual.` : ''}</p>`;
     return c.card(body, { title: 'Where the money went', subtitle: `${fmt.monthLong(month)} · top categories`, actions: c.linkButton('All categories', ctx.href('spending', { period: month }), { variant: 'ghost' }), id: 'where' });
+  }
+
+  /** Months with negative cash flow; months whose net is unknown are never reported as fine. */
+  function negativeMetric(ctx, proj) {
+    const s = proj.summary;
+    const unknown = s.unknownNetMonths || [];
+    const neg = s.negativeMonths;
+    const label = 'Months with more going out than coming in';
+    if (unknown.length === proj.rows.length) {
+      return c.metric({ label, value: 'Unknown', sub: 'No month is known yet: some income or personal spending is missing', href: ctx.href('forecast') });
+    }
+    const list = neg.length ? neg.slice(0, 3).map(fmt.month).join(', ') + (neg.length > 3 ? '…' : '') : 'None among known months';
+    return c.metric({
+      label, value: String(neg.length), tone: neg.length ? 'warn' : '',
+      status: unknown.length ? c.badge('Known months only', 'warn') : '',
+      sub: unknown.length ? `${esc(list)}. ${unknown.length} month${unknown.length === 1 ? ' is' : 's are'} unknown.` : (neg.length ? esc(list) : 'None in the next year'),
+      href: ctx.href('forecast'),
+    });
   }
 
   function forecastCard(ctx) {
@@ -156,7 +184,7 @@
             : 'If the budget is followed exactly',
         href: ctx.href('forecast'),
       })}
-      ${c.metric({ label: 'Months with more going out than coming in', value: String(s.negativeMonths.length), tone: s.negativeMonths.length ? 'warn' : '', sub: s.negativeMonths.length ? s.negativeMonths.slice(0, 3).map(fmt.month).join(', ') + (s.negativeMonths.length > 3 ? '…' : '') : 'None in the next year', href: ctx.href('forecast') })}
+      ${negativeMetric(ctx, proj)}
       ${c.metric({ label: 'Savings goals on track', value: goals.length ? `${goals.filter(g => g.status === 'funded').length} of ${goals.length}` : '—', tone: short.length ? 'warn' : '', sub: short.length ? 'Short: ' + short.map(g => g.label).join(', ') : goals.length ? 'Within this horizon' : 'Add goals in Budget', href: ctx.href('budget', { section: 'savings' }) })}
     </div>`;
     const notes = [];
@@ -183,7 +211,10 @@
     const header = c.pageHeader({
       eyebrow: 'Overview',
       title: 'Where things stand',
-      subtitle: month ? `Your plan for a typical month next to what actually happened in ${esc(fmt.monthLong(month))}, the latest month with complete data.` : 'Your plan for a typical month. Load transactions to compare it with what actually happened.',
+      subtitle: (() => {
+        const basis = !plan ? 'a typical month' : plan.timing === 'actual' && plan.month ? `${esc(fmt.monthLong(plan.month))} (counting its actual paydays)` : plan.timing === 'average' ? 'an average month (extra paychecks spread over the year)' : 'a typical month';
+        return month ? `Your plan for ${basis} next to what actually happened in ${esc(fmt.monthLong(month))}, the latest month with complete data.` : `Your plan for ${basis}. Load transactions to compare it with what actually happened.`;
+      })(),
       actions: c.segmented({ label: 'Show', name: 'scope', options: SCOPE_OPTIONS, value: ctx.scope, action: 'set-scope' }),
     });
     const flow = plan

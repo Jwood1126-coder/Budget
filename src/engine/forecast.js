@@ -522,13 +522,19 @@
       const planIncome = s.income.totalCents;
       const incomeCents = planIncome === null ? null : planIncome + eventIncome - incomeLoss;
       const incomeKnownCents = s.income.knownCents + eventIncome - incomeLoss;
-      const spendingCents = s.spending.targetsCents + s.personalSpendingCents + recurringSpend;
+      // When someone's personal spending can't be worked out (household scope), spending and
+      // money going out are unknown for the month: leaving the part out would make a scenario
+      // look cheaper than one where it is known. The known part is kept separately.
+      const personalUnknown = cfg.scope === 'household' && (s.remainingUnknownReason === 'personal_spending' || (s.personal || []).some(p => p.source === 'missing'));
+      const spendingKnownCents = s.spending.targetsCents + s.personalSpendingCents + recurringSpend;
+      const spendingCents = personalUnknown ? null : spendingKnownCents;
       const billsCents = s.bills.totalCents;
       const oneTimeCents = oneTimeSpend;
-      const outCents = spendingCents + billsCents + oneTimeCents;
+      const outKnownCents = spendingKnownCents + billsCents + oneTimeCents;
+      const outCents = personalUnknown ? null : outKnownCents;
       // Net is unknown when income is, or when personal spending cannot be worked out (household).
       const netUnknownReason = incomeCents === null ? 'income' : (s.remainingUnknownReason === 'personal_spending' ? 'personal_spending' : null);
-      const netCents = netUnknownReason ? null : incomeCents - outCents;
+      const netCents = netUnknownReason ? null : incomeCents - outKnownCents;
       // Cash not set aside this month: contributions earmark cash; money drawn from goals was
       // set aside earlier, so it does not reduce what is unassigned now.
       const unassignedCents = netCents === null ? null : netCents - contributions + goalDraws;
@@ -560,6 +566,8 @@
         billsCents,
         oneTimeCents,
         outCents,
+        outKnownCents,
+        spendingKnownCents,
         eventLines,
         netCents,
         netUnknownReason,
@@ -614,7 +622,8 @@
     return {
       totalIncomeCents: E.money.sumKnown(rows.map(r => r.incomeCents)),
       totalIncomeKnownCents: E.money.sum(rows.map(r => r.incomeKnownCents)),
-      totalOutCents: E.money.sum(rows.map(r => r.outCents)),
+      totalOutCents: E.money.sumKnown(rows.map(r => r.outCents)),
+      totalOutKnownCents: E.money.sum(rows.map(r => r.outKnownCents)),
       totalContributionsCents: E.money.sum(rows.map(r => r.contributionsCents)),
       totalReturnCents: E.money.sum(rows.map(r => r.returnCents)),
       endCumulativeCents: last.cumulativeCents,

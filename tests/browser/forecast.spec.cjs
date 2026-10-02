@@ -83,7 +83,7 @@ module.exports = [
       const st = await state(page);
       assert.equal(st.scenarios[0].events.length, 0, 'baseline holds no changes');
       assert.equal(JSON.stringify(st.plan), planBefore, 'the budget itself is unchanged');
-      assert.equal(st.scenarios.find(s => s.id === 'baby-arrives').events.length, 4, 'other scenarios untouched');
+      assert.equal(st.scenarios.find(s => s.id === 'baby-arrives').events.length, 5, 'other scenarios untouched');
       // The month of the repair shows it, flagged where cash goes down.
       const net = await monthAttr(page, '2027-06', 'net-cents');
       const prev = await monthAttr(page, '2027-05', 'net-cents');
@@ -125,7 +125,7 @@ module.exports = [
       await page.click('#fc-tpl-leave');
       await page.waitForSelector('#fc-tpl-stream');
       await page.waitForFunction(() => document.activeElement?.id === 'fc-tpl-stream');
-      await page.selectOption('#fc-tpl-stream', 'p1-pay');
+      await page.selectOption('#fc-tpl-stream', 'p1');
       await page.click('#fc-tpl-submit');
       await page.waitForSelector('#fc-tpl-start-error:not([hidden])');
       assert.equal(await page.textContent('#fc-tpl-start-error'), 'Choose a month.');
@@ -410,7 +410,7 @@ module.exports = [
       const st = await state(page);
       const copy = st.scenarios.find(s => s.id === id);
       const orig = st.scenarios.find(s => s.id === 'baby-arrives');
-      assert.equal(copy.events.length, 4);
+      assert.equal(copy.events.length, 5);
       assert.ok(copy.events.every(e => !orig.events.some(o => o.id === e.id)), 'copied changes get their own ids');
       // Edit the copy's supplies amount; the original keeps its own.
       const supplies = copy.events.find(e => e.label === 'Baby supplies');

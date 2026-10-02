@@ -111,11 +111,15 @@
   // ------------------------------------------------------------------ derived context
   function derive() {
     const ds = app.dataset, st = app.state;
-    const txns = E.ledger.applyEdits(ds, st.ledgerEdits, { whatIf: st.ui.whatIf });
+    // What-if switches only change the Spending view, where their banner and switches are shown;
+    // every other view (and the review queues) uses the real, decided data.
+    const txns = E.ledger.applyEdits(ds, st.ledgerEdits);
+    const wi = st.ui.whatIf || {};
+    const txnsWhatIf = (wi.excludePendingReimbursements || wi.excludeBusinessCandidates) ? E.ledger.applyEdits(ds, st.ledgerEdits, { whatIf: wi }) : null;
     const months = E.ledger.months(ds);
     const coverageMap = E.ledger.coverageMap(ds);
     const latestComplete = E.ledger.latestCompleteMonth(ds);
-    app.derived = { txns, months, coverageMap, latestComplete, memo: new Map() };
+    app.derived = { txns, txnsWhatIf, months, coverageMap, latestComplete, memo: new Map() };
   }
 
   function todayMonth() {
@@ -135,7 +139,9 @@
     const ctx = {
       E, UI, app, route,
       build: app.build, profile: app.profile, dataset: app.dataset, state: st,
-      txns: d.txns, months: d.months, coverageMap: d.coverageMap, latestComplete: d.latestComplete,
+      txns: route.view === 'spending' && d.txnsWhatIf ? d.txnsWhatIf : d.txns,
+      realTxns: d.txns,
+      months: d.months, coverageMap: d.coverageMap, latestComplete: d.latestComplete,
       scope: st.ui.scope,
       people,
       person: id => people[id] || (id === 'joint' ? 'Joint' : id === 'unknown' ? 'Not confirmed' : id || ''),
@@ -145,8 +151,9 @@
       /** Plan summary for the current (or given) scope. */
       plan: (opts = {}) => memo('plan:' + JSON.stringify(opts), () => {
         const timing = opts.timing || st.plan.settings.incomeTiming;
-        // Actual paydays only make sense for a specific month: use the first forecast month.
-        const month = opts.month || (timing === 'actual' ? forecastStart : undefined);
+        // The plan describes a reference month (the first forecast month): incomes and bills that
+        // have ended or not started are left out, and actual paydays are counted for that month.
+        const month = opts.month || forecastStart;
         return E.plan.monthly(st.plan, { scope: opts.scope || st.ui.scope, timing, month });
       }),
       /** Projection for a scenario id over the given horizon. */
