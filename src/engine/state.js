@@ -322,8 +322,10 @@
 
   // Home's "what if": amounts per month for the projection (null = the usual amount from recent
   // months) and how far ahead to look.
-  const HOME_FIELDS = [['inCents', CENTS], ['outCents', CENTS], ['savedCents', CENTS], ['horizon', oneOf([12, 24, 60], 24)]];
-  const HOME_DEFAULT = { inCents: null, outCents: null, savedCents: null, horizon: 24 };
+  // p1InCents/p2InCents: each partner's money into joint (used when income can be told apart by
+  // person); inCents: all money in (used when it cannot).
+  const HOME_FIELDS = [['inCents', CENTS], ['p1InCents', CENTS], ['p2InCents', CENTS], ['outCents', CENTS], ['savedCents', CENTS], ['horizon', oneOf([12, 24, 60], 24)]];
+  const HOME_DEFAULT = { inCents: null, p1InCents: null, p2InCents: null, outCents: null, savedCents: null, horizon: 24 };
 
   const UI_FIELDS = [
     ['scope', oneOf(['joint', 'household'], 'joint')],

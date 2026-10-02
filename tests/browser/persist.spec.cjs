@@ -249,7 +249,7 @@ module.exports = [
     viewport: 'both',
     async run(t) {
       const { page, assert } = t;
-      for (const route of ['#/budget', '#/forecast', '#/spending']) {
+      for (const route of ['#/overview', '#/budget', '#/forecast', '#/spending']) {
         await t.open(route);
         await page.focus('#page-title');
         const hidden = [];
@@ -257,7 +257,8 @@ module.exports = [
           await page.keyboard.press('Tab');
           const r = await page.evaluate(() => {
             const el = document.activeElement;
-            if (!el || el === document.body || el.closest('.topbar, .mainnav, #toast')) return null;
+            // The skip link is drawn above the top bar on purpose.
+            if (!el || el === document.body || el.closest('.topbar, .mainnav, #toast') || el.classList.contains('skip-link')) return null;
             const box = el.getBoundingClientRect();
             const top = document.querySelector('.topbar').getBoundingClientRect().bottom;
             const nav = document.querySelector('.mainnav');
@@ -283,10 +284,11 @@ module.exports = [
       const start = await page.evaluate(() => location.hash);
       await page.focus('select[data-param="period"]');
       for (let i = 0; i < 3; i++) {
-        const before = await page.evaluate(() => location.hash);
+        const before = await page.evaluate(() => [location.hash, Number(document.documentElement.dataset.renderSeq)]);
         await page.keyboard.press('ArrowDown');
-        await page.waitForFunction(b => location.hash !== b, before);
-        await page.waitForSelector('select[data-param="period"]');
+        // Wait for the re-render and for focus to be back on the new select before the next key.
+        await page.waitForFunction(([h, n]) => location.hash !== h && Number(document.documentElement.dataset.renderSeq) > n
+          && document.activeElement && document.activeElement.matches('select[data-param="period"]'), before);
       }
       await page.goBack();
       await page.waitForFunction(s => location.hash === s, start);
@@ -303,7 +305,7 @@ module.exports = [
       const small = [];
       for (const route of ['#/forecast', '#/budget?section=bills', '#/review?queue=uncertain', '#/overview']) {
         await t.open(route);
-        small.push(...await page.$$eval('#view .btn, #view .segmented label, #view .bt-remove', els => els
+        small.push(...await page.$$eval('#view .btn, #view .segmented label, #view .bt-remove, #view input[type="range"], #view .home-amount input', els => els
           .filter(el => el.getBoundingClientRect().width > 0)
           .map(el => ({ text: el.textContent.trim().slice(0, 30), h: Math.round(el.getBoundingClientRect().height) }))
           .filter(x => x.h < 40)).then(xs => xs.map(x => route + ' ' + x.text + ' ' + x.h + 'px')));

@@ -180,13 +180,51 @@
   }
 
   /**
+   * Who a deposit into the joint accounts comes from: returns txn → 'p1' | 'p2' | null (other).
+   *   1. The person a household rule or transfer hint named on the row (personId).
+   *   2. A partner's transfer (contribution) with no person: the one person whose budget has a
+   *      contribution stream (several: the one whose per-transfer amount matches).
+   *   3. A paycheck deposit with no person: the one person whose paycheck reaches joint (a paycheck
+   *      with no joint portion from someone who also sends transfers does not; several: amount match).
+   *   4. Any other deposit (not interest) of exactly one person's usual deposit amount (a paycheck's
+   *      joint portion or a transfer), e.g. a partner's transfer the import rules do not recognise yet.
+   * Interest, refunds and anything unmatched stay "other".
+   */
+  function incomeAttribution(plan) {
+    const incomes = (plan && Array.isArray(plan.incomes) ? plan.incomes : []).filter(i => i && (i.personId === 'p1' || i.personId === 'p2'));
+    const contributors = incomes.filter(i => i.kind === 'contribution');
+    const sendsTransfers = new Set(contributors.map(i => i.personId));
+    const payers = incomes.filter(i => i.kind === 'paycheck' && !(i.jointPerPaycheckCents === null && sendsTransfers.has(i.personId)));
+    const pick = (streams, cents) => {
+      const people = Array.from(new Set(streams.map(i => i.personId)));
+      if (people.length === 1) return people[0];
+      const match = streams.filter(i => i.jointPerPaycheckCents === cents || (i.jointPerPaycheckCents === null && i.netPerPaycheckCents === cents));
+      const matched = Array.from(new Set(match.map(i => i.personId)));
+      return matched.length === 1 ? matched[0] : null;
+    };
+    const byAmount = cents => {
+      const people = Array.from(new Set(incomes.filter(i => Number.isInteger(i.jointPerPaycheckCents) && i.jointPerPaycheckCents > 0 && i.jointPerPaycheckCents === cents).map(i => i.personId)));
+      return people.length === 1 ? people[0] : null;
+    };
+    return t => {
+      if (t.personId === 'p1' || t.personId === 'p2') return t.personId;
+      if (t.kind === 'transfer' && t.subtype === 'contribution') return pick(contributors, t.amountCents);
+      if (t.kind === 'income' && t.subtype === 'payroll') return pick(payers, t.amountCents);
+      if (t.kind === 'income' && t.subtype === 'interest') return null;
+      return t.amountCents > 0 ? byAmount(t.amountCents) : null;
+    };
+  }
+
+  /**
    * Money in, money out and money saved per month (joint accounts, full months only).
    * in = pay and other income + transfers in from personal accounts;
    * out = spending (after refunds) + debt payments + purchases marked as business costs (they
    * still left the account); saved = net moved into savings.
    * With `planning: true`, one-offs left out of the planning baseline are left out of `out`.
+   * With `attribute` (from incomeAttribution), each row also has `bySource: { p1, p2, other }`,
+   * which adds up to `inCents`.
    */
-  function monthlyFlows(txns, dataset, { months, coverageMap, planning = false } = {}) {
+  function monthlyFlows(txns, dataset, { months, coverageMap, planning = false, attribute = null } = {}) {
     const list = months || E.ledger.months(dataset);
     const cov = coverageMap || E.ledger.coverageMap(dataset);
     const byMonth = new Map(list.map(m => [m, []]));
@@ -197,7 +235,7 @@
     }
     return list.map(m => {
       const status = cov[m] ? cov[m].status : 'none';
-      if (status !== 'full') return { month: m, coverage: status, inCents: null, outCents: null, savedCents: null, leftCents: null };
+      if (status !== 'full') return { month: m, coverage: status, inCents: null, outCents: null, savedCents: null, leftCents: null, ...(attribute ? { bySource: null } : {}) };
       const rows = byMonth.get(m).filter(t => !(planning && t.planningExcluded));
       const s = E.ledger.summarize(rows);
       let business = 0;
@@ -205,7 +243,17 @@
       const inCents = s.incomeCents + s.contributionsCents;
       const outCents = s.spendingCents + s.debtPaymentsCents + business;
       const savedCents = s.savedNetCents;
-      return { month: m, coverage: status, inCents, outCents, savedCents, leftCents: inCents - outCents - savedCents, businessCents: business };
+      const out = { month: m, coverage: status, inCents, outCents, savedCents, leftCents: inCents - outCents - savedCents, businessCents: business };
+      if (attribute) {
+        const by = { p1: 0, p2: 0, other: 0 };
+        for (const t of rows) {
+          const v = E.ledger.measure(t);
+          const cents = v.incomeCents + v.contributionCents;
+          if (cents) by[attribute(t) || 'other'] += cents;
+        }
+        out.bySource = by;
+      }
+      return out;
     });
   }
 
@@ -215,7 +263,14 @@
     const used = full.slice(-count);
     if (!used.length) return { inCents: null, outCents: null, savedCents: null, months: [], count: 0 };
     const avg = key => E.money.divide(used.reduce((s, f) => s + f[key], 0), used.length);
-    return { inCents: avg('inCents'), outCents: avg('outCents'), savedCents: avg('savedCents'), months: used.map(f => f.month), count: used.length };
+    const out = { inCents: avg('inCents'), outCents: avg('outCents'), savedCents: avg('savedCents'), months: used.map(f => f.month), count: used.length };
+    if (used.every(f => f.bySource)) {
+      const src = k => E.money.divide(used.reduce((s, f) => s + f.bySource[k], 0), used.length);
+      out.bySource = { p1: src('p1'), p2: src('p2'), other: src('other') };
+      // Rounded averages can differ from the total's by a cent: "other" absorbs it so the parts add up.
+      out.bySource.other += out.inCents - (out.bySource.p1 + out.bySource.p2 + out.bySource.other);
+    }
+    return out;
   }
 
   /**
@@ -269,5 +324,5 @@
     return { rows, firstShortMonth, monthlyLeftCents: left };
   }
 
-  E.balances = { CASH_TYPES, GROUPS, cashAccounts, coveredBetween, endOfDay, history, monthlyFlows, usual, comfortable, project };
+  E.balances = { CASH_TYPES, GROUPS, cashAccounts, coveredBetween, endOfDay, history, incomeAttribution, monthlyFlows, usual, comfortable, project };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -398,7 +398,8 @@ State = {
   references: Reference[],               // user-entered reconciliation references
   checklist: { [id]: boolean },
   ui: { scope: 'joint'|'household', lastRoute: string, whatIf: { excludePendingReimbursements: boolean, excludeBusinessCandidates: boolean },
-        home: { inCents: cents|null, outCents: cents|null, savedCents: cents|null, horizon: 12|24|60 },  // Home's what-if; null = the usual amount
+        home: { inCents, p1InCents, p2InCents, outCents, savedCents: cents|null, horizon: 12|24|60 },  // Home's what-if; null = the usual amount
+                                                                    // (p1/p2InCents when money in can be told apart by person, else inCents)
         dismissed: { [noticeId]: boolean } },
   meta: { createdAt, updatedAt, migratedFrom: null|0..4,           // 0 = unversioned earlier budget
           migrationNotes: string[], legacySnapshot: string|null }  // raw earlier data, set only by a migration
@@ -908,11 +909,17 @@ Joint cash accounts only (checking, savings, other; cards and loans are not bala
   - No anchor: the account's line is the change since its first covered day (`source: 'change'`),
     and a group or total that includes it is a change, not a balance (`kind: 'change'`).
   - Rows excluded as duplicate copies never move a balance; every other row does.
-- `monthlyFlows(txns, dataset, { months?, coverageMap?, planning? }) -> [{ month, coverage, inCents, outCents, savedCents, leftCents, businessCents }]`
+- `incomeAttribution(plan) -> (txn) => 'p1'|'p2'|null` — whose deposit a row is: the row's
+  `personId` (from rules/transfer hints); else, for a contribution, the one person with a
+  contribution stream, and for a payroll deposit, the one person whose paycheck reaches joint (a
+  paycheck with no joint portion from someone who also sends transfers does not); with several
+  candidates the per-paycheck/per-transfer amount must match one; otherwise null ("other").
+- `monthlyFlows(txns, dataset, { months?, coverageMap?, planning?, attribute? }) -> [{ month, coverage, inCents, outCents, savedCents, leftCents, businessCents, bySource? }]`
   — joint scope, full months only (else null). in = income + contributions; out = spending (after
   refunds) + debt payments + purchases marked business (they still left the account); saved = net
   to savings. `planning: true` leaves out rows excluded from the planning baseline.
-- `usual(flows, { count = 12, endMonth? }) -> { inCents, outCents, savedCents, months, count }` — averages of the last full months.
+  With `attribute`, `bySource: { p1, p2, other }` splits `inCents` (the parts add up exactly).
+- `usual(flows, { count = 12, endMonth? }) -> { inCents, outCents, savedCents, months, count, bySource? }` — averages of the last full months (`bySource.other` absorbs rounding so the parts add up to `inCents`).
 - `comfortable(flows, { count = 12 }) -> { comfortableCents, typicalLeftCents, monthsAtLeast, count, lowestCents, highestCents, months }`
   — the leftover (in − out) reached in at least three of every four months (the value at index
   ⌊n/4⌋ of the sorted leftovers), rounded down to $50, never below $0.

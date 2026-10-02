@@ -39,13 +39,16 @@
 .home-whatif-h { margin: 0 0 var(--space-3); font-size: 1.05rem; }
 .home-whatif-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(240px, 1.1fr); gap: var(--space-5); align-items: start; }
 .home-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); }
+.home-controls.is-four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.home-other-note { margin: var(--space-3) 0 0; }
+.home-income-metrics { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-bottom: var(--space-4); }
 @media (max-width: 1099px) { .home-whatif-grid { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 759px) { .home-controls { grid-template-columns: minmax(0, 1fr); } }
 .home-control-head { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
 .home-control-head label { font-weight: 650; font-size: .92rem; }
 .home-amount { width: 9.5rem; flex: 0 0 auto; }
 .home-amount input { width: 100%; min-height: 40px; padding: 6px 10px 6px 22px; border: 1px solid var(--control-border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; font-weight: 650; text-align: right; }
-.home-control input[type="range"] { width: 100%; margin: var(--space-2) 0 0; min-height: 32px; accent-color: var(--brand); }
+.home-control input[type="range"] { width: 100%; margin: var(--space-2) 0 0; min-height: 40px; accent-color: var(--brand); }
 .home-control .field-help { margin: 2px 0 0; }
 .home-result { padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); background: var(--surface); border: 1px solid var(--border); }
 .home-result p { margin: 0 0 var(--space-2); }

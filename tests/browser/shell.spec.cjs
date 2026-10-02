@@ -146,7 +146,7 @@ module.exports = [
       await page.click('#home-try');
       await page.waitForFunction(() => window.HouseholdBudget.getState().ui.home.savedCents > 25000);
       await page.click('#home-reset');
-      await page.waitForFunction(() => { const h = window.HouseholdBudget.getState().ui.home; return h.inCents === null && h.outCents === null && h.savedCents === null; });
+      await page.waitForFunction(() => { const h = window.HouseholdBudget.getState().ui.home; return h.inCents === null && h.p1InCents === null && h.p2InCents === null && h.outCents === null && h.savedCents === null; });
       await page.waitForSelector('#home-reset[disabled]');
       // Look further ahead.
       await page.click('label[for^="home-horizon-60"]');
@@ -197,6 +197,35 @@ module.exports = [
       assert.match(text, /moved to savings \$/);
       assert.ok(!/Unknown/.test(text), 'no "Unknown" savings figure');
       assert.ok((await page.textContent('#home-chart .chart-legend')).includes('Moved to savings from now'));
+    },
+  },
+  {
+    name: 'home breaks money in down by person, and a partner’s income can be changed on its own',
+    viewport: 'both',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      const tiles = await page.$$eval('#home-income-card .metric', ms => ms.map(m => [m.querySelector('.metric-label').textContent.trim(), Number(m.querySelector('.metric-value').textContent.replace(/[$,]/g, ''))]));
+      assert.deepEqual(tiles.map(x => x[0]), ['Alex', 'Sam', 'Other']);
+      const usualIn = await page.evaluate(() => {
+        const H = window.HouseholdBudget, B = H.engine.balances, ctx = H.context();
+        const flows = B.monthlyFlows(ctx.realTxns, ctx.dataset, { months: ctx.months, coverageMap: ctx.coverageMap, planning: true });
+        return B.usual(flows, { count: 12 }).inCents;
+      });
+      assert.ok(Math.abs(tiles.reduce((s, x) => s + x[1], 0) - usualIn / 100) <= 1, 'the parts add up to money in (to the dollar)');
+      assert.ok(await page.isVisible('#home-income svg'), 'month-by-month chart by person');
+      assert.match(await page.textContent('label[for="home-in-p1"]'), /Alex’s income/);
+      assert.match(await page.textContent('label[for="home-in-p2"]'), /Sam’s income/);
+      // Sam brings in nothing for a while (leave): the 2-year total drops by exactly 24 × Sam's usual.
+      const sam = tiles[1][1];
+      await page.fill('#home-in-p2-amount', '0');
+      await page.press('#home-in-p2-amount', 'Enter');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().ui.home.p2InCents === 0);
+      await page.waitForFunction(() => /compared with your current track/.test(document.getElementById('home-result').textContent));
+      const diff = await page.$eval('#home-result .home-diff', el => el.textContent);
+      assert.match(diff, /^−/, 'less money');
+      assert.equal(Number(diff.replace(/[^\d]/g, '')), 24 * sam, 'the drop is 24 months of Sam’s usual income: ' + diff);
+      assert.ok(await noHorizontalScroll(page), 'no sideways scroll');
     },
   },
 ];

@@ -125,6 +125,48 @@ test('monthly flows: one-offs left out of planning are left out only with planni
   assert.equal(B.monthlyFlows(edited, ds, { months: ['2026-01'], planning: true })[0].outCents, 0);
 });
 
+test('income by person: named rows, then the budget’s incomes, decide whose money it is', () => {
+  const plan = { incomes: [
+    { id: 'a-pay', personId: 'p1', kind: 'paycheck', netPerPaycheckCents: 250000, jointPerPaycheckCents: 210000 },
+    { id: 'b-pay', personId: 'p2', kind: 'paycheck', netPerPaycheckCents: null, jointPerPaycheckCents: null },
+    { id: 'b-in', personId: 'p2', kind: 'contribution', netPerPaycheckCents: null, jointPerPaycheckCents: 145000 }
+  ] };
+  const who = B.incomeAttribution(plan);
+  assert.equal(who({ kind: 'income', subtype: 'payroll', amountCents: 210000 }), 'p1', 'the only paycheck that reaches joint');
+  assert.equal(who({ kind: 'transfer', subtype: 'contribution', amountCents: 99900 }), 'p2', 'the only person who sends transfers');
+  assert.equal(who({ kind: 'income', subtype: 'interest', amountCents: 500 }), null, 'interest is nobody’s pay');
+  assert.equal(who({ kind: 'income', subtype: 'payroll', amountCents: 1, personId: 'p2' }), 'p2', 'a rule’s person wins');
+  // Both paychecks reach joint: the amount decides, and an unmatched amount stays unassigned.
+  const both = B.incomeAttribution({ incomes: [
+    { personId: 'p1', kind: 'paycheck', jointPerPaycheckCents: 210000 },
+    { personId: 'p2', kind: 'paycheck', jointPerPaycheckCents: 180000 }
+  ] });
+  assert.equal(both({ kind: 'income', subtype: 'payroll', amountCents: 180000 }), 'p2');
+  assert.equal(both({ kind: 'income', subtype: 'payroll', amountCents: 123400 }), null);
+  assert.equal(B.incomeAttribution(null)({ kind: 'income', subtype: 'payroll', amountCents: 1 }), null);
+  // A transfer the import rules did not recognise, of exactly the partner's usual transfer amount.
+  assert.equal(who({ kind: 'income', subtype: 'other', amountCents: 145000 }), 'p2');
+  assert.equal(who({ kind: 'transfer', subtype: 'internal', amountCents: 145000 }), 'p2');
+  assert.equal(who({ kind: 'income', subtype: 'other', amountCents: 145001 }), null, 'only an exact amount');
+  assert.equal(who({ kind: 'income', subtype: 'interest', amountCents: 145000 }), null, 'interest never');
+});
+
+test('income by person: the parts add up to money in, month by month and on average', () => {
+  const txns = [pay('2026-01-05', 210000), row('chk', '2026-01-15', 145000, { kind: 'transfer', subtype: 'contribution', category: 'Transfer' }),
+    row('chk', '2026-01-31', 333, { kind: 'income', subtype: 'interest', category: 'Income' }), pay('2026-02-05', 210000)];
+  const ds = build(txns, { chk: [{ start: '2026-01-01', end: '2026-02-28' }], sav: [{ start: '2026-01-01', end: '2026-02-28' }] });
+  const attribute = B.incomeAttribution({ incomes: [
+    { personId: 'p1', kind: 'paycheck', jointPerPaycheckCents: 210000 },
+    { personId: 'p2', kind: 'contribution', jointPerPaycheckCents: 145000 }
+  ] });
+  const flows = B.monthlyFlows(eff(ds), ds, { months: ['2026-01', '2026-02'], attribute });
+  assert.deepEqual(flows[0].bySource, { p1: 210000, p2: 145000, other: 333 });
+  assert.equal(flows[0].inCents, 355333);
+  const u = B.usual(flows, { count: 12 });
+  assert.equal(u.bySource.p1 + u.bySource.p2 + u.bySource.other, u.inCents);
+  assert.deepEqual(u.bySource, { p1: 210000, p2: 72500, other: 167 });
+});
+
 test('usual: the average of the last full months', () => {
   const flows = [
     { month: '2026-01', inCents: 100000, outCents: 50000, savedCents: 10000 },

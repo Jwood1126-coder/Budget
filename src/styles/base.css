@@ -422,4 +422,5 @@ main { padding: var(--space-6) var(--space-6) var(--space-7); max-width: 1240px;
   .rv-open, .rv-side > a { display: inline-flex; align-items: center; min-height: 40px; }
   .bt-remove { min-height: 40px; padding: 8px 0; }
   .topbar-undo { min-height: 40px; }
+  input[type="range"] { min-height: 40px; }
 }

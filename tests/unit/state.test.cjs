@@ -96,7 +96,7 @@ test('defaults: compares the baseline with the first other scenario', () => {
 
 test('defaults: joint scope, overview route, what-ifs off and epoch timestamps', () => {
   const st = base();
-  assert.deepEqual(st.ui, { scope: 'joint', lastRoute: '#/overview', whatIf: { excludePendingReimbursements: false, excludeBusinessCandidates: false }, home: { inCents: null, outCents: null, savedCents: null, horizon: 24 }, dismissed: {} });
+  assert.deepEqual(st.ui, { scope: 'joint', lastRoute: '#/overview', whatIf: { excludePendingReimbursements: false, excludeBusinessCandidates: false }, home: { inCents: null, p1InCents: null, p2InCents: null, outCents: null, savedCents: null, horizon: 24 }, dismissed: {} });
   assert.deepEqual(st.meta, { createdAt: '1970-01-01T00:00:00.000Z', updatedAt: '1970-01-01T00:00:00.000Z', migratedFrom: null, migrationNotes: [], legacySnapshot: null });
   assert.equal(st.scenarios[1].createdAt, '1970-01-01T00:00:00.000Z');
 });
@@ -640,7 +640,7 @@ test('sanitize: references, checklist, ui and meta are validated', () => {
   const r = S.sanitize(raw, profile(), DS);
   assert.deepEqual(r.state.references.map(x => x.id), ['q3']);
   assert.deepEqual(r.state.checklist, { balances: true });
-  assert.deepEqual(r.state.ui, { scope: 'household', lastRoute: '#/forecast?horizon=36', whatIf: { excludePendingReimbursements: true, excludeBusinessCandidates: false }, home: { inCents: null, outCents: null, savedCents: null, horizon: 24 }, dismissed: { tip1: true } });
+  assert.deepEqual(r.state.ui, { scope: 'household', lastRoute: '#/forecast?horizon=36', whatIf: { excludePendingReimbursements: true, excludeBusinessCandidates: false }, home: { inCents: null, p1InCents: null, p2InCents: null, outCents: null, savedCents: null, horizon: 24 }, dismissed: { tip1: true } });
   assert.equal(r.state.meta.createdAt, NOW);
   assert.equal(r.state.meta.updatedAt, '1970-01-01T00:00:00.000Z');
   assert.equal(r.state.meta.migratedFrom, null);
@@ -1978,13 +1978,14 @@ test('balances: per-account entered balances and the Home what-if are validated 
   assert.throws(() => S.setPath(st, 'plan.balances.accounts.joint-savings', 1.5), isValidationError(/whole cents/));
   st = S.setPath(st, 'ui.home.savedCents', 50000);
   st = S.setPath(st, 'ui.home.horizon', 60);
-  assert.deepEqual(st.ui.home, { inCents: null, outCents: null, savedCents: 50000, horizon: 60 });
+  st = S.setPath(st, 'ui.home.p2InCents', 0);
+  assert.deepEqual(st.ui.home, { inCents: null, p1InCents: null, p2InCents: 0, outCents: null, savedCents: 50000, horizon: 60 });
   assert.throws(() => S.setPath(st, 'ui.home.horizon', 7), isValidationError());
   const raw = JSON.parse(JSON.stringify(st));
   raw.plan.balances.accounts = { 'joint-savings': 100, 'bad id!': 5, other: 'lots' };
   raw.ui.home = { inCents: -5, horizon: 3 };
   const r = S.sanitize(raw, profile(), DS);
   assert.deepEqual(r.state.plan.balances.accounts, { 'joint-savings': 100 });
-  assert.deepEqual(r.state.ui.home, { inCents: null, outCents: null, savedCents: null, horizon: 24 });
+  assert.deepEqual(r.state.ui.home, { inCents: null, p1InCents: null, p2InCents: null, outCents: null, savedCents: null, horizon: 24 });
   assert.ok(r.notes.some(n => /dropped balances/.test(n)));
 });

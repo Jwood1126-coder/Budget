@@ -32,19 +32,32 @@
       const txns = ctx.realTxns || ctx.txns;
       const bal = ctx.state.plan.balances || {};
       const hist = E.balances.history(txns, ctx.dataset, { entered: bal.accounts || {}, asOf: bal.accountsAsOf || null, months: ctx.months });
-      const flows = E.balances.monthlyFlows(txns, ctx.dataset, { months: ctx.months, coverageMap: ctx.coverageMap, planning: true });
+      const attribute = E.balances.incomeAttribution(ctx.state.plan);
+      const flows = E.balances.monthlyFlows(txns, ctx.dataset, { months: ctx.months, coverageMap: ctx.coverageMap, planning: true, attribute });
       const usual = E.balances.usual(flows, { count: 12 });
       const comfy = E.balances.comfortable(flows, { count: 12 });
-      return { hist, flows, usual, comfy };
+      // Income is shown per person when at least one partner's deposits can be told apart.
+      const people = (ctx.state.plan.people || []).filter(p => p && (p.id === 'p1' || p.id === 'p2'));
+      const earners = usual.bySource ? people.filter(p => usual.bySource[p.id] > 0) : [];
+      return { hist, flows, usual, comfy, people, earners, split: earners.length > 0 };
     });
   }
 
-  /** The amounts the what-if uses: the household's own, else the usual ones. */
-  function chosen(ctx, m) {
-    const h = ctx.state.ui.home || {};
-    const pick = k => (Number.isInteger(h[k]) ? h[k] : m.usual[k]);
-    return { inCents: pick('inCents'), outCents: pick('outCents'), savedCents: pick('savedCents'), changed: ['inCents', 'outCents', 'savedCents'].some(k => Number.isInteger(h[k]) && h[k] !== m.usual[k]) };
+  /**
+   * The amounts the what-if uses: the household's own (saved, or `overrides` from sliders being
+   * dragged), else the usual ones. With income split by person, money in = each partner's amount
+   * + the usual other income (interest, refunds).
+   */
+  function chosen(ctx, m, overrides = {}) {
+    const h = Object.assign({}, ctx.state.ui.home || {}, overrides);
+    const pick = (k, usual) => (Number.isInteger(h[k]) ? h[k] : usual);
+    const parts = m.split ? m.earners.map(p => ({ id: p.id, name: p.name, cents: pick(p.id + 'InCents', m.usual.bySource[p.id]), usual: m.usual.bySource[p.id] })) : null;
+    const inCents = parts ? parts.reduce((s, x) => s + x.cents, 0) + (m.usual.inCents - m.earners.reduce((s, p) => s + m.usual.bySource[p.id], 0)) : pick('inCents', m.usual.inCents);
+    const vals = { inCents, outCents: pick('outCents', m.usual.outCents), savedCents: pick('savedCents', m.usual.savedCents), parts };
+    vals.changed = vals.inCents !== m.usual.inCents || vals.outCents !== m.usual.outCents || vals.savedCents !== m.usual.savedCents || (parts || []).some(x => x.cents !== x.usual);
+    return vals;
   }
+  const possessive = name => name + (/s$/i.test(name) ? '’' : '’s');
 
   /** Without a savings account in the data, "savings" means what is moved out to savings from now on. */
   const hasSavings = m => m.hist.groups.savings.kind !== 'none';
@@ -131,19 +144,27 @@
       </ul>`;
     const how = c.disclosure('How these numbers are worked out', `<p>From your last ${comfy.count} complete month${comfy.count === 1 ? '' : 's'} (${esc(range)}), joint accounts only. A usual month brings in ${esc(whole(u.inCents))} and ${esc(whole(u.outCents))} goes out, leaving ${esc(whole(comfy.typicalLeftCents))} on average. But months differ: what was left ranged from ${esc(whole(comfy.lowestCents))} to ${esc(whole(comfy.highestCents))}. “Comfortable to save” is the amount left over in ${comfy.monthsAtLeast} of those ${comfy.count} months (rounded down to $50), so most months can afford it and an expensive month is covered by the cushion.</p>
       <p>Moving money to savings does not change your total: it moves it from checking to savings. One-off costs you left out of planning in Review are left out of “usual”. Transfers between your own accounts and card bills paid in full are not counted as spending.</p>`, { cls: 'home-how', id: 'home-how' });
-    return c.card(`<p class="home-lede">A usual month brings in <strong>${esc(whole(u.inCents))}</strong>. Here is how it splits:</p>${bar}${list}${how}`,
+    const from = m.split ? ` (${m.earners.map(p => esc(p.name) + ' ' + esc(whole(u.bySource[p.id]))).join(', ')}${u.inCents - m.earners.reduce((s, p) => s + u.bySource[p.id], 0) ? ', other ' + esc(whole(u.inCents - m.earners.reduce((s, p) => s + u.bySource[p.id], 0))) : ''})` : '';
+    return c.card(`<p class="home-lede">A usual month brings in <strong>${esc(whole(u.inCents))}</strong>${from}. Here is how it splits:</p>${bar}${list}${how}`,
       { title: `${fmt.monthLong(month)}: what’s comfortable`, id: 'home-month' });
   }
 
   // ------------------------------------------------------------------ what if
+  function controlsOf(m) {
+    if (!m.split) return CONTROLS;
+    const people = m.earners.map(p => ({ key: p.id + 'InCents', id: 'home-in-' + p.id, label: possessive(p.name) + ' income', usual: m.usual.bySource[p.id], help: 'What reaches the joint accounts from ' + p.name + ' each month.' }));
+    return people.concat(CONTROLS.slice(1));
+  }
+
   function controlsHtml(ctx, m, vals) {
     const max = (usual, cur) => {
       const top = Math.max(usual * 2, cur * 1.25, 100000);
       return Math.ceil(top / 50000) * 50000;
     };
-    const rows = CONTROLS.map(k => {
-      const usual = m.usual[k.usualKey];
-      const cur = vals[k.key];
+    const current = k => (k.key.endsWith('InCents') && k.key !== 'inCents' ? vals.parts.find(x => x.id + 'InCents' === k.key).cents : vals[k.key]);
+    const rows = controlsOf(m).map(k => {
+      const usual = k.usual !== undefined ? k.usual : m.usual[k.usualKey];
+      const cur = current(k);
       const hi = max(usual, cur);
       return `<div class="home-control">
         <div class="home-control-head"><label for="${k.id}">${esc(k.label)}</label>
@@ -154,8 +175,10 @@
     }).join('');
     const comfy = m.comfy.comfortableCents;
     const tryIt = comfy > m.usual.savedCents ? c.button(`Try saving ${whole(comfy)} a month`, { action: 'home:try-comfortable', id: 'home-try', cls: 'btn-small' }) : '';
+    const other = m.split ? m.usual.inCents - m.earners.reduce((s, p) => s + m.usual.bySource[p.id], 0) : 0;
+    const otherNote = other ? `<p class="fine home-other-note">Plus about ${esc(whole(other))} a month of other money in (interest, refunds, deposits not matched to either of you), kept as usual.</p>` : '';
     return `<div class="home-whatif-grid">
-        <div class="home-controls" role="group" aria-label="What if">${rows}</div>
+        <div><div class="home-controls${m.split && m.earners.length > 1 ? ' is-four' : ''}" role="group" aria-label="What if">${rows}</div>${otherNote}</div>
         <div class="home-outcome">
           <div id="home-result" class="home-result" aria-live="polite">${resultHtml(ctx, m, vals)}</div>
           <div class="home-control-actions">${tryIt}${c.button('Back to usual amounts', { action: 'home:reset', id: 'home-reset', cls: 'btn-small', disabled: !vals.changed })}</div>
@@ -170,10 +193,32 @@
     const end = plan.rows[plan.rows.length - 1], base = track.rows[track.rows.length - 1];
     const diff = end.total - base.total;
     const left = vals.inCents - vals.outCents - vals.savedCents;
-    return `<p class="home-result-line">Each month: ${esc(whole(vals.inCents))} in − ${esc(whole(vals.outCents))} spent − ${esc(whole(vals.savedCents))} to savings = <strong class="${left < 0 ? 'tone-bad' : ''}">${esc(signed(left))}</strong> in checking.</p>
+    return `<p class="home-result-line">Each month: ${esc(whole(vals.inCents))} in${vals.parts ? ` (${vals.parts.map(x => esc(x.name) + ' ' + esc(whole(x.cents))).join(', ')}${vals.inCents - vals.parts.reduce((s, x) => s + x.cents, 0) ? ', other ' + esc(whole(vals.inCents - vals.parts.reduce((s, x) => s + x.cents, 0))) : ''})` : ''} − ${esc(whole(vals.outCents))} spent − ${esc(whole(vals.savedCents))} to savings = <strong class="${left < 0 ? 'tone-bad' : ''}">${esc(signed(left))}</strong> in checking.</p>
       <p class="home-result-big">In ${esc(yearsText(horizon))}: <strong>${esc(whole(end.total))}</strong></p>
-      <p class="home-result-line">Checking ${esc(whole(end.checking))} · ${hasSavings(m) ? 'savings' : 'moved to savings'} ${esc(whole(end.savings))}.${vals.changed ? ` That is <strong class="${diff < 0 ? 'tone-bad' : 'tone-good'}">${esc(signed(diff))}</strong> compared with your current track.` : ' This is your current track.'}</p>
+      <p class="home-result-line">Checking ${esc(whole(end.checking))} · ${hasSavings(m) ? 'savings' : 'moved to savings'} ${esc(whole(end.savings))}.${vals.changed ? ` That is <strong class="home-diff ${diff < 0 ? 'tone-bad' : 'tone-good'}">${esc(signed(diff))}</strong> compared with your current track.` : ' This is your current track.'}</p>
       ${plan.firstShortMonth ? `<p class="home-result-warn">${c.badge('Warning', 'bad')} Checking would run out in ${esc(fmt.monthLong(plan.firstShortMonth))}.</p>` : ''}`;
+  }
+
+  // ------------------------------------------------------------------ who brings in what
+  function incomeCard(ctx, m) {
+    if (!m.split) return '';
+    const u = m.usual;
+    const other = u.inCents - m.earners.reduce((s, p) => s + u.bySource[p.id], 0);
+    const share = cents => (u.inCents > 0 ? Math.round(cents / u.inCents * 100) + '%' : '—');
+    const howFor = p => {
+      const streams = (ctx.state.plan.incomes || []).filter(i => i.personId === p.id);
+      const kinds = new Set(streams.map(i => i.kind));
+      return kinds.has('contribution') && !streams.some(i => i.kind === 'paycheck' && i.jointPerPaycheckCents) ? 'transfers into joint' : 'pay deposited to joint';
+    };
+    const tiles = m.earners.map(p => c.metric({ label: p.name, value: whole(u.bySource[p.id]), sub: `a month · ${esc(share(u.bySource[p.id]))} of money in · ${esc(howFor(p))}` })).join('')
+      + (other ? c.metric({ label: 'Other', value: whole(other), sub: `a month · ${esc(share(other))} · interest, refunds and deposits not matched to either of you` }) : '');
+    const shown = m.flows.slice(-HISTORY_MONTHS);
+    const series = m.earners.map((p, i) => ({ name: p.name, values: shown.map(f => (f.bySource ? f.bySource[p.id] : null)), cls: 'series-' + (i + 1) }));
+    if (other) series.push({ name: 'Other', values: shown.map(f => (f.bySource ? f.bySource.other : null)), cls: 'series-3' });
+    const chart = c.lineChart({ id: 'home-income', title: 'Money into the joint accounts each month, by person', labels: shown.map(f => f.month), series, tableCaption: 'Money in per month, by person (complete months only)' });
+    const missing = m.people.filter(p => !m.earners.includes(p));
+    const note = `Averages of the same ${u.count} months as above. Only money that reaches the joint accounts is counted: pay kept in a personal account is not in your data.${missing.length ? ` No money in was matched to ${esc(missing.map(p => p.name).join(' or '))}.` : ''} Deposits are matched by the rules in your import and the incomes in <a href="${esc(ctx.href('budget', { section: 'income' }))}">Budget</a>.`;
+    return c.card(`<div class="metrics home-income-metrics">${tiles}</div>${chart}<p class="fine">${note}</p>`, { title: 'Money coming in, by person', subtitle: 'Who brings in what, in a usual month and month by month.', id: 'home-income-card' });
   }
 
   // ------------------------------------------------------------------ month by month
@@ -235,15 +280,14 @@
     });
     const reviewCount = (() => { try { const q = ctx.reviewQueues().counts || {}; return (q.uncertain || 0) + (q.duplicates || 0); } catch { return 0; } })();
     const more = `<p class="home-more">More detail when you want it: <a href="${esc(ctx.href('spending'))}">where the money went</a> · <a href="${esc(ctx.href('budget'))}">bills and goals</a> · <a href="${esc(ctx.href('forecast'))}">bigger plans like a baby or a repair</a>${reviewCount ? ` · <a href="${esc(ctx.href('review'))}">${reviewCount} transaction${reviewCount === 1 ? '' : 's'} could use a check (optional)</a>` : ''}.</p>`;
-    return `${header}<div class="stack">${sample}${a.tiles}${chartCard}${thisMonth(ctx, m, a.month)}${balancePrompt(ctx, m)}${patternCard(ctx, m)}${more}</div>`;
+    return `${header}<div class="stack">${sample}${a.tiles}${chartCard}${thisMonth(ctx, m, a.month)}${incomeCard(ctx, m)}${balancePrompt(ctx, m)}${patternCard(ctx, m)}${more}</div>`;
   }
 
   // ------------------------------------------------------------------ live sliders
   function readVals(container, ctx, m) {
-    const vals = chosen(ctx, m);
-    for (const el of container.querySelectorAll('input[type="range"][data-home]')) vals[el.dataset.home] = Math.round(Number(el.value) * 100);
-    vals.changed = ['inCents', 'outCents', 'savedCents'].some(k => vals[k] !== m.usual[k]);
-    return vals;
+    const overrides = {};
+    for (const el of container.querySelectorAll('input[type="range"][data-home]')) overrides[el.dataset.home] = Math.round(Number(el.value) * 100);
+    return chosen(ctx, m, overrides);
   }
 
   function redraw(container, ctx, m) {
@@ -278,7 +322,11 @@
       const apply = () => {
         let cents;
         try { cents = E.money.inputToCents(el.value); } catch { cents = null; }
-        if (cents === null) { el.value = dollars(readVals(container, ctx, m)[el.dataset.homeText]); return; }
+        if (cents === null) {
+          const slider = container.querySelector(`input[type="range"][data-home="${el.dataset.homeText}"]`);
+          el.value = slider ? dollars(Math.round(Number(slider.value) * 100)) : '';
+          return;
+        }
         commit(ctx, el.dataset.homeText, cents);
       };
       el.addEventListener('change', apply);
@@ -292,7 +340,7 @@
       ctx.app.update(st => E.state.setPath(st, 'ui.home.savedCents', m.comfy.comfortableCents), { undoable: false });
     },
     'home:reset': ctx => {
-      ctx.app.update(st => ({ ...st, ui: { ...st.ui, home: { ...st.ui.home, inCents: null, outCents: null, savedCents: null } } }), { undoable: false, message: 'Back to your usual amounts.' });
+      ctx.app.update(st => ({ ...st, ui: { ...st.ui, home: { ...st.ui.home, inCents: null, p1InCents: null, p2InCents: null, outCents: null, savedCents: null } } }), { undoable: false, message: 'Back to your usual amounts.' });
     },
     'home:horizon': (ctx, el) => ctx.app.update(st => E.state.setPath(st, 'ui.home.horizon', Number(el.dataset.value || el.value)), { undoable: false }),
   };
