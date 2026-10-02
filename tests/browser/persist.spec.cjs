@@ -43,7 +43,7 @@ module.exports = [
       // Moving around in the other tab does not bring its old copy back.
       await b.click('.mainnav a[data-nav="overview"]');
       await b.waitForFunction(() => location.hash.startsWith('#/overview'));
-      await b.click('.mainnav a[data-nav="forecast"]');
+      await t.nav('forecast', b);
       await b.waitForFunction(() => location.hash.startsWith('#/forecast'));
       assert.equal(await storedTarget(a, 'Groceries'), 81200, 'navigating in tab 2 keeps tab 1’s change');
       await a.reload();
@@ -279,7 +279,7 @@ module.exports = [
     async run(t) {
       const { page, assert } = t;
       await t.open('#/overview');
-      await page.click('.mainnav a[data-nav="spending"]');
+      await t.nav('spending');
       await page.waitForSelector('select[data-param="period"]');
       const start = await page.evaluate(() => location.hash);
       await page.focus('select[data-param="period"]');

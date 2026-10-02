@@ -4,7 +4,9 @@
  * Real-browser checks (Chromium via Playwright) against dist/index.html built from the
  * synthetic sample. Each tests/browser/*.spec.cjs exports an array of
  *   { name, viewport?: 'desktop'|'phone'|'both', run: async (t) => {} }
- * where t = { page, open(hash), assert, viewport, shot(name), errors }.
+ * where t = { page, open(hash), nav(view, page?), assert, viewport, shot(name), errors }.
+ * nav() clicks the navigation link for a view: on phones Spending, Budget and Forecast sit in the
+ * "More" menu of the tab bar, so it opens that first.
  * Every test fails on any uncaught page error or console error.
  *
  *   node tests/browser/run.cjs [filter]       run (optionally only tests whose name includes filter)
@@ -69,6 +71,15 @@ async function main() {
             await page.waitForSelector('#page-title');
           },
           async shot(name) { await page.screenshot({ path: path.join(OUT, `${name}-${vp}.png`), fullPage: true }); },
+          async nav(view, pg = page) {
+            const secondary = ['spending', 'budget', 'forecast'].includes(view);
+            if (!secondary) return pg.click(`.mainnav a[data-nav="${view}"]`);
+            if (vp === 'phone') {
+              if (!(await pg.$eval('.nav-more-menu', d => d.open))) await pg.click('.nav-more-menu > summary');
+              return pg.click(`.nav-more-list a[data-nav="${view}"]`);
+            }
+            return pg.click(`.nav-desktop-only a[data-nav="${view}"]`);
+          },
           url,
         };
         try {

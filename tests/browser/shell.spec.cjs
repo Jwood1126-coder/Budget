@@ -31,12 +31,11 @@ module.exports = [
     async run(t) {
       await t.open('#/overview');
       for (const view of VIEWS) {
-        const link = t.viewport === 'phone' && view === 'data' ? '.topbar-data' : `.mainnav a[data-nav="${view}"]`;
-        await t.page.click(link);
+        if (t.viewport === 'phone' && view === 'data') await t.page.click('.topbar-data'); else await t.nav(view);
         await t.page.waitForFunction(v => location.hash.startsWith('#/' + v), view);
         await t.page.waitForSelector('#page-title');
-        const current = await t.page.$eval(`.mainnav a[data-nav="${view}"]`, a => a.getAttribute('aria-current'));
-        t.assert.equal(current, 'page', view + ' should be current');
+        const current = await t.page.$$eval(`.mainnav a[data-nav="${view}"]`, as => as.map(a => a.getAttribute('aria-current')));
+        t.assert.ok(current.length >= 1 && current.every(c => c === 'page'), view + ' should be current in every navigation copy');
         const focused = await t.page.evaluate(() => document.activeElement && document.activeElement.id);
         t.assert.equal(focused, 'page-title', 'heading receives focus after navigating to ' + view);
         t.assert.ok(await noHorizontalScroll(t.page), 'no horizontal page scroll on ' + view);
@@ -45,18 +44,27 @@ module.exports = [
     },
   },
   {
-    name: 'phone layout shows all five primary destinations in the bottom bar',
+    name: 'phone tab bar: Plan, Transactions, More and Data; More opens the other three views',
     viewport: 'phone',
     async run(t) {
       await t.open('#/overview');
-      const boxes = await t.page.$$eval('.mainnav li:not(.nav-secondary) a', as => as.map(a => { const r = a.getBoundingClientRect(); return { x: r.x, right: r.right, y: r.y, bottom: r.bottom, visible: r.width > 0 && r.height > 0 }; }));
-      t.assert.equal(boxes.length, 5);
+      const tabs = await t.page.$$eval('.mainnav > ul > li:not(.nav-secondary) > a, .mainnav > ul > li > details > summary', els => els.map(a => { const r = a.getBoundingClientRect(); return { label: a.querySelector('.nav-label').textContent.trim().replace(/\d+$/, ''), x: r.x, right: r.right, y: r.y, bottom: r.bottom, visible: r.width > 0 && r.height > 0 }; }));
+      t.assert.deepEqual(tabs.map(b => b.label), ['Plan', 'Transactions', 'More', 'Data & privacy']);
       const vw = await t.page.evaluate(() => window.innerWidth), vh = await t.page.evaluate(() => window.innerHeight);
-      for (const b of boxes) {
+      for (const b of tabs) {
         t.assert.ok(b.visible, 'tab visible');
         t.assert.ok(b.x >= 0 && b.right <= vw + 1, 'tab inside viewport horizontally');
         t.assert.ok(b.bottom <= vh + 1 && b.y > vh - 120, 'tab bar pinned to the bottom');
       }
+      t.assert.ok(!(await t.page.isVisible('.nav-desktop-only')), 'the desktop-only group is hidden on phones');
+      await t.page.click('.nav-more-menu > summary');
+      const more = await t.page.$$eval('.nav-more-list a', as => as.map(a => ({ view: a.dataset.nav, visible: a.getBoundingClientRect().height > 0, right: a.getBoundingClientRect().right })));
+      t.assert.deepEqual(more.map(m => m.view), ['spending', 'budget', 'forecast']);
+      t.assert.ok(more.every(m => m.visible && m.right <= vw + 1), 'More menu items visible and inside the viewport');
+      await t.shot('nav-more');
+      await t.page.click('.nav-more-list a[data-nav="budget"]');
+      await t.page.waitForFunction(() => location.hash.startsWith('#/budget'));
+      await t.page.waitForFunction(() => !document.querySelector('.nav-more-menu').open, null, { timeout: 3000 }).catch(() => {});
       t.assert.ok(await t.page.isVisible('.topbar-data'), 'Data & privacy reachable from the top bar');
     },
   },
@@ -64,13 +72,13 @@ module.exports = [
     name: 'browser back and forward move between views; reload keeps the route',
     async run(t) {
       await t.open('#/overview');
-      await t.page.click('.mainnav a[data-nav="budget"]');
+      await t.nav('budget');
       await t.page.waitForFunction(() => location.hash.startsWith('#/budget'));
-      await t.page.click('.mainnav a[data-nav="forecast"]');
+      await t.nav('forecast');
       await t.page.waitForFunction(() => location.hash.startsWith('#/forecast'));
       await t.page.goBack();
       await t.page.waitForFunction(() => location.hash.startsWith('#/budget'));
-      t.assert.equal(await t.page.$eval('.mainnav a[data-nav="budget"]', a => a.getAttribute('aria-current')), 'page');
+      t.assert.equal(await t.page.$eval('.nav-desktop-only a[data-nav="budget"]', a => a.getAttribute('aria-current')), 'page');
       await t.page.goForward();
       await t.page.waitForFunction(() => location.hash.startsWith('#/forecast'));
       await t.page.reload();
