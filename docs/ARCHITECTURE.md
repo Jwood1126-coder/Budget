@@ -45,8 +45,9 @@ src/
     plan.js              monthly budget model                    (BudgetEngine.plan)
     debt.js              debt facts, promo check, illustrations  (BudgetEngine.debt)
     forecast.js          scenario projection + comparison        (BudgetEngine.forecast)
+    balances.js          balances over time, patterns, Home's projection (BudgetEngine.balances)
     state.js             saved-state schema, migration, storage  (BudgetEngine.state)
-    attention.js         "needs attention" list for Overview     (BudgetEngine.attention)
+    attention.js         "needs attention" list (Review)         (BudgetEngine.attention)
   ui/
     core.js              escaping, formatting, DOM helpers       (BudgetUI.dom/.fmt)
     components.js        breadcrumbs, tables, bar lists, charts  (BudgetUI.c)
@@ -124,6 +125,8 @@ Txn = {
   personId?: 'p1'|'p2',         // OPTIONAL: only on transfers matched by a transferHint with personId
   sourceFile: string|null,      // file BASE name (relative path only when two base names collide)
   sourceRow: integer|null,      // 1-based physical line where the CSV record starts (header = line 1)
+  balanceCents?: integer,       // optional: the running balance the bank printed after this row
+                                //   (checking/savings exports only; absent when the export has none)
   note: string                  // may hold 'Transaction date YYYY-MM-DD.' when it differs from the posted date
 }
 
@@ -293,7 +296,8 @@ Plan = {
   targets: { [category]: cents|null }, // variable-spending targets per month (joint-funded)
   savings: SavingsGoal[],
   personalSpending: [{ personId, monthlyCents: cents|null, note }],  // spending funded personally, beyond bills
-  balances: { jointCashCents: cents|null, asOf: 'YYYY-MM-DD'|null, note },
+  balances: { jointCashCents: cents|null, asOf: 'YYYY-MM-DD'|null, note,
+              accounts: { [accountId]: cents|null }, accountsAsOf: 'YYYY-MM-DD'|null },  // per-account balances for Home (exports without a running balance)
   settings: { incomeTiming: 'conservative'|'average'|'actual', planningBaseline: 'actual'|'adjusted', comparisonWindow: 3|6|12 }
 }
 
@@ -393,7 +397,9 @@ State = {
   ledgerEdits: { [txnId]: Edit },
   references: Reference[],               // user-entered reconciliation references
   checklist: { [id]: boolean },
-  ui: { scope: 'joint'|'household', lastRoute: string, whatIf: { excludePendingReimbursements: boolean, excludeBusinessCandidates: boolean }, dismissed: { [noticeId]: boolean } },
+  ui: { scope: 'joint'|'household', lastRoute: string, whatIf: { excludePendingReimbursements: boolean, excludeBusinessCandidates: boolean },
+        home: { inCents: cents|null, outCents: cents|null, savedCents: cents|null, horizon: 12|24|60 },  // Home's what-if; null = the usual amount
+        dismissed: { [noticeId]: boolean } },
   meta: { createdAt, updatedAt, migratedFrom: null|0..4,           // 0 = unversioned earlier budget
           migrationNotes: string[], legacySnapshot: string|null }  // raw earlier data, set only by a migration
 }
@@ -890,6 +896,30 @@ Projection = {
   — `deltas` compare money rows with the first column (null when either is unknown).
 - Also exported: `MAX_MONTHS = 120`, `EVENT_TYPES`.
 
+### BudgetEngine.balances
+Joint cash accounts only (checking, savings, other; cards and loans are not balances to spend).
+- `cashAccounts(dataset) -> [{ id, label, type, group: 'checking'|'savings', coverage }]`
+- `history(txns, dataset, { entered?, asOf?, months? }) -> { months, accounts: [{ id, label, group, source: 'bank'|'entered'|'change', values, note }], groups: { checking, savings: { label, kind: 'balance'|'change'|'none', values } }, total: { kind, values }, latest: { month, index, checking, savings, total }|null, complete }`
+  - Known balances ("anchors"): the export's running balance at the end of each day with rows
+    (`endOfDay` picks the balance that is not the start of another row that day; file order breaks
+    ties), else one `entered[accountId]` balance true at the end of `asOf`. A month-end value is the
+    nearest anchor at or before it plus the flows in between, or the next anchor minus the flows in
+    between; it is null unless every day in between is covered by the account's exports.
+  - No anchor: the account's line is the change since its first covered day (`source: 'change'`),
+    and a group or total that includes it is a change, not a balance (`kind: 'change'`).
+  - Rows excluded as duplicate copies never move a balance; every other row does.
+- `monthlyFlows(txns, dataset, { months?, coverageMap?, planning? }) -> [{ month, coverage, inCents, outCents, savedCents, leftCents, businessCents }]`
+  — joint scope, full months only (else null). in = income + contributions; out = spending (after
+  refunds) + debt payments + purchases marked business (they still left the account); saved = net
+  to savings. `planning: true` leaves out rows excluded from the planning baseline.
+- `usual(flows, { count = 12, endMonth? }) -> { inCents, outCents, savedCents, months, count }` — averages of the last full months.
+- `comfortable(flows, { count = 12 }) -> { comfortableCents, typicalLeftCents, monthsAtLeast, count, lowestCents, highestCents, months }`
+  — the leftover (in − out) reached in at least three of every four months (the value at index
+  ⌊n/4⌋ of the sorted leftovers), rounded down to $50, never below $0.
+- `project({ startMonth, months, start: { checking, savings }, inCents, outCents, savedCents }) -> { rows: [{ month, checking, savings, total }], firstShortMonth, monthlyLeftCents }`
+  — each month checking += in − out − saved, savings += saved. No interest or growth. A null
+  start is treated as 0 (the caller labels the line as change).
+
 ### BudgetEngine.state
 - `VERSION = 5`, `storageKey(datasetId)`, `LEGACY_KEYS(copyIds?)`, constants `STORAGE_PREFIX`,
   `LEGACY_PREFIX`, `LEGACY_COPY_IDS`, `WORKBOOK_FORMAT`, `BASELINE_ID`, `BASELINE_NAME`, `LIMITS`,
@@ -980,7 +1010,7 @@ Projection = {
 
 | Route | View |
 | --- | --- |
-| `#/overview` | What came in, went out, remains; joint vs household; decisions needing attention |
+| `#/overview` | Home: comfortable to save/spend this month, balances now, where the current track leads, what-if sliders, month-by-month pattern |
 | `#/spending?period=2026-09&cat=Groceries&merchant=…&txn=…&q=…&window=3` | month → category → merchant → transaction drilldown with breadcrumbs |
 | `#/budget?section=income|bills|targets|savings|debts` | edit plan inputs; planned vs actual; consequences |
 | `#/forecast?scenario=…&compare=a,b&horizon=36` | scenarios, events, projections, side-by-side |

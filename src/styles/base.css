@@ -326,6 +326,8 @@ main { padding: var(--space-6) var(--space-6) var(--space-7); max-width: 1240px;
 .key-line.series-1 { border-color: var(--series-1); }
 .key-line.series-2 { border-color: var(--series-2); }
 .key-line.series-3 { border-color: var(--series-3); }
+.key-line.series-muted { border-color: var(--text-3); border-top-style: dotted; }
+.key-line.key-dashed { border-color: var(--text-2); border-top-style: dashed; }
 
 /* ------------------------------------------------------------- charts */
 .chart { margin: 0; }
@@ -344,6 +346,12 @@ main { padding: var(--space-6) var(--space-6) var(--space-7); max-width: 1240px;
 .chart .end-dot.series-3 { fill: var(--series-3); }
 .chart .end-label { fill: var(--text-2); font-size: 11px; font-weight: 650; font-family: var(--font); }
 .chart .crosshair { stroke: var(--text-3); stroke-width: 1; }
+.chart .line.is-projected { stroke-dasharray: 6 5; }
+.chart .line.series-muted { stroke: var(--text-3); stroke-width: 1.5; stroke-dasharray: 2 4; }
+.chart .end-dot.series-muted { fill: var(--text-3); }
+.chart .projection-zone { fill: var(--surface-2); }
+.chart .now-line { stroke: var(--border-strong); stroke-width: 1; }
+.chart .now-label { fill: var(--text-3); font-size: 11px; font-weight: 650; font-family: var(--font); }
 .chart .hit, .chart .hit-col { fill: transparent; }
 .chart .column { fill: var(--series-1); }
 .chart .column.is-muted { fill: var(--border-strong); }

@@ -327,7 +327,7 @@
     const description = typeof t.description === 'string' ? t.description : (nonEmpty(t.merchant) ? t.merchant : '');
     const flags = [];
     for (const f of Array.isArray(t.flags) ? t.flags : []) if (!flags.includes(f)) flags.push(f);
-    return Object.assign({}, t, {
+    const out = Object.assign({}, t, {
       id: t.id,
       accountId: t.accountId,
       date: t.date,
@@ -347,6 +347,9 @@
       sourceRow: Number.isInteger(t.sourceRow) ? t.sourceRow : null,
       note: typeof t.note === 'string' ? t.note : ''
     });
+    // Optional: the bank's running balance after this row (whole cents), used for balances over time.
+    if (out.balanceCents !== undefined && !Number.isSafeInteger(out.balanceCents)) delete out.balanceCents;
+    return out;
   }
 
   /**

@@ -370,16 +370,14 @@
       ? `Data: ${fmt.month(months[0])} – ${fmt.month(months[months.length - 1])} · ${ctx.dataset.accounts.length} accounts · ${ctx.dataset.transactions.length.toLocaleString('en-US')} records`
       : 'No transaction data loaded';
     $('#navNote').textContent = app.storageOk ? 'Changes save in this browser only. Use Data & privacy to share them.' : 'Browser storage is unavailable: export a workbook to keep changes.';
+    // Only possible duplicates get a count in the navigation: they change totals. Everything else
+    // in Review is optional tidying, so the navigation does not nag about it.
     let count = 0;
-    try {
-      const c = ctx.reviewQueues().counts || {};
-      // Items that need a household decision; paired transfers and yearly bills are not counted.
-      count = (c.uncertain || 0) + (c.duplicates || 0) + (c.transfers || 0) + (c.reimbursements || 0) + (c.business || 0) + (c.spikes || 0);
-    } catch { count = 0; }
+    try { count = (ctx.reviewQueues().counts || {}).duplicates || 0; } catch { count = 0; }
     const rc = $('#reviewCount');
     rc.hidden = !count;
     rc.textContent = count > 99 ? '99+' : String(count);
-    rc.setAttribute('aria-label', count + ' items to review');
+    rc.setAttribute('aria-label', count + ' possible duplicate' + (count === 1 ? '' : 's') + ' to check');
     updateUndoButton();
     updateAlerts();
   }
@@ -741,7 +739,7 @@
       const name = document.createElement('span');
       if (series) {
         const key = document.createElement('span');
-        key.className = 'key key-line series-' + series;
+        key.className = 'key key-line ' + (typeof series === 'number' ? 'series-' + series : String(series));
         name.appendChild(key);
       }
       name.appendChild(document.createTextNode(label));

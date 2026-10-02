@@ -68,8 +68,8 @@
     return `<div class="empty"><p>${message}</p>${action}</div>`;
   }
 
-  function disclosure(summary, body, { open = false, cls = '' } = {}) {
-    return `<details class="disclosure ${esc(cls)}"${open ? ' open' : ''}><summary>${summary}</summary><div class="disclosure-body">${body}</div></details>`;
+  function disclosure(summary, body, { open = false, cls = '', id } = {}) {
+    return `<details class="disclosure ${esc(cls)}"${id ? ` id="${esc(id)}"` : ''}${open ? ' open' : ''}><summary>${summary}</summary><div class="disclosure-body">${body}</div></details>`;
   }
 
   /** Radio-group style toggle. Changing it fires data-action with data-value. */
@@ -169,7 +169,12 @@
    * series: [{ name, values: (cents|null)[] }] (max 3; colours --series-1..3 in this order)
    * labels: month strings, same length as values. Null values break the line.
    */
-  function lineChart({ id, title, description = '', series, labels, format = v => fmt.money(v, { whole: true }), tableCaption }) {
+  /**
+   * Line chart over months. series: [{ name, values: cents|null[], cls?, noEndLabel? }].
+   * With `projectFrom` (index of the first projected month) the lines turn dashed after the last
+   * actual month, a "Today" line marks the switch and tooltips/table rows say "projected".
+   */
+  function lineChart({ id, title, description = '', series, labels, format = v => fmt.money(v, { whole: true }), tableCaption, projectFrom = null, nowLabel = 'Today' }) {
     const narrow = isNarrow();
     const tiny = narrow && root.innerWidth < 400;
     const W = tiny ? 360 : narrow ? 420 : 760, H = narrow ? 240 : 260, padL = narrow ? 46 : 64, padR = narrow ? 58 : 96, padT = 16, padB = 32;
@@ -179,34 +184,54 @@
     const min = t[0], max = t[t.length - 1];
     const x = i => padL + (labels.length === 1 ? (W - padL - padR) / 2 : (i / (labels.length - 1)) * (W - padL - padR));
     const y = v => padT + (1 - (v - min) / (max - min || 1)) * (H - padT - padB);
+    const projecting = Number.isInteger(projectFrom) && projectFrom > 0 && projectFrom < labels.length;
+    const isProjected = i => projecting && i >= projectFrom;
     const grid = t.map(v => `<line class="grid${v === 0 ? ' zero' : ''}" x1="${padL}" x2="${W - padR}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}"/><text class="axis" x="${padL - 8}" y="${(y(v) + 4).toFixed(1)}" text-anchor="end">${esc(compactMoney(v))}</text>`).join('');
     const every = Math.max(1, Math.ceil(labels.length / (narrow ? 4 : 8)));
     // Show evenly spaced labels; the last label replaces a near neighbour instead of colliding with it.
     const showX = i => i === labels.length - 1 || (i % every === 0 && labels.length - 1 - i >= every);
     const xlab = labels.map((m, i) => showX(i) ? `<text class="axis" x="${x(i).toFixed(1)}" y="${H - 10}" text-anchor="middle">${esc(fmt.month(m))}</text>` : '').join('');
-    const lines = series.map((s, si) => {
+    const clsOf = (s, si) => s.cls || 'series-' + (si + 1);
+    const pathOf = (values, from, to) => {
       let d = '', pen = false;
-      s.values.forEach((v, i) => {
-        if (v === null || v === undefined) { pen = false; return; }
+      for (let i = from; i <= to; i++) {
+        const v = values[i];
+        if (v === null || v === undefined) { pen = false; continue; }
         d += (pen ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(v).toFixed(1) + ' ';
         pen = true;
-      });
+      }
+      return d.trim();
+    };
+    const ends = [];
+    const lines = series.map((s, si) => {
+      const cls = clsOf(s, si);
+      const last = labels.length - 1;
+      const solid = projecting ? pathOf(s.values, 0, projectFrom - 1) : pathOf(s.values, 0, last);
+      const dashed = projecting ? pathOf(s.values, projectFrom - 1, last) : '';
       const lastIdx = s.values.map((v, i) => (v === null || v === undefined ? -1 : i)).filter(i => i >= 0).pop();
-      const end = lastIdx === undefined ? '' : `<circle class="end-dot series-${si + 1}" cx="${x(lastIdx).toFixed(1)}" cy="${y(s.values[lastIdx]).toFixed(1)}" r="4.5"/><text class="end-label" x="${(x(lastIdx) + 9).toFixed(1)}" y="${(y(s.values[lastIdx]) + 4).toFixed(1)}">${esc(compactMoney(s.values[lastIdx]))}</text>`;
-      return `<path class="line series-${si + 1}" d="${d.trim()}"/>${end}`;
+      if (lastIdx !== undefined && !s.noEndLabel) ends.push({ si, cls, x: x(lastIdx), y: y(s.values[lastIdx]), v: s.values[lastIdx] });
+      return (solid ? `<path class="line ${esc(cls)}" d="${solid}"/>` : '') + (dashed ? `<path class="line is-projected ${esc(cls)}" d="${dashed}"/>` : '');
     }).join('');
-    const points = labels.map((m, i) => JSON.stringify({ x: x(i), title: fmt.monthLong(m), rows: series.map((s, si) => [s.name, format(s.values[i] ?? null), si + 1]) }));
-    const legend = series.length > 1 ? `<ul class="chart-legend">${series.map((s, si) => `<li><span class="key key-line series-${si + 1}" aria-hidden="true"></span>${esc(s.name)}</li>`).join('')}</ul>` : '';
+    // End labels are nudged apart so lines ending close together stay readable.
+    ends.sort((a, b) => a.y - b.y);
+    for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 13) ends[i].y = ends[i - 1].y + 13;
+    const endMarks = ends.map(e => `<circle class="end-dot ${esc(e.cls)}" cx="${e.x.toFixed(1)}" cy="${y(e.v).toFixed(1)}" r="4.5"/><text class="end-label" x="${(e.x + 9).toFixed(1)}" y="${(e.y + 4).toFixed(1)}">${esc(compactMoney(e.v))}</text>`).join('');
+    const now = projecting ? `<rect class="projection-zone" x="${x(projectFrom - 1).toFixed(1)}" y="${padT}" width="${(W - padR - x(projectFrom - 1)).toFixed(1)}" height="${H - padT - padB}"/>
+        <line class="now-line" x1="${x(projectFrom - 1).toFixed(1)}" x2="${x(projectFrom - 1).toFixed(1)}" y1="${padT}" y2="${H - padB}"/>
+        <text class="now-label" x="${(x(projectFrom - 1) + 4).toFixed(1)}" y="${padT + 10}">${esc(nowLabel)}</text>` : '';
+    const monthTitle = i => fmt.monthLong(labels[i]) + (isProjected(i) ? ' · projected' : '');
+    const points = labels.map((m, i) => JSON.stringify({ x: x(i), title: monthTitle(i), rows: series.map((s, si) => [s.name, format(s.values[i] ?? null), clsOf(s, si)]) }));
+    const legend = series.length > 1 || projecting ? `<ul class="chart-legend">${series.map((s, si) => `<li><span class="key key-line ${esc(clsOf(s, si))}" aria-hidden="true"></span>${esc(s.name)}</li>`).join('')}${projecting ? '<li><span class="key key-line key-dashed" aria-hidden="true"></span>Dashed: projected</li>' : ''}</ul>` : '';
     const chartId = esc(id || UI.dom.domId('chart', title));
     const summary = series.map(s => {
       const known = s.values.filter(v => v !== null && v !== undefined);
       return `${s.name}: ends at ${format(known[known.length - 1] ?? null)}, lowest ${format(known.length ? Math.min(...known) : null)}`;
     }).join('. ');
-    const tableRows = labels.map((m, i) => ({ month: fmt.month(m), ...Object.fromEntries(series.map((s, si) => ['s' + si, format(s.values[i] ?? null)])) }));
+    const tableRows = labels.map((m, i) => ({ month: fmt.month(m) + (isProjected(i) ? ' (projected)' : ''), ...Object.fromEntries(series.map((s, si) => ['s' + si, format(s.values[i] ?? null)])) }));
     return `<figure class="chart" id="${chartId}">
       ${legend}
-      <svg class="line-chart" viewBox="0 0 ${W} ${H}" role="img" tabindex="0" aria-label="${esc(title + '. ' + summary + '. Use left and right arrow keys to read each month; a table follows.')}" data-chart="line" data-points="${esc('[' + points.join(',') + ']')}" data-plot="${padT},${H - padB}">
-        ${grid}${xlab}${lines}
+      <svg class="line-chart" viewBox="0 0 ${W} ${H}" role="img" tabindex="0" aria-label="${esc(title + '. ' + (projecting ? 'Actual months, then projected months after ' + fmt.month(labels[projectFrom - 1]) + '. ' : '') + summary + '. Use left and right arrow keys to read each month; a table follows.')}" data-chart="line" data-points="${esc('[' + points.join(',') + ']')}" data-plot="${padT},${H - padB}">
+        ${now}${grid}${xlab}${lines}${endMarks}
         <line class="crosshair" x1="0" x2="0" y1="${padT}" y2="${H - padB}" visibility="hidden"/>
         <rect class="hit" x="${padL}" y="${padT}" width="${W - padL - padR}" height="${H - padT - padB}"/>
       </svg>

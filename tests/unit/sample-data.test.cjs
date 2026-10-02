@@ -96,7 +96,12 @@ describe('sample dataset', () => {
     const files = new Set(report.files.map(f => f.name));
     assert.equal(ids.size, T.length, 'ids are unique');
     for (const t of T) {
-      const keys = Object.keys(t).filter(k => k !== 'personId');
+      // personId and balanceCents (the bank's running balance) are optional.
+      const keys = Object.keys(t).filter(k => k !== 'personId' && k !== 'balanceCents');
+      if (t.balanceCents !== undefined) {
+        assert.ok(Number.isSafeInteger(t.balanceCents), t.id + ' balance in whole cents');
+        assert.equal(dataset.accounts.find(a => a.id === t.accountId).type, 'checking', 'only the checking export prints a balance');
+      }
       assert.deepEqual(keys, ['id', 'accountId', 'date', 'description', 'merchant', 'amountCents', 'kind', 'subtype', 'category', 'sourceCategory',
         'categoryReason', 'confidence', 'flags', 'pairId', 'matchIds', 'sourceFile', 'sourceRow', 'note'], t.id);
       assert.match(t.id, /^tx-[0-9a-z]+$/);

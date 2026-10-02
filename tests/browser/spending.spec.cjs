@@ -276,21 +276,23 @@ module.exports = [
     },
   },
   {
-    name: 'spending reconciles with every Overview figure it is linked from',
+    name: 'home’s month-by-month figures match the Spending page for the same month',
     async run(t) {
       const { page, assert } = t;
+      await t.open('#/overview');
+      await page.click('#home-pattern-card .chart-table summary');
+      const row = await page.$$eval('#home-pattern-card tbody tr', trs => {
+        const r = trs.find(tr => tr.firstElementChild.textContent.trim() === 'Sep 2026');
+        return Array.from(r.children).slice(1).map(td => td.textContent.trim());
+      });
+      const [homeIn, homeOut, homeSaved] = row.map(v => cents(v.replace(/(\$[\d,]+)$/, '$1.00')));
+      await open(t, '#/spending?period=2026-09&kind=all');
+      const tile = label => page.locator('.sp-metrics .metric', { has: page.locator(`.metric-label:text-is("${label}")`) }).locator('.metric-value').textContent().then(cents);
+      const spent = await tile('Spending');
       const whole = c => Math.round(c / 100);
-      for (const [row, metric] of [[1, 'Coming in'], [2, null], [3, 'Debt payments'], [4, 'Saved (net)']]) {
-        await t.open('#/overview');
-        const link = page.locator(`.flow-row:nth-child(${row + 1}) [role="cell"]:last-child a`);
-        const shown = cents((await link.textContent()).replace(/(\$[\d,]+)$/, '$1.00'));
-        await link.click();
-        await page.waitForFunction(() => location.hash.startsWith('#/spending'));
-        await settled(page);
-        const tile = metric ? page.locator('.sp-metrics .metric', { has: page.locator(`.metric-label:text-is("${metric}")`) }) : page.locator('.sp-metrics .metric').first();
-        const value = cents(await tile.locator('.metric-value').textContent());
-        assert.equal(whole(value), whole(shown), `Overview row ${row} (${metric || 'Spending'}) matches the Spending page`);
-      }
+      assert.equal(whole(homeIn), whole(await tile('Coming in')), 'money in = Coming in');
+      assert.equal(whole(homeOut), whole(spent + await tile('Debt payments')), 'spending on Home = spending + debt payments');
+      assert.equal(whole(homeSaved), whole(await tile('Saved (net)')), 'to savings = saved (net)');
     },
   },
   {

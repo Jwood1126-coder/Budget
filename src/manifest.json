@@ -10,6 +10,7 @@
     "engine/plan.js",
     "engine/debt.js",
     "engine/forecast.js",
+    "engine/balances.js",
     "engine/state.js",
     "engine/attention.js"
   ],

@@ -1,9 +1,11 @@
 'use strict';
 /*
- * Overview: what is coming in, what is going out, what remains — planned (typical month)
- * next to actual (latest complete month) — plus the decisions that need attention.
- * Joint-account scope uses the imported shared accounts; whole-household scope adds full pay
- * and personally paid bills from the budget, and says plainly what is unknown.
+ * Home: four plain answers, from the household's own recent months (joint accounts).
+ *   1. What is comfortable to save and spend this month?
+ *   2. Where does that leave us? (balances now)
+ *   3. If we keep this up, where do we end up? (balances projected on the current track)
+ *   4. What if we change something? (money in / spending / saving sliders, redrawn as they move)
+ * Everything granular (categories, plan lines, data checks) lives in the other views.
  */
 (function (root) {
   const UI = root.BudgetUI;
@@ -12,227 +14,289 @@
   const fmt = UI.fmt;
   const c = UI.c;
 
-  const SCOPE_OPTIONS = [{ value: 'joint', label: 'Joint accounts' }, { value: 'household', label: 'Whole household' }];
-  const TIMING_TEXT = {
-    conservative: 'a typical month (2 biweekly paychecks, never the occasional third)',
-    average: 'the annual monthly average (includes extra paychecks spread over the year)',
-    actual: 'actual paydays in the coming month',
-  };
+  const HORIZONS = [{ value: 12, label: '1 year' }, { value: 24, label: '2 years' }, { value: 60, label: '5 years' }];
+  const HISTORY_MONTHS = 24;
+  const CONTROLS = [
+    { key: 'inCents', id: 'home-in', label: 'Money coming in', usualKey: 'inCents', help: 'Pay and transfers into your joint accounts, per month.' },
+    { key: 'outCents', id: 'home-out', label: 'Spending', usualKey: 'outCents', help: 'Everything paid out: bills, groceries, loans, everything else.' },
+    { key: 'savedCents', id: 'home-saved', label: 'Moved to savings', usualKey: 'savedCents', help: 'Out of checking into savings each month. It is still your money.' },
+  ];
+  const whole = cents => fmt.money(cents, { whole: true });
+  const dollars = cents => Math.round(cents / 100).toLocaleString('en-US');
+  const signed = cents => fmt.money(cents, { whole: true, signed: true });
+  const yearsText = months => (months % 12 === 0 ? (months / 12 === 1 ? '1 year' : months / 12 + ' years') : months + ' months');
 
-  /** Actual flows for one month across joint accounts, each traceable to a Spending link. */
-  function actualMonth(ctx, month) {
-    const L = E.ledger;
-    const rows = L.filter(ctx.txns, { months: [month], scope: 'joint' });
-    const s = L.summarize(rows);
-    const income = s.incomeCents + s.contributionsCents;
-    const remains = income - s.spendingCents - s.debtPaymentsCents - s.savedNetCents;
-    return { s, income, remains, coverage: ctx.coverageMap[month] };
+  /** Everything Home needs, worked out once per data/state change. */
+  function model(ctx) {
+    return ctx.memo('home-model', () => {
+      const txns = ctx.realTxns || ctx.txns;
+      const bal = ctx.state.plan.balances || {};
+      const hist = E.balances.history(txns, ctx.dataset, { entered: bal.accounts || {}, asOf: bal.accountsAsOf || null, months: ctx.months });
+      const flows = E.balances.monthlyFlows(txns, ctx.dataset, { months: ctx.months, coverageMap: ctx.coverageMap, planning: true });
+      const usual = E.balances.usual(flows, { count: 12 });
+      const comfy = E.balances.comfortable(flows, { count: 12 });
+      return { hist, flows, usual, comfy };
+    });
   }
 
-  /** Split the plan into the same buckets the actuals use. */
-  function planBuckets(summary, planBills) {
-    const typeOf = new Map((planBills || []).map(b => [b.id, b.type]));
-    let debt = 0, otherBills = 0;
-    for (const line of summary.bills.lines || []) {
-      if (line.cents === null || line.cents === undefined) continue;
-      if ((line.type || typeOf.get(line.id)) === 'debt') debt += line.cents; else otherBills += line.cents;
-    }
-    const personal = (summary.personal || []).reduce((a, p) => a + (summary.scope === 'household' ? (p.spendingCents || 0) : 0), 0);
-    return {
-      income: summary.income.totalCents,
-      incomeLowerBound: summary.income.lowerBoundCents ?? null,
-      spending: summary.spending.targetsCents + otherBills + personal,
-      debt,
-      saved: summary.savings.totalCents,
-      remains: summary.remainingCents,
-    };
+  /** The amounts the what-if uses: the household's own, else the usual ones. */
+  function chosen(ctx, m) {
+    const h = ctx.state.ui.home || {};
+    const pick = k => (Number.isInteger(h[k]) ? h[k] : m.usual[k]);
+    return { inCents: pick('inCents'), outCents: pick('outCents'), savedCents: pick('savedCents'), changed: ['inCents', 'outCents', 'savedCents'].some(k => Number.isInteger(h[k]) && h[k] !== m.usual[k]) };
   }
 
-  /**
-   * Usual spending in categories the plan has no number for. Without this, a budget with blank
-   * targets would show a "remaining" figure that is far too high.
-   */
-  function unbudgeted(ctx, month) {
-    if (!month) return { total: 0, list: [] };
-    const win = ctx.state.plan.settings.comparisonWindow || 3;
-    // Planning baseline: rows the household left out of planning (a one-off episode) don't count,
-    // and categories without a regular monthly pattern (irregular, new) are not projected as monthly.
-    const cmp = ctx.memo('overview-cmp-plan:' + month + win, () => E.compare.usual(ctx.txns, ctx.dataset, { month, window: win, planning: true }));
-    const targets = ctx.state.plan.targets || {};
-    const billCats = new Set((ctx.state.plan.bills || []).filter(b => b.category && b.monthlyCents !== null && (ctx.scope === 'household' || b.fundedFrom === 'joint')).map(b => b.category));
-    const list = cmp.categories.filter(x => (x.averageCents || 0) > 0 && !['irregular', 'new'].includes(x.signal) && !billCats.has(x.category) && !(typeof targets[x.category] === 'number'));
-    return { total: list.reduce((a, x) => a + x.averageCents, 0), list };
+  /** Without a savings account in the data, "savings" means what is moved out to savings from now on. */
+  const hasSavings = m => m.hist.groups.savings.kind !== 'none';
+
+  function projectionOf(m, vals, months) {
+    const latest = m.hist.latest;
+    return E.balances.project({
+      startMonth: E.months.add(latest.month, 1), months,
+      start: { checking: latest.checking, savings: latest.savings },
+      inCents: vals.inCents, outCents: vals.outCents, savedCents: vals.savedCents,
+    });
   }
 
-  /** Name the basis the plan column really uses (a 3-paycheck month is not "typical"). */
-  function planHeading(plan) {
-    if (plan.timing === 'actual' && plan.month) return 'Plan · ' + fmt.month(plan.month) + ' paydays';
-    if (plan.timing === 'average') return 'Plan · average month';
-    return 'Plan · typical month';
-  }
-
-  function flowTable(ctx, plan, actual, month) {
-    const p = planBuckets(plan, ctx.state.plan.bills);
-    const href = params => ctx.href('spending', { period: month, scope: 'joint', ...params });
-    const actualCell = (cents, params, note) => {
-      if (!actual) return '<span class="muted">No complete month yet</span>';
-      return `<a href="${esc(href(params))}">${esc(fmt.money(cents, { whole: true }))}</a>${note ? `<small>${note}</small>` : ''}`;
-    };
-    const planIncome = p.income !== null ? esc(fmt.money(p.income, { whole: true }))
-      : p.incomeLowerBound !== null ? `At least ${esc(fmt.money(p.incomeLowerBound, { whole: true }))}<small>Some take-home pay is unknown</small>`
-        : '<span class="tone-bad">Unknown</span><small>Enter pay details in Budget</small>';
-    const gap = unbudgeted(ctx, month);
-    const unsetTargets = (plan.missing || []).filter(m => m.area === 'targets' && !String(m.id || '').startsWith('personal:')).length;
-    const gapNote = gap.total > 0 ? `<small class="tone-warn">Before about ${esc(fmt.money(gap.total, { whole: true }))} of usual spending with no target</small>`
-      : unsetTargets ? `<small class="tone-warn">Leaves out ${unsetTargets} spending target${unsetTargets === 1 ? '' : 's'} not set yet</small>` : '';
-    const remainsPlan = p.remains === null ? '<span class="tone-bad">Unknown</span><small>Needs complete income</small>'
-      : `<strong class="${p.remains < 0 ? 'tone-bad' : ''}">${esc(fmt.money(p.remains, { whole: true }))}</strong>${gapNote}`;
-    const remainsActual = actual ? `<strong class="${actual.remains < 0 ? 'tone-bad' : ''}">${esc(fmt.money(actual.remains, { whole: true }))}</strong>` : '—';
-    const rows = [
-      { label: 'Coming in', sub: ctx.scope === 'joint' ? 'Pay deposited to joint + contributions' : 'Full take-home pay', plan: planIncome, actual: actualCell(actual?.income, { kind: 'income' }, actual ? `${fmt.money(actual.s.payrollCents, { whole: true })} pay · ${fmt.money(actual.s.contributionsCents, { whole: true })} contributions` : '') },
-      { label: 'Spending', sub: 'Bills, groceries, everything consumed', plan: esc(fmt.money(p.spending, { whole: true })) + (gap.total > 0 ? `<small><a href="${esc(ctx.href('budget', { section: 'targets' }))}">${gap.list.length} usual categor${gap.list.length === 1 ? 'y has' : 'ies have'} no target</a></small>` : ''), actual: actualCell(actual?.s.spendingCents, {}, actual && actual.s.refundsCents ? `after ${fmt.money(actual.s.refundsCents, { whole: true })} refunds` : '') },
-      { label: 'Debt payments', sub: 'Loans and financing (not card bills paid in full)', plan: esc(fmt.money(p.debt, { whole: true })), actual: actualCell(actual?.s.debtPaymentsCents, { kind: 'debt' }) },
-      { label: 'Saved', sub: 'Moved to savings — not spending', plan: esc(fmt.money(p.saved, { whole: true })), actual: actualCell(actual?.s.savedNetCents, { kind: 'transfer' }) },
-      { label: 'What remains', sub: 'In − spending − debt − saved', plan: remainsPlan, actual: remainsActual, total: true },
+  // ------------------------------------------------------------------ the chart
+  function chartHtml(ctx, m, vals, horizon) {
+    const h = m.hist;
+    const end = h.latest.index;
+    const from = Math.max(0, end - HISTORY_MONTHS + 1);
+    const pastMonths = h.months.slice(from, end + 1);
+    const plan = projectionOf(m, vals, horizon);
+    const track = projectionOf(m, m.usual, horizon);
+    const labels = pastMonths.concat(plan.rows.map(r => r.month));
+    const past = vals => vals.slice(from, end + 1);
+    const changeNote = h.total.kind === 'change' ? ' (change)' : '';
+    const series = [
+      { name: 'Total' + changeNote, values: past(h.total.values).concat(plan.rows.map(r => r.total)), cls: 'series-1' },
+      { name: 'Checking' + (h.groups.checking.kind === 'change' ? ' (change)' : ''), values: past(h.groups.checking.values).concat(plan.rows.map(r => r.checking)), cls: 'series-2' },
     ];
-    const actualHead = actual ? `Actual · ${fmt.month(month)}` : 'Actual';
-    return `<div class="flow-table" role="table" aria-label="Plan compared with actual">
-      <div class="flow-row flow-head" role="row"><span role="columnheader"></span><span role="columnheader">${esc(planHeading(plan))}</span><span role="columnheader">${esc(actualHead)}${ctx.scope === 'household' ? '<small>joint accounts only</small>' : ''}</span></div>
-      ${rows.map(r => `<div class="flow-row${r.total ? ' flow-total' : ''}" role="row"><span role="rowheader"><strong>${esc(r.label)}</strong><small>${esc(r.sub)}</small></span><span role="cell" class="num">${r.plan}</span><span role="cell" class="num">${r.actual}</span></div>`).join('')}
-    </div>`;
-  }
-
-  function scopeExplainer(ctx, plan) {
-    if (ctx.scope === 'joint') {
-      return `<p class="fine">Joint accounts are the shared checking, card and savings accounts in your imported data. Pay that goes straight to a personal account, and bills paid from personal accounts, are outside this view. ${plan.bills.excludedUnknownFunding?.length ? `<strong>Not counted here until you confirm who pays:</strong> ${plan.bills.excludedUnknownFunding.map(b => esc(b.label) + ' (' + esc(fmt.money(b.cents)) + ')').join(', ')}.` : ''}</p>`;
-    }
-    return `<p class="fine">Whole household adds each person's full take-home pay and the bills paid from personal accounts, using your Budget inputs. Transfers between your own accounts are never counted as extra income. Imported actuals still cover only the joint accounts.</p>`;
-  }
-
-  function attentionCard(ctx) {
-    const items = ctx.attention();
-    if (!items.length) return c.card(c.notice({ tone: 'good', title: 'Nothing urgent.', body: 'Inputs are filled in and the data has no open review items.' }), { title: 'Needs your attention' });
-    const tone = { action: 'bad', decision: 'warn', info: 'info' };
-    const label = { action: 'Action', decision: 'Decision', info: 'Note' };
-    const top = items.slice(0, 7);
-    const list = `<ul class="attention-list">${top.map(it => `<li class="attention-item">
-        <div>${c.badge(label[it.severity] || 'Note', tone[it.severity] || 'info')} <strong>${esc(it.title)}</strong>${it.detail ? `<p>${esc(it.detail)}</p>` : ''}</div>
-        ${it.route ? `<a class="btn btn-small btn-secondary" href="${esc(it.route)}">${esc(it.cta || 'Open')}<span class="sr-only">: ${esc(it.title)}</span></a>` : ''}
-      </li>`).join('')}</ul>`;
-    const more = items.length > top.length ? c.disclosure(`${items.length - top.length} more`, `<ul class="attention-list">${items.slice(top.length).map(it => `<li class="attention-item"><div><strong>${esc(it.title)}</strong>${it.detail ? `<p>${esc(it.detail)}</p>` : ''}</div>${it.route ? `<a class="btn btn-small btn-secondary" href="${esc(it.route)}">Open</a>` : ''}</li>`).join('')}</ul>`, { cls: 'attention-more' }) : '';
-    return c.card(list + more, { title: 'Needs your attention', subtitle: 'Decisions and missing facts that change the numbers, most important first.', id: 'attention' });
-  }
-
-  function categoriesCard(ctx, month) {
-    if (!month) return c.card(c.empty('Load transaction data to see where money went.', c.linkButton('Load data', ctx.href('data'))), { title: 'Where the money went' });
-    const win = ctx.state.plan.settings.comparisonWindow || 3;
-    const cmp = ctx.memo('overview-cmp:' + month + win, () => E.compare.usual(ctx.txns, ctx.dataset, { month, window: win }));
-    const items = cmp.categories.filter(x => x.actualCents !== 0).slice(0, 8).map(x => {
-      const flag = ['higher', 'seasonal_higher'].includes(x.signal) ? c.badge(fmt.diff(x.diffCents, { whole: true }), 'warn', { title: x.explanation })
-        : ['lower', 'seasonal_lower'].includes(x.signal) ? c.badge(fmt.diff(x.diffCents, { whole: true }), 'info', { title: x.explanation })
-          : x.signal === 'irregular' ? c.badge('Irregular', 'neutral', { title: x.explanation }) : '';
-      // Seasonal categories are compared with the same month last year, as in Spending; an
-      // irregular bill has no meaningful monthly average, so no marker is drawn.
-      const lastYear = x.basis === 'last_year' && x.seasonal && x.seasonal.lastYearCents !== null;
-      const reference = x.signal === 'irregular' ? null : lastYear ? x.seasonal.lastYearCents : x.averageCents;
-      const sub = x.signal === 'irregular' && x.irregular ? `Irregular · last paid ${fmt.month(x.irregular.month)} (${fmt.money(x.irregular.cents, { whole: true })})`
-        : lastYear ? `Same month last year ${fmt.money(x.seasonal.lastYearCents, { whole: true })} (seasonal)`
-          : x.averageCents === null ? 'No usual amount yet' : `Usual ${fmt.money(x.averageCents, { whole: true })}`;
-      return { label: x.category, value: x.actualCents, reference, href: ctx.href('spending', { period: month, cat: x.category }), sub, badge: flag };
-    });
-    const flagged = cmp.categories.filter(x => ['higher', 'seasonal_higher'].includes(x.signal));
-    const body = `${c.barList({ items, label: 'Spending by category, ' + fmt.month(month), referenceName: `Usual (${cmp.usableCount}-month average)` })}
-      <p class="fine">Usual = average of ${cmp.usableCount} full month${cmp.usableCount === 1 ? '' : 's'} before ${esc(fmt.month(month))}${cmp.baselineMonths.length ? ` (${esc(fmt.month(cmp.baselineMonths[0]))} – ${esc(fmt.month(cmp.baselineMonths[cmp.baselineMonths.length - 1]))})` : ''}. Heating and cooling are compared with the same month last year instead. A category is marked only when it differs by at least $100 <em>and</em> 25%. ${flagged.length ? `${flagged.length} marked higher than usual.` : ''}</p>`;
-    return c.card(body, { title: 'Where the money went', subtitle: `${fmt.monthLong(month)} · top categories`, actions: c.linkButton('All categories', ctx.href('spending', { period: month }), { variant: 'ghost' }), id: 'where' });
-  }
-
-  /** Months with negative cash flow; months whose net is unknown are never reported as fine. */
-  function negativeMetric(ctx, proj) {
-    const s = proj.summary;
-    const unknown = s.unknownNetMonths || [];
-    const neg = s.negativeMonths;
-    const label = 'Months with more going out than coming in';
-    if (unknown.length === proj.rows.length) {
-      return c.metric({ label, value: 'Unknown', sub: 'No month is known yet: some income or personal spending is missing', href: ctx.href('forecast') });
-    }
-    const list = neg.length ? neg.slice(0, 3).map(fmt.month).join(', ') + (neg.length > 3 ? '…' : '') : 'None among known months';
-    return c.metric({
-      label, value: String(neg.length), tone: neg.length ? 'warn' : '',
-      status: unknown.length ? c.badge('Known months only', 'warn') : '',
-      sub: unknown.length ? `${esc(list)}. ${unknown.length} month${unknown.length === 1 ? ' is' : 's are'} unknown.` : (neg.length ? esc(list) : 'None in the next year'),
-      href: ctx.href('forecast'),
+    if (hasSavings(m)) series.push({ name: 'Savings' + (h.groups.savings.kind === 'change' ? ' (change)' : ''), values: past(h.groups.savings.values).concat(plan.rows.map(r => r.savings)), cls: 'series-3' });
+    else series.push({ name: 'Moved to savings from now', values: pastMonths.map(() => null).concat(plan.rows.map(r => r.savings)), cls: 'series-3' });
+    if (vals.changed) series.push({ name: 'Total if nothing changes', values: pastMonths.map((x, i) => (i === pastMonths.length - 1 ? h.total.values[end] : null)).concat(track.rows.map(r => r.total)), cls: 'series-muted', noEndLabel: true });
+    return c.lineChart({
+      id: 'home-chart',
+      title: 'Joint account balances, past ' + pastMonths.length + ' months and the next ' + yearsText(horizon),
+      series, labels, projectFrom: pastMonths.length, nowLabel: 'Now',
+      tableCaption: 'Balances at the end of each month',
     });
   }
 
-  function forecastCard(ctx) {
-    const scenario = ctx.state.scenarios[0];
-    let proj;
-    try { proj = ctx.project(scenario.id, { months: 12 }); } catch (err) { return c.card(c.notice({ tone: 'warn', title: 'Forecast unavailable', body: esc(err.message) }), { title: 'Next 12 months' }); }
-    const s = proj.summary;
-    const cum = s.endCumulativeCents;
-    const extra = proj.rows.filter(r => (r.incomeLines || []).some(l => l.basis === 'actual' && l.count >= 3));
-    const goals = proj.goals || [];
-    const short = goals.filter(g => g.status === 'short');
-    const metrics = `<div class="metrics">
-      ${c.metric({
-        label: 'Change in ' + (ctx.scope === 'joint' ? 'joint ' : '') + 'cash over 12 months',
-        value: cum === null ? 'Unknown' : fmt.money(cum, { whole: true, signed: true }),
-        tone: cum !== null && cum < 0 ? 'bad' : '',
-        status: cum !== null && proj.missing.length ? c.badge('Incomplete', 'warn') : '',
-        sub: cum === null ? 'Needs complete income inputs'
-          : proj.missing.length ? `Leaves out ${proj.missing.length} missing amount${proj.missing.length === 1 ? '' : 's'} (${esc(proj.missing.slice(0, 2).map(m => m.label).join('; '))}${proj.missing.length > 2 ? '…' : ''}), so the real change is likely lower`
-            : 'If the budget is followed exactly',
-        href: ctx.href('forecast'),
-      })}
-      ${negativeMetric(ctx, proj)}
-      ${c.metric({ label: 'Savings goals on track', value: goals.length ? `${goals.filter(g => g.status === 'funded').length} of ${goals.length}` : '—', tone: short.length ? 'warn' : '', sub: short.length ? 'Short: ' + short.map(g => g.label).join(', ') : goals.length ? 'Within this horizon' : 'Add goals in Budget', href: ctx.href('budget', { section: 'savings' }) })}
-    </div>`;
-    const notes = [];
-    if (extra.length) notes.push(`Months with a third paycheck: ${extra.map(r => fmt.month(r.month)).join(', ')}. The typical-month plan does not count on them.`);
-    if (proj.missing.length) notes.push(`${proj.missing.length} input${proj.missing.length === 1 ? ' is' : 's are'} missing and left out of these totals (not treated as $0 spending).`);
-    const others = ctx.state.scenarios.slice(1);
-    const compare = others.length ? `<p class="fine">Compare with ${others.slice(0, 3).map(sc => `<a href="${esc(ctx.href('forecast', { scenario: sc.id }))}">${esc(sc.name)}</a>`).join(', ')} in Forecast.</p>` : '';
-    return c.card(metrics + (notes.length ? `<ul class="fine-list">${notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : '') + compare, { title: 'Next 12 months', subtitle: `Current budget, ${ctx.scope === 'joint' ? 'joint accounts' : 'whole household'} · starting ${fmt.month(ctx.forecastStart)}`, id: 'next12' });
-  }
-
-  function dataStatus(ctx) {
-    if (!ctx.months.length) {
-      return c.notice({ tone: 'info', title: 'No transactions loaded', body: 'The budget and forecast work without them. To see actual spending, import your bank exports (Data & privacy explains how; nothing leaves this device).', actions: c.linkButton('Load data', ctx.href('data'), { variant: 'primary' }) });
-    }
-    const partial = ctx.months.filter(m => ctx.coverageMap[m]?.status !== 'full');
-    return `<p class="fine data-status">Data covers ${esc(fmt.month(ctx.months[0]))} – ${esc(fmt.month(ctx.months[ctx.months.length - 1]))}. Latest complete month: <strong>${esc(ctx.latestComplete ? fmt.month(ctx.latestComplete) : 'none yet')}</strong>.${partial.length ? ` ${partial.length} month${partial.length === 1 ? ' has' : 's have'} incomplete coverage and ${partial.length === 1 ? 'is' : 'are'} left out of averages (<a href="${esc(ctx.href('review', { queue: 'coverage' }))}">see which</a>).` : ''}</p>`;
-  }
-
-  function render(ctx) {
-    const month = ctx.latestComplete;
-    let plan;
-    try { plan = ctx.plan({ timing: ctx.state.plan.settings.incomeTiming }); } catch (err) { plan = null; }
-    const actual = month ? actualMonth(ctx, month) : null;
-    const header = c.pageHeader({
-      eyebrow: 'Overview',
-      title: 'Where things stand',
-      subtitle: (() => {
-        const basis = !plan ? 'a typical month' : plan.timing === 'actual' && plan.month ? `${esc(fmt.monthLong(plan.month))} (counting its actual paydays)` : plan.timing === 'average' ? 'an average month (extra paychecks spread over the year)' : 'a typical month';
-        return month ? `Your plan for ${basis} next to what actually happened in ${esc(fmt.monthLong(month))}, the latest month with complete data.` : `Your plan for ${basis}. Load transactions to compare it with what actually happened.`;
-      })(),
-      actions: c.segmented({ label: 'Show', name: 'scope', options: SCOPE_OPTIONS, value: ctx.scope, action: 'set-scope' }),
+  // ------------------------------------------------------------------ the answers
+  function answers(ctx, m, vals, horizon) {
+    const h = m.hist;
+    const latest = h.latest;
+    const month = E.months.add(latest.month, 1);
+    const plan = projectionOf(m, vals, horizon);
+    const track = projectionOf(m, m.usual, horizon);
+    const end = track.rows[track.rows.length - 1];
+    const yearAgo = h.total.values[latest.index - 12];
+    const isBalance = h.total.kind === 'balance';
+    const nowTile = c.metric({
+      label: isBalance ? 'You have now' : 'Change since your data starts',
+      value: whole(latest.total),
+      sub: `${isBalance ? '' : 'Not a balance: enter one below. '}Checking ${esc(whole(latest.checking))}${hasSavings(m) ? ` · savings ${esc(whole(latest.savings))}` : ''}, end of ${esc(fmt.month(latest.month))}${Number.isInteger(yearAgo) ? `<br>${esc(signed(latest.total - yearAgo))} over the last 12 months` : ''}`,
     });
-    const flow = plan
-      ? c.card(flowTable(ctx, plan, actual, month) + scopeExplainer(ctx, plan) + `<p class="fine">Plan income uses ${esc(TIMING_TEXT[plan.timing] || plan.timing)}. ${plan.income.lines.some(l => l.assumption) ? '<strong>Assumption:</strong> ' + plan.income.lines.filter(l => l.assumption).map(l => esc(l.assumption)).join(' ') : ''} Actual figures exclude card bills paid in full and transfers between your own accounts; click any amount to see the transactions behind it.</p>`,
-        { title: 'Coming in, going out, what remains', id: 'flows', actions: c.linkButton('Edit budget', ctx.href('budget'), { variant: 'ghost' }) })
-      : c.card(c.notice({ tone: 'warn', title: 'The budget could not be calculated', body: 'Open Budget to check the inputs.' }), { title: 'Coming in, going out, what remains' });
-    return `${header}
-      ${ctx.dataset.isSynthetic ? c.notice({ tone: 'info', title: 'You are looking at a fictional sample household.', body: 'Every name, merchant and amount is invented. Load your own exports in Data &amp; privacy; they stay on this device.' }) : ''}
-      ${ctx.app.datasetError ? c.notice({ tone: 'bad', title: 'Your data file could not be read', body: esc(ctx.app.datasetError) }) : ''}
-      <div class="stack">
-        ${dataStatus(ctx)}
-        <div class="overview-grid">
-          <div class="stack">${flow}${categoriesCard(ctx, month)}</div>
-          <div class="stack">${attentionCard(ctx)}${forecastCard(ctx)}</div>
+    const comfy = m.comfy;
+    const spendUpTo = m.usual.inCents - comfy.comfortableCents;
+    const saveTile = comfy.comfortableCents > 0
+      ? c.metric({ label: `Comfortable to save in ${fmt.monthLong(month).split(' ')[0]}`, value: whole(comfy.comfortableCents), tone: 'good', sub: `Then spend up to ${esc(whole(spendUpTo))} (you usually spend ${esc(whole(m.usual.outCents))})${m.usual.savedCents > 0 ? `. Counts the ${esc(whole(m.usual.savedCents))} you already move to savings.` : ''}` })
+      : c.metric({ label: `Comfortable to save in ${fmt.monthLong(month).split(' ')[0]}`, value: '$0', tone: 'warn', sub: `In most recent months spending used up what came in (usually ${esc(whole(m.usual.inCents))} in, ${esc(whole(m.usual.outCents))} out)` });
+    const trackTile = c.metric({
+      label: `On your current track, in ${yearsText(horizon)}`,
+      value: whole(end.total),
+      tone: end.total < latest.total ? 'bad' : '',
+      sub: `${esc(signed(end.total - latest.total))} from now · ${hasSavings(m) ? 'savings' : 'moved to savings'} ${esc(whole(end.savings))}${track.firstShortMonth ? `<br><strong class="tone-bad">Checking runs out in ${esc(fmt.month(track.firstShortMonth))}</strong>` : ''}`,
+    });
+    return { tiles: `<div class="metrics home-answers">${saveTile}${nowTile}${trackTile}</div>`, month, plan, track };
+  }
+
+  /** The "this month" split of a usual month's money, and how "comfortable" was worked out. */
+  function thisMonth(ctx, m, month) {
+    const u = m.usual, comfy = m.comfy;
+    const save = Math.min(comfy.comfortableCents, Math.max(0, u.inCents - u.outCents));
+    const cushion = Math.max(0, u.inCents - u.outCents - save);
+    const short = Math.max(0, u.outCents - u.inCents);
+    const total = Math.max(u.inCents, u.outCents) || 1;
+    const seg = (cls, cents, text) => (cents > 0 ? `<span class="home-split-seg ${cls}" style="flex-basis:${(cents / total * 100).toFixed(2)}%" title="${esc(text)}"></span>` : '');
+    const bar = `<div class="home-split" aria-hidden="true">${seg('is-spend', Math.min(u.outCents, u.inCents), 'Usual spending')}${seg('is-save', save, 'Comfortable to save')}${seg('is-cushion', cushion, 'Cushion')}${seg('is-short', short, 'More out than in')}</div>`;
+    const range = comfy.months.length ? `${fmt.month(comfy.months[0].month)}–${fmt.month(comfy.months[comfy.months.length - 1].month)}` : '';
+    const list = `<ul class="home-split-legend">
+        <li><span class="key key-swatch is-spend" aria-hidden="true"></span>Usual spending <strong>${esc(whole(u.outCents))}</strong></li>
+        <li><span class="key key-swatch is-save" aria-hidden="true"></span>Comfortable to save <strong>${esc(whole(save))}</strong></li>
+        ${cushion ? `<li><span class="key key-swatch is-cushion" aria-hidden="true"></span>Cushion for an expensive month <strong>${esc(whole(cushion))}</strong></li>` : ''}
+        ${short ? `<li><span class="key key-swatch is-short" aria-hidden="true"></span>More going out than coming in <strong>${esc(whole(short))}</strong></li>` : ''}
+      </ul>`;
+    const how = c.disclosure('How these numbers are worked out', `<p>From your last ${comfy.count} complete month${comfy.count === 1 ? '' : 's'} (${esc(range)}), joint accounts only. A usual month brings in ${esc(whole(u.inCents))} and ${esc(whole(u.outCents))} goes out, leaving ${esc(whole(comfy.typicalLeftCents))} on average. But months differ: what was left ranged from ${esc(whole(comfy.lowestCents))} to ${esc(whole(comfy.highestCents))}. “Comfortable to save” is the amount left over in ${comfy.monthsAtLeast} of those ${comfy.count} months (rounded down to $50), so most months can afford it and an expensive month is covered by the cushion.</p>
+      <p>Moving money to savings does not change your total: it moves it from checking to savings. One-off costs you left out of planning in Review are left out of “usual”. Transfers between your own accounts and card bills paid in full are not counted as spending.</p>`, { cls: 'home-how', id: 'home-how' });
+    return c.card(`<p class="home-lede">A usual month brings in <strong>${esc(whole(u.inCents))}</strong>. Here is how it splits:</p>${bar}${list}${how}`,
+      { title: `${fmt.monthLong(month)}: what’s comfortable`, id: 'home-month' });
+  }
+
+  // ------------------------------------------------------------------ what if
+  function controlsHtml(ctx, m, vals) {
+    const max = (usual, cur) => {
+      const top = Math.max(usual * 2, cur * 1.25, 100000);
+      return Math.ceil(top / 50000) * 50000;
+    };
+    const rows = CONTROLS.map(k => {
+      const usual = m.usual[k.usualKey];
+      const cur = vals[k.key];
+      const hi = max(usual, cur);
+      return `<div class="home-control">
+        <div class="home-control-head"><label for="${k.id}">${esc(k.label)}</label>
+          <span class="input-money home-amount"><span aria-hidden="true">$</span><input id="${k.id}-amount" type="text" inputmode="decimal" autocomplete="off" data-home-text="${k.key}" value="${esc(dollars(cur))}" aria-label="${esc(k.label)} per month, in dollars" aria-describedby="${k.id}-help"></span></div>
+        <input id="${k.id}" type="range" min="0" max="${hi / 100}" step="25" value="${Math.round(cur / 100)}" data-home="${k.key}" aria-describedby="${k.id}-help" aria-valuetext="${esc(whole(cur))} a month">
+        <p class="field-help" id="${k.id}-help">${esc(k.help)} Usually ${esc(whole(usual))}.</p>
+      </div>`;
+    }).join('');
+    const comfy = m.comfy.comfortableCents;
+    const tryIt = comfy > m.usual.savedCents ? c.button(`Try saving ${whole(comfy)} a month`, { action: 'home:try-comfortable', id: 'home-try', cls: 'btn-small' }) : '';
+    return `<div class="home-whatif-grid">
+        <div class="home-controls" role="group" aria-label="What if">${rows}</div>
+        <div class="home-outcome">
+          <div id="home-result" class="home-result" aria-live="polite">${resultHtml(ctx, m, vals)}</div>
+          <div class="home-control-actions">${tryIt}${c.button('Back to usual amounts', { action: 'home:reset', id: 'home-reset', cls: 'btn-small', disabled: !vals.changed })}</div>
         </div>
       </div>`;
   }
 
+  function resultHtml(ctx, m, vals) {
+    const horizon = (ctx.state.ui.home || {}).horizon || 24;
+    const plan = projectionOf(m, vals, horizon);
+    const track = projectionOf(m, m.usual, horizon);
+    const end = plan.rows[plan.rows.length - 1], base = track.rows[track.rows.length - 1];
+    const diff = end.total - base.total;
+    const left = vals.inCents - vals.outCents - vals.savedCents;
+    return `<p class="home-result-line">Each month: ${esc(whole(vals.inCents))} in − ${esc(whole(vals.outCents))} spent − ${esc(whole(vals.savedCents))} to savings = <strong class="${left < 0 ? 'tone-bad' : ''}">${esc(signed(left))}</strong> in checking.</p>
+      <p class="home-result-big">In ${esc(yearsText(horizon))}: <strong>${esc(whole(end.total))}</strong></p>
+      <p class="home-result-line">Checking ${esc(whole(end.checking))} · ${hasSavings(m) ? 'savings' : 'moved to savings'} ${esc(whole(end.savings))}.${vals.changed ? ` That is <strong class="${diff < 0 ? 'tone-bad' : 'tone-good'}">${esc(signed(diff))}</strong> compared with your current track.` : ' This is your current track.'}</p>
+      ${plan.firstShortMonth ? `<p class="home-result-warn">${c.badge('Warning', 'bad')} Checking would run out in ${esc(fmt.monthLong(plan.firstShortMonth))}.</p>` : ''}`;
+  }
+
+  // ------------------------------------------------------------------ month by month
+  function patternCard(ctx, m) {
+    const shown = m.flows.slice(-HISTORY_MONTHS);
+    if (!shown.some(f => f.inCents !== null)) return '';
+    const chart = c.lineChart({
+      id: 'home-pattern',
+      title: 'Money in, spending and saving each month',
+      labels: shown.map(f => f.month),
+      series: [
+        { name: 'Money in', values: shown.map(f => f.inCents), cls: 'series-1' },
+        { name: 'Spending', values: shown.map(f => f.outCents), cls: 'series-2' },
+        { name: 'To savings', values: shown.map(f => f.savedCents), cls: 'series-3' },
+      ],
+      tableCaption: 'Money in, spending and saving per month (complete months only)',
+    });
+    const gaps = shown.filter(f => f.inCents === null).length;
+    return c.card(chart + `<p class="fine">${gaps ? `${gaps} month${gaps === 1 ? ' is' : 's are'} not shown because some account’s export does not cover the whole month. ` : ''}Spending includes bills and loan payments, after refunds. <a href="${esc(ctx.href('spending'))}">See where the money went</a>.</p>`,
+      { title: 'Month by month', subtitle: 'Your spending and saving pattern.', id: 'home-pattern-card' });
+  }
+
+  /** Accounts whose export has no running balance: one typed-in balance turns "change" into real balances. */
+  function balancePrompt(ctx, m) {
+    const missing = m.hist.accounts.filter(a => a.source !== 'bank');
+    if (!missing.length) return '';
+    const bal = ctx.state.plan.balances || {};
+    const lastDay = ctx.months.length ? E.months.end(ctx.months[ctx.months.length - 1]) : '';
+    const needs = missing.filter(a => a.source === 'change');
+    const fields = missing.map(a => c.moneyField({ id: 'home-bal-' + a.id, label: a.label, path: 'plan.balances.accounts.' + a.id, cents: (bal.accounts || {})[a.id] ?? null, allowNegative: true, placeholder: 'Not entered', message: a.label + ' balance saved.', help: '' })).join('');
+    const date = `<div class="field"><label for="home-bal-asof">Balance on</label><input id="home-bal-asof" type="date" data-bind="plan.balances.accountsAsOf" data-type="date" data-message="Balance date saved." value="${esc(bal.accountsAsOf || '')}" aria-describedby="home-bal-asof-help home-bal-asof-error"><p class="field-help" id="home-bal-asof-help">${lastDay ? `Your data ends ${esc(fmt.date(lastDay))}: a statement balance for that day works best.` : ''}</p><p class="field-error" id="home-bal-asof-error" role="alert" hidden></p></div>`;
+    const body = `<p>${needs.length ? `Your ${esc(needs.map(a => a.label).join(' and '))} export has no running balance, so the chart shows how ${needs.length === 1 ? 'it has' : 'they have'} changed, not what ${needs.length === 1 ? 'it holds' : 'they hold'}. Enter one balance from a statement or your bank’s app and the whole history is worked out from the transactions.` : 'These balances come from what you entered. Update them any time.'}</p><div class="home-bal-fields">${fields}${date}</div>`;
+    return needs.length ? c.card(body, { title: 'Add a balance', id: 'home-balances' }) : c.disclosure('Balances you entered', body, { cls: 'home-entered', id: 'home-entered' });
+  }
+
+  function render(ctx) {
+    const header = c.pageHeader({
+      title: 'Where you stand',
+      subtitle: ctx.months.length ? `Your joint accounts, from your data through ${esc(fmt.date(E.months.end(ctx.months[ctx.months.length - 1])))}.` : 'Your joint accounts.',
+    });
+    const sample = ctx.dataset.isSynthetic ? c.notice({ tone: 'info', title: 'This is a fictional sample household.', body: 'Load your own bank exports in Data &amp; privacy; they stay on this device.' }) : '';
+    if (ctx.app.datasetError) return header + c.notice({ tone: 'bad', title: 'Your data file could not be read', body: esc(ctx.app.datasetError) });
+    if (!ctx.months.length) {
+      return header + c.card(c.empty('Load your bank exports to see where you stand. Nothing leaves this device.', c.linkButton('Load data', ctx.href('data'), { variant: 'primary' })), { title: 'No data yet' });
+    }
+    const m = model(ctx);
+    if (!m.hist.latest || m.usual.inCents === null) {
+      const why = !m.hist.accounts.length ? 'There is no joint checking or savings account in the data.' : m.usual.inCents === null ? 'There is no complete month yet: every account’s export must cover a whole month.' : 'No month has a known balance yet.';
+      return header + sample + c.card(c.empty(esc(why) + ' <a href="' + esc(ctx.href('review', { queue: 'coverage' })) + '">See which months are covered</a>.'), { title: 'Not enough data yet' }) + balancePrompt(ctx, m);
+    }
+    const vals = chosen(ctx, m);
+    const horizon = (ctx.state.ui.home || {}).horizon || 24;
+    const a = answers(ctx, m, vals, horizon);
+    const chartCard = c.card(`<div class="home-chart" id="home-chart-slot">${chartHtml(ctx, m, vals, horizon)}</div>
+      <div class="home-whatif"><h3 class="home-whatif-h">What if…</h3>${controlsHtml(ctx, m, vals)}</div>`, {
+      title: 'Where this leads', id: 'home-track',
+      subtitle: 'Solid: what happened. Dashed: where you are heading. Move the sliders to try a change.',
+      actions: c.segmented({ label: 'Look ahead', name: 'home-horizon', options: HORIZONS, value: horizon, action: 'home:horizon' }),
+    });
+    const reviewCount = (() => { try { const q = ctx.reviewQueues().counts || {}; return (q.uncertain || 0) + (q.duplicates || 0); } catch { return 0; } })();
+    const more = `<p class="home-more">More detail when you want it: <a href="${esc(ctx.href('spending'))}">where the money went</a> · <a href="${esc(ctx.href('budget'))}">bills and goals</a> · <a href="${esc(ctx.href('forecast'))}">bigger plans like a baby or a repair</a>${reviewCount ? ` · <a href="${esc(ctx.href('review'))}">${reviewCount} transaction${reviewCount === 1 ? '' : 's'} could use a check (optional)</a>` : ''}.</p>`;
+    return `${header}<div class="stack">${sample}${a.tiles}${chartCard}${thisMonth(ctx, m, a.month)}${balancePrompt(ctx, m)}${patternCard(ctx, m)}${more}</div>`;
+  }
+
+  // ------------------------------------------------------------------ live sliders
+  function readVals(container, ctx, m) {
+    const vals = chosen(ctx, m);
+    for (const el of container.querySelectorAll('input[type="range"][data-home]')) vals[el.dataset.home] = Math.round(Number(el.value) * 100);
+    vals.changed = ['inCents', 'outCents', 'savedCents'].some(k => vals[k] !== m.usual[k]);
+    return vals;
+  }
+
+  function redraw(container, ctx, m) {
+    const vals = readVals(container, ctx, m);
+    const horizon = (ctx.state.ui.home || {}).horizon || 24;
+    const slot = container.querySelector('#home-chart-slot');
+    if (slot) slot.innerHTML = chartHtml(ctx, m, vals, horizon);
+    const res = container.querySelector('#home-result');
+    if (res) res.innerHTML = resultHtml(ctx, m, vals);
+    const reset = container.querySelector('#home-reset');
+    if (reset) reset.disabled = !vals.changed;
+  }
+
+  function commit(ctx, key, cents) {
+    ctx.app.update(st => E.state.setPath(st, 'ui.home.' + key, cents), { undoable: false });
+  }
+
+  function afterRender(container, ctx) {
+    if (!container.querySelector('.home-controls')) return;
+    const m = model(ctx);
+    for (const el of container.querySelectorAll('input[type="range"][data-home]')) {
+      el.addEventListener('input', () => {
+        const cents = Math.round(Number(el.value) * 100);
+        const text = container.querySelector(`[data-home-text="${el.dataset.home}"]`);
+        if (text) text.value = dollars(cents);
+        el.setAttribute('aria-valuetext', whole(cents) + ' a month');
+        redraw(container, ctx, m);
+      });
+      el.addEventListener('change', () => commit(ctx, el.dataset.home, Math.round(Number(el.value) * 100)));
+    }
+    for (const el of container.querySelectorAll('input[data-home-text]')) {
+      const apply = () => {
+        let cents;
+        try { cents = E.money.inputToCents(el.value); } catch { cents = null; }
+        if (cents === null) { el.value = dollars(readVals(container, ctx, m)[el.dataset.homeText]); return; }
+        commit(ctx, el.dataset.homeText, cents);
+      };
+      el.addEventListener('change', apply);
+      el.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); apply(); } });
+    }
+  }
+
+  const actions = {
+    'home:try-comfortable': ctx => {
+      const m = model(ctx);
+      ctx.app.update(st => E.state.setPath(st, 'ui.home.savedCents', m.comfy.comfortableCents), { undoable: false });
+    },
+    'home:reset': ctx => {
+      ctx.app.update(st => ({ ...st, ui: { ...st.ui, home: { ...st.ui.home, inCents: null, outCents: null, savedCents: null } } }), { undoable: false, message: 'Back to your usual amounts.' });
+    },
+    'home:horizon': (ctx, el) => ctx.app.update(st => E.state.setPath(st, 'ui.home.horizon', Number(el.dataset.value || el.value)), { undoable: false }),
+  };
+
   UI.views = UI.views || {};
-  UI.views.overview = { title: 'Overview', render };
+  UI.views.overview = { title: 'Home', render, afterRender, actions };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

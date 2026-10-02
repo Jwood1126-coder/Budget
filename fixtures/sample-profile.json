@@ -376,7 +376,11 @@
     "balances": {
       "jointCashCents": null,
       "asOf": null,
-      "note": "Unknown: account balances are not in the exports. Enter the joint cash balance and the date it was true."
+      "note": "Unknown: the joint cash balance for the forecast is not entered yet. The checking export has a running balance; the savings balance below was read off a (fictional) statement.",
+      "accounts": {
+        "joint-savings": 406466
+      },
+      "accountsAsOf": "2026-09-30"
     },
     "settings": {
       "incomeTiming": "conservative",

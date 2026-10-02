@@ -402,12 +402,21 @@
         continue;
       }
 
+      // The running balance after this row, as the bank printed it (cash accounts only: a card
+      // export's "balance" is what is owed, which is not money the household has).
+      let balance = null;
+      if (has('balance') && account.type !== 'credit_card' && account.type !== 'loan') {
+        try { balance = E.money.parseAmount(get('balance')); } catch { balance = null; }
+        if (!Number.isSafeInteger(balance) || Math.abs(balance) > E.money.MAX_INPUT_CENTS) balance = null;
+      }
+
       raw.push({
         row: line,
         date,
         transactionDate,
         description: get('description').replace(/\s+/g, ' ') || '(no description)',
         amount,
+        balance,
         category: get('category') || null,
         type: get('type')
       });
@@ -472,6 +481,7 @@
       matchIds: [],
       sourceFile: fileName,
       sourceRow: x.row,
+      ...(x.balance !== null ? { balanceCents: x.balance } : {}),
       note: x.transactionDate && x.transactionDate !== x.date ? 'Transaction date ' + x.transactionDate + '.' : ''
     }));
     let start = null, end = null;
@@ -1081,6 +1091,7 @@
       flags: t.flags.slice(), pairId: t.pairId ?? null, matchIds: t.matchIds.slice(),
       sourceFile: t.sourceFile ?? null, sourceRow: t.sourceRow ?? null, note: t.note || ''
     };
+    if (Number.isSafeInteger(t.balanceCents)) out.balanceCents = t.balanceCents;
     if (t.personId) out.personId = t.personId;
     return out;
   }

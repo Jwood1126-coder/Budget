@@ -44,7 +44,7 @@
     label: 80, note: 500, categoryKey: 80, id: 80, txnId: 200, datasetId: 200, route: 1000,
     scenarios: 20, events: 200, incomes: 12, bills: 60, savings: 30, debts: 30, personal: 2,
     compareIds: 3, targets: 200, references: 100, checklist: 200, dismissed: 500,
-    ledgerEdits: 50000, history: 200, splits: 50, migrationNotes: 200,
+    ledgerEdits: 50000, history: 200, splits: 50, migrationNotes: 200, balanceAccounts: 30,
     legacySnapshot: 200000, workbookChars: 25000000
   });
 
@@ -246,7 +246,12 @@
     ['note', NOTE]
   ];
 
-  const BALANCE_FIELDS = [['jointCashCents', SIGNED_CENTS], ['asOf', DATE], ['note', NOTE]];
+  // accounts: a balance the household entered per account id (for exports without a running
+  // balance), all true at the end of accountsAsOf.
+  const BALANCE_FIELDS = [
+    ['jointCashCents', SIGNED_CENTS], ['asOf', DATE], ['note', NOTE],
+    ['accounts', rule('centsmap', { max: LIMITS.balanceAccounts, def: {} })], ['accountsAsOf', DATE]
+  ];
 
   const SETTINGS_FIELDS = [
     ['incomeTiming', oneOf(['conservative', 'average', 'actual'], 'conservative')],
@@ -315,10 +320,16 @@
   const WHATIF_FIELDS = [['excludePendingReimbursements', bool(false)], ['excludeBusinessCandidates', bool(false)]];
   const WHATIF_DEFAULT = { excludePendingReimbursements: false, excludeBusinessCandidates: false };
 
+  // Home's "what if": amounts per month for the projection (null = the usual amount from recent
+  // months) and how far ahead to look.
+  const HOME_FIELDS = [['inCents', CENTS], ['outCents', CENTS], ['savedCents', CENTS], ['horizon', oneOf([12, 24, 60], 24)]];
+  const HOME_DEFAULT = { inCents: null, outCents: null, savedCents: null, horizon: 24 };
+
   const UI_FIELDS = [
     ['scope', oneOf(['joint', 'household'], 'joint')],
     ['lastRoute', rule('route', { def: '#/overview' })],
     ['whatIf', rule('object', { fields: WHATIF_FIELDS, def: WHATIF_DEFAULT })],
+    ['home', rule('object', { fields: HOME_FIELDS, def: HOME_DEFAULT })],
     ['dismissed', rule('boolmap', { max: LIMITS.dismissed, def: {} })]
   ];
 
@@ -423,6 +434,19 @@
       }
       case 'route':
         return typeof value === 'string' && value.startsWith('#/') && value.length <= LIMITS.route ? ok(value) : bad('Not a page address in this app.');
+      case 'centsmap': {
+        if (!isObj(value)) return bad('Expected a list of account balances.');
+        const out = {};
+        const dropped = [];
+        for (const [k, v] of Object.entries(value)) {
+          const key = k.trim();
+          const okValue = v === null || (Number.isSafeInteger(v) && Math.abs(v) <= E.money.MAX_INPUT_CENTS);
+          if (!isValidId(key) || !okValue || Object.keys(out).length >= r.max) { dropped.push(k); continue; }
+          out[key] = v;
+        }
+        if (dropped.length && strict) return bad('Every balance needs an account and an amount in whole cents.');
+        return ok(out, dropped.length ? 'dropped balances that were not valid (' + dropped.slice(0, 5).map(k => JSON.stringify(k)).join(', ') + ')' : null);
+      }
       case 'boolmap': {
         if (!isObj(value)) return bad('Expected a set of yes/no settings.');
         const out = {};
@@ -650,7 +674,7 @@
     return {
       people: clone(people),
       incomes: [], bills: [], debts: [], targets: {}, savings: [], personalSpending: [],
-      balances: { jointCashCents: null, asOf: null, note: '' },
+      balances: { jointCashCents: null, asOf: null, note: '', accounts: {}, accountsAsOf: null },
       settings: { incomeTiming: 'conservative', planningBaseline: 'actual', comparisonWindow: 3 }
     };
   }
@@ -957,7 +981,7 @@
       ledgerEdits: {},
       references: [],
       checklist: {},
-      ui: { scope: 'joint', lastRoute: '#/overview', whatIf: clone(WHATIF_DEFAULT), dismissed: {} },
+      ui: { scope: 'joint', lastRoute: '#/overview', whatIf: clone(WHATIF_DEFAULT), home: clone(HOME_DEFAULT), dismissed: {} },
       meta
     };
   }
@@ -2165,13 +2189,13 @@
         autoCreate: v => (PEOPLE.includes(v) ? { personId: v, monthlyCents: null, note: '' } : null)
       }),
       targets: N.map(CENTS, LIMITS.targets),
-      balances: N.item(BALANCE_FIELDS),
+      balances: N.item(BALANCE_FIELDS, { accounts: N.map(SIGNED_CENTS, LIMITS.balanceAccounts) }),
       settings: N.item(SETTINGS_FIELDS)
     }),
     scenarios: N.list('id', N.item(SCENARIO_FIELDS, { assumptions: N.item(ASSUMPTION_FIELDS), events: N.list('id', N.event()) })),
     compareIds: N.leaf(rule('compareIds')),
     checklist: N.map(STRICT_BOOL, LIMITS.checklist),
-    ui: N.item(UI_FIELDS, { whatIf: N.item(WHATIF_FIELDS), dismissed: N.map(STRICT_BOOL, LIMITS.dismissed) }),
+    ui: N.item(UI_FIELDS, { whatIf: N.item(WHATIF_FIELDS), home: N.item(HOME_FIELDS), dismissed: N.map(STRICT_BOOL, LIMITS.dismissed) }),
     meta: N.item([['createdAt', ISO_TIME], ['updatedAt', ISO_TIME], ['migrationNotes', NOTES_RULE]])
   });
 

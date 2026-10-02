@@ -1,0 +1,273 @@
+'use strict';
+/*
+ * BudgetEngine.balances — bank balances over time and a simple pattern-based projection.
+ *
+ * History: the balance of each joint cash account (checking, savings) at the end of every month.
+ *   - "bank": the export's running-balance column gives the balance at the end of each day that
+ *     has rows; other days follow from the transactions in between.
+ *   - "entered": one balance the household typed in (plan.balances.accounts + accountsAsOf).
+ *   - "change": neither is available, so the line shows the change since the account's first
+ *     covered day (a real pattern, but not a real balance), and says so.
+ *   A month-end value is null when the days between it and the nearest known balance are not
+ *   all covered by that account's exports: unknown is never shown as "unchanged".
+ *
+ * Patterns: money in, money out and money saved per month, from the same counting rules as the
+ * rest of the app (joint accounts only), for months whose coverage is full.
+ *
+ * Projection: each month, checking += in − out − saved and savings += saved. No interest, no
+ * growth: plain arithmetic the household can check.
+ */
+(function (root) {
+  const E = root.BudgetEngine || (root.BudgetEngine = {});
+
+  const CASH_TYPES = ['checking', 'savings', 'other'];
+  const GROUPS = ['checking', 'savings'];
+  const GROUP_LABEL = { checking: 'Checking', savings: 'Savings' };
+
+  const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+  const isCents = v => Number.isSafeInteger(v);
+
+  /** Joint cash accounts in the data (cards and loans are not balances you can spend from). */
+  function cashAccounts(dataset) {
+    return (dataset.accounts || []).filter(a => CASH_TYPES.includes(a.type) && (a.scope || 'joint') === 'joint')
+      .map(a => ({ id: a.id, label: a.label || a.id, type: a.type, group: a.type === 'savings' ? 'savings' : 'checking', coverage: Array.isArray(a.coverage) ? a.coverage : [] }));
+  }
+
+  /** Are all days in (fromDay, toDay] covered by the account's export ranges? */
+  function coveredBetween(ranges, fromDay, toDay) {
+    if (toDay <= fromDay) return true;
+    const spans = ranges.map(r => [E.dates.dayNumber(r.start), E.dates.dayNumber(r.end)]).sort((a, b) => a[0] - b[0]);
+    let next = fromDay + 1;
+    for (const [s, e] of spans) {
+      if (s > next) break;
+      if (e >= next) next = e + 1;
+      if (next > toDay) return true;
+    }
+    return next > toDay;
+  }
+
+  /**
+   * End-of-day balance from the running-balance rows of one day. The end balance is the one that
+   * is not the starting point of another row that day (balance − amount), whatever order the
+   * export lists them in; when that is ambiguous, file order decides.
+   */
+  function endOfDay(rows) {
+    if (rows.length === 1) return rows[0].balanceCents;
+    const before = new Set(rows.map(r => r.balanceCents - r.amountCents));
+    const ends = rows.filter(r => !before.has(r.balanceCents));
+    if (ends.length === 1) return ends[0].balanceCents;
+    const pool = ends.length ? ends : rows;
+    // Exports list newest first or oldest first; follow the file's own order for that day.
+    const byRow = pool.filter(r => Number.isInteger(r.sourceRow)).sort((a, b) => a.sourceRow - b.sourceRow);
+    if (!byRow.length) return pool[pool.length - 1].balanceCents;
+    return byRow[0].newestFirst ? byRow[0].balanceCents : byRow[byRow.length - 1].balanceCents;
+  }
+
+  /** Known balances of one account: [{ day, cents, source }] sorted by day. */
+  function anchorsFor(account, rows, entered, asOf) {
+    const out = [];
+    const withBalance = rows.filter(t => isCents(t.balanceCents));
+    if (withBalance.length) {
+      // Per export file: newest-first when its first rows are dated later than its last rows.
+      const byFile = new Map();
+      for (const t of withBalance) {
+        const k = t.sourceFile || '';
+        if (!byFile.has(k)) byFile.set(k, []);
+        byFile.get(k).push(t);
+      }
+      const newest = new Map();
+      for (const [k, list] of byFile) {
+        const sorted = list.filter(t => Number.isInteger(t.sourceRow)).sort((a, b) => a.sourceRow - b.sourceRow);
+        newest.set(k, sorted.length > 1 && sorted[0].date > sorted[sorted.length - 1].date);
+      }
+      const byDay = new Map();
+      for (const t of withBalance) {
+        const d = E.dates.dayNumber(t.date);
+        if (!byDay.has(d)) byDay.set(d, []);
+        byDay.get(d).push({ balanceCents: t.balanceCents, amountCents: t.amountCents, sourceRow: t.sourceRow, newestFirst: newest.get(t.sourceFile || '') });
+      }
+      for (const [day, list] of byDay) out.push({ day, cents: endOfDay(list), source: 'bank' });
+    } else if (isCents(entered) && E.dates.isDate(asOf)) {
+      out.push({ day: E.dates.dayNumber(asOf), cents: entered, source: 'entered' });
+    }
+    return out.sort((a, b) => a.day - b.day);
+  }
+
+  /**
+   * Month-end balances per joint cash account and per group.
+   * @param {object[]} txns effective transactions (ledger.applyEdits, no what-if)
+   * @param {object} dataset normalized dataset
+   * @param {{ entered?: object, asOf?: string|null, months?: string[] }} opts entered = { [accountId]: cents|null }
+   */
+  function history(txns, dataset, opts = {}) {
+    const months = opts.months || E.ledger.months(dataset);
+    const entered = isObj(opts.entered) ? opts.entered : {};
+    const accounts = cashAccounts(dataset).map(a => {
+      // Rows marked as duplicate copies were never real money; everything else moved the balance.
+      const rows = txns.filter(t => t.accountId === a.id && t.excluded !== 'duplicate')
+        .map(t => ({ ...t, day: E.dates.dayNumber(t.date) }))
+        .sort((x, y) => x.day - y.day);
+      const anchors = anchorsFor(a, rows, entered[a.id], opts.asOf);
+      let source = anchors.length ? anchors[0].source : 'change';
+      let base = anchors;
+      if (!anchors.length) {
+        // No known balance: measure the change from the start of the account's first covered day.
+        const first = a.coverage.length ? Math.min(...a.coverage.map(r => E.dates.dayNumber(r.start))) : (rows.length ? rows[0].day : null);
+        base = first === null ? [] : [{ day: first - 1, cents: 0, source: 'change' }];
+      }
+      const flowBetween = (from, to) => { // sum of flows in (from, to]
+        let s = 0;
+        for (const t of rows) if (t.day > from && t.day <= to) s += t.amountCents;
+        return s;
+      };
+      const values = months.map(m => {
+        if (!base.length) return null;
+        const end = E.dates.dayNumber(E.months.end(m));
+        let anchor = null;
+        for (const x of base) { if (x.day <= end) anchor = x; else break; }
+        if (anchor) {
+          if (!coveredBetween(a.coverage, anchor.day, end)) return null;
+          return anchor.cents + flowBetween(anchor.day, end);
+        }
+        const after = base[0];
+        if (!coveredBetween(a.coverage, end, after.day)) return null;
+        return after.cents - flowBetween(end, after.day);
+      });
+      const note = source === 'bank' ? 'From the running balance in the bank export.'
+        : source === 'entered' ? 'From the balance you entered for ' + E.dates.label(opts.asOf) + ', worked back and forward with the transactions.'
+          : 'No balance known: shows the change since ' + (base.length ? E.dates.label(E.dates.fromDayNumber(base[0].day + 1)) : 'the first export') + ', not the balance.';
+      return { id: a.id, label: a.label, group: a.group, source, values, note };
+    });
+    const groups = {};
+    for (const g of GROUPS) {
+      const list = accounts.filter(a => a.group === g);
+      // A group is a real balance only when every account in it has one.
+      const kind = !list.length ? 'none' : list.every(a => a.source !== 'change') ? 'balance' : 'change';
+      const values = months.map((m, i) => {
+        if (!list.length) return null;
+        const vals = list.map(a => (kind === 'balance' || a.source === 'change' ? a.values[i] : changeOf(a, i)));
+        return vals.some(v => v === null) ? null : vals.reduce((s, v) => s + v, 0);
+      });
+      groups[g] = { label: GROUP_LABEL[g], kind, values, accounts: list.map(a => a.id) };
+    }
+    const present = GROUPS.filter(g => groups[g].kind !== 'none');
+    const totalKind = !present.length ? 'none' : present.every(g => groups[g].kind === 'balance') ? 'balance' : 'change';
+    const total = months.map((m, i) => {
+      if (!present.length) return null;
+      const vals = present.map(g => (totalKind === 'change' && groups[g].kind === 'balance' ? groupChange(groups[g].values, i) : groups[g].values[i]));
+      return vals.some(v => v === null) ? null : vals.reduce((s, v) => s + v, 0);
+    });
+    let latestIndex = -1;
+    for (let i = months.length - 1; i >= 0; i--) if (total[i] !== null) { latestIndex = i; break; }
+    return {
+      months, accounts, groups, total: { kind: totalKind, values: total },
+      latest: latestIndex === -1 ? null : { month: months[latestIndex], index: latestIndex, checking: groups.checking.values[latestIndex], savings: groups.savings.values[latestIndex], total: total[latestIndex] },
+      complete: totalKind === 'balance',
+    };
+  }
+
+  // When a group mixes real balances with "change" lines, every line is shown as change since
+  // its first known month so the sum still means something.
+  function changeOf(account, i) {
+    const first = account.values.find(v => v !== null);
+    const v = account.values[i];
+    return v === null || first === undefined ? null : v - first;
+  }
+  function groupChange(values, i) {
+    const first = values.find(v => v !== null);
+    const v = values[i];
+    return v === null || first === undefined ? null : v - first;
+  }
+
+  /**
+   * Money in, money out and money saved per month (joint accounts, full months only).
+   * in = pay and other income + transfers in from personal accounts;
+   * out = spending (after refunds) + debt payments + purchases marked as business costs (they
+   * still left the account); saved = net moved into savings.
+   * With `planning: true`, one-offs left out of the planning baseline are left out of `out`.
+   */
+  function monthlyFlows(txns, dataset, { months, coverageMap, planning = false } = {}) {
+    const list = months || E.ledger.months(dataset);
+    const cov = coverageMap || E.ledger.coverageMap(dataset);
+    const byMonth = new Map(list.map(m => [m, []]));
+    // Excluded rows are kept here: summarize() skips them, but business purchases still left the account.
+    for (const t of E.ledger.filter(txns, { scope: 'joint', includeExcluded: true })) {
+      const m = t.date.slice(0, 7);
+      if (byMonth.has(m)) byMonth.get(m).push(t);
+    }
+    return list.map(m => {
+      const status = cov[m] ? cov[m].status : 'none';
+      if (status !== 'full') return { month: m, coverage: status, inCents: null, outCents: null, savedCents: null, leftCents: null };
+      const rows = byMonth.get(m).filter(t => !(planning && t.planningExcluded));
+      const s = E.ledger.summarize(rows);
+      let business = 0;
+      for (const t of rows) if (t.excluded === 'business' && t.kind === 'spend') business += 0 - t.amountCents;
+      const inCents = s.incomeCents + s.contributionsCents;
+      const outCents = s.spendingCents + s.debtPaymentsCents + business;
+      const savedCents = s.savedNetCents;
+      return { month: m, coverage: status, inCents, outCents, savedCents, leftCents: inCents - outCents - savedCents, businessCents: business };
+    });
+  }
+
+  /** Average of the last `count` full months ending at `endMonth` (default: the latest full one). */
+  function usual(flows, { count = 12, endMonth } = {}) {
+    const full = flows.filter(f => f.inCents !== null && (!endMonth || f.month <= endMonth));
+    const used = full.slice(-count);
+    if (!used.length) return { inCents: null, outCents: null, savedCents: null, months: [], count: 0 };
+    const avg = key => E.money.divide(used.reduce((s, f) => s + f[key], 0), used.length);
+    return { inCents: avg('inCents'), outCents: avg('outCents'), savedCents: avg('savedCents'), months: used.map(f => f.month), count: used.length };
+  }
+
+  /**
+   * What is comfortable to set aside each month: the amount left over (in − out) in at least
+   * three of every four recent full months, rounded down to $50 and never below $0. Months vary;
+   * an average would be too much in a quarter or more of them.
+   * @returns {{ comfortableCents: number|null, typicalLeftCents: number|null, monthsAtLeast: number,
+   *             count: number, lowestCents: number|null, highestCents: number|null, months: object[] }}
+   */
+  function comfortable(flows, { count = 12, endMonth } = {}) {
+    const used = flows.filter(f => f.inCents !== null && (!endMonth || f.month <= endMonth)).slice(-count);
+    if (!used.length) return { comfortableCents: null, typicalLeftCents: null, monthsAtLeast: 0, count: 0, lowestCents: null, highestCents: null, months: [] };
+    const lefts = used.map(f => f.inCents - f.outCents);
+    const sorted = lefts.slice().sort((a, b) => a - b);
+    const q = sorted[Math.floor(sorted.length * 0.25)];
+    const comfortableCents = Math.max(0, Math.floor(q / 5000) * 5000);
+    return {
+      comfortableCents,
+      typicalLeftCents: E.money.divide(lefts.reduce((s, v) => s + v, 0), lefts.length),
+      monthsAtLeast: lefts.filter(v => v >= comfortableCents).length,
+      count: used.length,
+      lowestCents: sorted[0], highestCents: sorted[sorted.length - 1],
+      months: used.map((f, i) => ({ month: f.month, leftCents: lefts[i] })),
+    };
+  }
+
+  /**
+   * Month-by-month projection from the latest balances.
+   * @param {{ startMonth: string, months: number, start: { checking: number|null, savings: number|null },
+   *           inCents: number, outCents: number, savedCents: number }} o startMonth = first projected month
+   * @returns {{ rows: { month, checking, savings, total }[], firstShortMonth: string|null, monthlyLeftCents: number }}
+   */
+  function project(o) {
+    if (!E.months.isMonth(o.startMonth)) throw new E.ValidationError('A projection needs a start month.', 'startMonth');
+    const n = Math.max(0, Math.min(120, Math.floor(o.months || 0)));
+    for (const k of ['inCents', 'outCents', 'savedCents']) {
+      if (!isCents(o[k])) throw new E.ValidationError('A projection needs whole-cent amounts for money in, out and saved.', k);
+    }
+    const left = o.inCents - o.outCents - o.savedCents;
+    let checking = isCents(o.start && o.start.checking) ? o.start.checking : 0;
+    let savings = isCents(o.start && o.start.savings) ? o.start.savings : 0;
+    const rows = [];
+    let firstShortMonth = null;
+    for (let i = 0; i < n; i++) {
+      const month = E.months.add(o.startMonth, i);
+      checking += left;
+      savings += o.savedCents;
+      if (firstShortMonth === null && checking < 0) firstShortMonth = month;
+      rows.push({ month, checking, savings, total: checking + savings });
+    }
+    return { rows, firstShortMonth, monthlyLeftCents: left };
+  }
+
+  E.balances = { CASH_TYPES, GROUPS, cashAccounts, coveredBetween, endOfDay, history, monthlyFlows, usual, comfortable, project };
+})(typeof globalThis !== 'undefined' ? globalThis : this);
