@@ -147,8 +147,9 @@
    *   entered = { [accountId]: cents|null }; enteredAsOf = { [accountId]: 'YYYY-MM-DD' } (each
    *   account's own date; asOf for accounts without one)
    * Each account also reports `anchor` (its latest known balance { date, cents, source }), `gap`
-   * (days assumed empty between its export and an entered balance), and `first` / `last`: the
-   * earliest and latest days whose end-of-day balance is known ({ date, cents }), or null.
+   * (days assumed empty between its export and an entered balance), `first` / `last`: the
+   * earliest and latest days whose end-of-day balance is known ({ date, cents }), or null, and
+   * `assumed`: per month, true when that value was worked across days in the gap.
    */
   function history(txns, dataset, opts = {}) {
     const months = opts.months || E.ledger.months(dataset);
@@ -190,6 +191,18 @@
         return after.cents - flowBetween(end, after.day);
       };
       const values = months.map(m => valueAt(E.dates.dayNumber(E.months.end(m))));
+      // Which month-end values were worked across days in the gap (an assumption, not a fact):
+      // the days between the month end and the balance it was worked from overlap the gap.
+      const gapLo = gap ? E.dates.dayNumber(gap.from) : null, gapHi = gap ? E.dates.dayNumber(gap.to) : null;
+      const viaGap = end => {
+        if (!gap || !base.length) return false;
+        let from = null;
+        for (const x of base) { if (x.day <= end) from = x; else break; }
+        const day = from ? from.day : base[0].day;
+        const lo = Math.min(day, end) + 1, hi = Math.max(day, end);
+        return Math.max(lo, gapLo) <= Math.min(hi, gapHi);
+      };
+      const assumed = months.map((m, i) => values[i] !== null && viaGap(E.dates.dayNumber(E.months.end(m))));
       // Days with a known end-of-day balance: each anchor and the covered stretch it touches.
       let lo = null, hi = null;
       const blocks = blocksOf(ranges);
@@ -215,6 +228,7 @@
         anchor: latest ? { date: E.dates.fromDayNumber(latest.day), cents: latest.cents, source: latest.source } : null,
         first: anchors.length ? point(lo) : null,
         last: anchors.length ? point(hi) : null,
+        assumed,
       };
     });
     const groups = {};

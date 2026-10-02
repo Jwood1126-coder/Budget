@@ -69,9 +69,12 @@ test('an entered balance is used at its exact date and worked back to the day be
   assert.deepEqual(chk.anchor, { date: '2026-06-10', cents: 350000, source: 'entered' }, 'the date is never moved');
   assert.equal(r.planStart, '2026-06');
   assert.equal(r.lastComplete, '2026-05');
-  // Backward through the covered transactions: 3 months of +2,000 − 1,200 on checking.
+  // Backward through the covered transactions: 3 months of +2,000 − 1,200 on checking. The balance
+  // is dated 10 June and the export ends 31 May, so every one of these rests on 1–10 June having
+  // no transactions: they are assumed, not history.
   assert.deepEqual(['2026-02', '2026-03', '2026-04', '2026-05'].map(m => [point(chk, m).cents, point(chk, m).status]),
-    [[110000, 'reconstructed'], [190000, 'reconstructed'], [270000, 'reconstructed'], [350000, 'reconstructed']]);
+    [[110000, 'assumed'], [190000, 'assumed'], [270000, 'assumed'], [350000, 'assumed']]);
+  assert.equal(point(chk, '2026-03').note, 'Assumes nothing moved between Jun 1 and Jun 10, 2026 (not in your data).');
   // The series starts at the earliest month a balance is known (Feb 28, the day before the export);
   // nothing earlier is invented, and that month's money in and out is unknown, not $0.
   assert.equal(r.firstMonth, '2026-02');
@@ -92,13 +95,15 @@ test('balance dated after the export ends: the days in between are a labelled ga
   assert.match(chk.note, /The 73 days from Jun 1, 2026 to Aug 12, 2026 are not in your data: no transactions are assumed in them\./);
   assert.ok(r.balances.notes.some(n => /Test checking: Your export ends May 31, 2026/.test(n)), 'the gap is in the notes the screen shows');
   // June and July month-ends fall in the gap: the balance stays at the entered amount there.
-  for (const m of ['2026-06', '2026-07']) assert.deepEqual([point(chk, m).cents, point(chk, m).status, point(chk, m).gap], [350000, 'reconstructed', true], m);
+  for (const m of ['2026-06', '2026-07']) assert.deepEqual([point(chk, m).cents, point(chk, m).status, point(chk, m).gap], [350000, 'assumed', true], m);
+  assert.equal(point(chk, '2026-07').note, 'Assumes nothing moved between Jun 1 and Aug 12, 2026 (not in your data).');
+  assert.ok(r.balances.notes.some(n => /Month-end balances worked out across those days are shown as assumed\.$/.test(n)));
   assert.equal(point(chk, '2026-05').gap, false);
   // August: the anchor month, pro-rated from Aug 12 (19 of 31 days left).
   const aug = point(chk, '2026-08');
   assert.deepEqual([aug.cents, aug.status, aug.anchor], [350000 + E.money.divide(-45000 * 19, 31), 'projected', true]);
-  // Before the export: as before, reconstructed through the covered transactions.
-  assert.equal(point(chk, '2026-02').cents, 110000);
+  // Before the export: worked back through the covered transactions, still across the gap.
+  assert.deepEqual([point(chk, '2026-02').cents, point(chk, '2026-02').status], [110000, 'assumed']);
 });
 
 test('pro-rating: the anchor month adds net × days left after the anchor date ÷ days in the month; later months the full net', () => {
@@ -124,7 +129,7 @@ test('a projected balance below $0 is kept as it is (never floored) and runsOut 
   assert.equal(point(chk, '2027-05').cents, -175000, 'still going down: no top-up, no floor');
   assert.equal(r.balances.runsOut, '2027-02');
   assert.deepEqual(r.balances.lowest, { month: '2027-05', cents: -175000 });
-  assert.deepEqual(point(r.balances.combined, '2027-05'), { month: '2027-05', cents: -175000, status: 'projected', anchor: false, gap: false });
+  assert.deepEqual(point(r.balances.combined, '2027-05'), { month: '2027-05', cents: -175000, status: 'projected', anchor: false, gap: false, note: null, illustrative: false });
 });
 
 test('cover from savings moves a projected checking shortfall from savings, per account only; the combined line is the same either way', () => {
@@ -202,9 +207,10 @@ test('a savings account with a balance but no export is worked back from the sav
   const sav = account(r, 'sav');
   assert.deepEqual(sav.mirroredFrom, { id: 'chk', name: 'Test checking' });
   assert.deepEqual(sav.known, { from: '2026-02-28', to: '2026-06-10' }, 'the checking export’s coverage, up to the balance date');
-  // To savings on checking = + on savings; from savings = −. Worked back from the 10 June balance.
+  // To savings on checking = + on savings; from savings = −. Worked back from the 10 June balance,
+  // across 1–10 June that the checking export does not cover: assumed.
   assert.deepEqual(['2026-02', '2026-03', '2026-04', '2026-05'].map(m => [point(sav, m).cents, point(sav, m).status]),
-    [[54000, 'reconstructed'], [64000, 'reconstructed'], [70000, 'reconstructed'], [80000, 'reconstructed']]);
+    [[54000, 'assumed'], [64000, 'assumed'], [70000, 'assumed'], [80000, 'assumed']]);
   assert.deepEqual(sav.gap, { side: 'after', from: '2026-06-01', to: '2026-06-10', days: 10 });
   assert.equal(point(sav, '2026-06').cents, 80000 + E.money.divide(6000 * 20, 30));
   assert.equal(point(sav, '2026-06').status, 'projected');
@@ -212,9 +218,10 @@ test('a savings account with a balance but no export is worked back from the sav
   assert.ok(r.balances.notes.includes('Test savings: worked back from the transfers in Test checking’s export; interest and anything moved from elsewhere are not in it.'));
   // The combined line now reaches back over the mirrored range.
   const chk = account(r, 'chk');
-  assert.equal(point(chk, '2026-02').cents, 136000);
+  assert.deepEqual([point(chk, '2026-02').cents, point(chk, '2026-02').status], [136000, 'reconstructed'], 'checking is dated at the end of its export');
   assert.equal(point(r.balances.combined, '2026-02').cents, 136000 + 54000);
-  assert.equal(point(r.balances.combined, '2026-02').status, 'reconstructed');
+  assert.equal(point(r.balances.combined, '2026-02').status, 'assumed', 'one member rests on the gap');
+  assert.equal(point(r.balances.combined, '2026-02').note, 'Assumes nothing moved between Jun 1 and Jun 10, 2026 (not in your data).');
   assert.equal(account(r, 'chk').mirroredFrom, null);
 });
 
@@ -238,6 +245,132 @@ test('two savings accounts without exports: the transfers are not split between 
   assert.ok(r.balances.notes.some(n => /^Test savings has no export of its own, and there is more than one savings account \(Test savings, Rainy-day savings\)/.test(n)));
   assert.equal(point(r.balances.combined, '2026-04').cents, null);
   assert.equal(point(r.balances.combined, '2026-05').cents, 350000 + 80000 + 15000);
+});
+
+// ------------------------------------------------------------------ assumed vs reconstructed history
+// Checking, a card and savings, covered 1 June to 30 September 2026 (or to `to`).
+function quarter({ to = '2026-09-30', savings = 'covered' } = {}) {
+  const txns = [];
+  E.months.range('2026-06', to.slice(0, 7)).forEach((m, i) => {
+    const day = d => `${m}-${String(d).padStart(2, '0')}`;
+    if (day(1) <= to) txns.push(spend('chk', day(1), 98000, 'Westbrook Home Loans', 'Mortgage'));
+    if (day(5) <= to) txns.push(deposit(day(5), 210000, 'p1'));
+    if (day(12) <= to) txns.push(spend('card', day(12), 11000 + i * 130, 'Harbor Grocer', 'Groceries'));
+    if (day(20) > to) return;
+    if (savings === 'covered') txns.push(...toSavings(day(20), 10000));
+    else txns.push(row('chk', day(20), -10000, { kind: 'transfer', subtype: 'savings', category: 'Transfer', merchant: 'Savings', description: 'XFER TO SAV 0091' }));
+  });
+  return dataset(txns, { from: '2026-06-01', to, withSavings: true, savingsCoverage: savings === 'covered' ? undefined : [] });
+}
+// Plan: checking −20,000 a month (2,100 in; 1,200 card, 1,000 bank, 100 to savings); savings +10,000.
+const QUARTER_DIALS = { dials: { p1: 210000, p2: 0, card: 120000, bank: 100000, savings: 10000 } };
+const statuses = r => r.balances.accounts.flatMap(a => a.points.map(p => p.status)).concat(r.balances.combined.points.map(p => p.status));
+
+test('regression: balances dated 2 Oct after an export ending 30 Sep — every earlier point is assumed, not history', () => {
+  const ds = quarter();
+  const plan = planWith({ accounts: { chk: 412000, sav: 95500 }, accountsAsOf: '2026-10-02' });
+  const r = run(ds, { plan, settings: QUARTER_DIALS, today: '2026-10-03' });
+  const note = 'Assumes nothing moved between Oct 1 and Oct 2, 2026 (not in your data).';
+  for (const id of ['chk', 'sav']) {
+    for (const m of ['2026-09', '2026-08']) {
+      const p = point(account(r, id), m);
+      assert.deepEqual([p.status, p.note, p.illustrative], ['assumed', note, false], id + ' ' + m);
+    }
+  }
+  assert.ok(!statuses(r).includes('reconstructed'), 'nothing is presented as history');
+  assert.deepEqual([point(r.balances.combined, '2026-09').status, point(r.balances.combined, '2026-09').note], ['assumed', note]);
+  assert.deepEqual(r.balances.assumed, {
+    from: '2026-10-01', to: '2026-10-02', days: 2, accounts: ['Test checking', 'Test savings'],
+    gaps: [{ side: 'after', from: '2026-10-01', to: '2026-10-02', days: 2, accounts: ['Test checking', 'Test savings'] }],
+  });
+  assert.equal(r.balances.assumed.days, 2);
+  // The entered balances are kept exactly, at their own date…
+  assert.deepEqual(account(r, 'chk').anchor, { date: '2026-10-02', cents: 412000, source: 'entered' });
+  assert.deepEqual(account(r, 'sav').anchor, { date: '2026-10-02', cents: 95500, source: 'entered' });
+  // …and October starts from them: entered + plan net × 29/31, whatever the gap.
+  const oct = id => point(account(r, id), '2026-10');
+  assert.deepEqual([oct('chk').cents, oct('chk').status], [412000 + E.money.divide(-20000 * 29, 31), 'projected']);
+  assert.deepEqual([oct('sav').cents, oct('sav').status], [95500 + E.money.divide(10000 * 29, 31), 'projected']);
+  assert.equal(oct('chk').cents, 412000 + T.prorate(r.plan.net, 29, 31));
+  assert.ok(r.balances.notes.some(n => /^Test checking: Your export ends Sep 30, 2026, the balance is dated Oct 2, 2026\. The 2 days from Oct 1, 2026 to Oct 2, 2026 are not in your data: no transactions are assumed in them\. Month-end balances worked out across those days are shown as assumed\.$/.test(n)));
+});
+
+test('regression: the same balances dated 30 Sep (the last day of the export) are history: reconstructed, nothing assumed', () => {
+  const ds = quarter();
+  const r = run(ds, { plan: planWith({ accounts: { chk: 412000, sav: 95500 }, accountsAsOf: '2026-09-30' }), settings: QUARTER_DIALS, today: '2026-10-03' });
+  assert.equal(r.balances.assumed, null);
+  assert.ok(!statuses(r).includes('assumed'));
+  for (const id of ['chk', 'sav']) for (const m of ['2026-06', '2026-07', '2026-08', '2026-09']) assert.deepEqual([point(account(r, id), m).status, point(account(r, id), m).note], ['reconstructed', null]);
+  assert.equal(point(account(r, 'chk'), '2026-09').cents, 412000);
+  assert.equal(point(account(r, 'chk'), '2026-10').cents, 412000 - 20000, 'a full month of plan net from the month end');
+  assert.equal(point(r.balances.combined, '2026-09').status, 'reconstructed');
+});
+
+test('regression: a balance dated 10 days before the export starts — the points after the gap are assumed', () => {
+  const ds = quarter();
+  const r = run(ds, { plan: planWith({ accounts: { chk: 300000 }, accountDates: { chk: '2026-05-22' } }), settings: QUARTER_DIALS, today: '2026-10-03' });
+  const chk = account(r, 'chk');
+  assert.deepEqual(chk.gap, { side: 'before', from: '2026-05-23', to: '2026-05-31', days: 9 });
+  assert.equal(r.months[0].month, '2026-05', 'nothing before the balance date');
+  for (const m of ['2026-05', '2026-06', '2026-07', '2026-08', '2026-09']) {
+    assert.deepEqual([point(chk, m).status, point(chk, m).note], ['assumed', 'Assumes nothing moved between May 23 and May 31, 2026 (not in your data).'], m);
+  }
+  assert.equal(point(chk, '2026-05').cents, 300000);
+  assert.equal(point(chk, '2026-06').cents, 300000 + 210000 - 98000 - 10000);
+  assert.equal(point(chk, '2026-10').status, 'projected');
+  assert.deepEqual(r.balances.assumed, { from: '2026-05-23', to: '2026-05-31', days: 9, accounts: ['Test checking'],
+    gaps: [{ side: 'before', from: '2026-05-23', to: '2026-05-31', days: 9, accounts: ['Test checking'] }] });
+});
+
+test('regression: a gap shorter than a month — the month-end inside it and every month before are assumed; a month-end after the balance date is projected from it', () => {
+  // Export ends mid-September; the balance is dated 3 October: September's month-end is in the gap.
+  const ds = quarter({ to: '2026-09-15' });
+  const r = run(ds, { plan: planWith({ accounts: { chk: 405000 }, accountDates: { chk: '2026-10-03' } }), settings: QUARTER_DIALS, today: '2026-10-05' });
+  const chk = account(r, 'chk');
+  assert.deepEqual(chk.gap, { side: 'after', from: '2026-09-16', to: '2026-10-03', days: 18 });
+  const note = 'Assumes nothing moved between Sep 16 and Oct 3, 2026 (not in your data).';
+  for (const m of ['2026-09', '2026-08', '2026-07', '2026-06']) assert.deepEqual([point(chk, m).status, point(chk, m).note], ['assumed', note], m);
+  assert.deepEqual([point(chk, '2026-09').cents, point(chk, '2026-09').gap], [405000, true]);
+  assert.deepEqual([point(chk, '2026-10').status, point(chk, '2026-10').cents], ['projected', 405000 + E.money.divide(-20000 * 28, 31)]);
+  // Balance dated 19 September, a few days after the export ends: September's month-end comes after
+  // the balance, so it is projected from it; August was worked back across 16–19 September: assumed.
+  const same = run(ds, { plan: planWith({ accounts: { chk: 405000 }, accountDates: { chk: '2026-09-19' } }), settings: QUARTER_DIALS, today: '2026-09-21' });
+  const c2 = account(same, 'chk');
+  assert.deepEqual([point(c2, '2026-09').status, point(c2, '2026-09').cents], ['projected', 405000 + E.money.divide(-20000 * 11, 30)]);
+  assert.deepEqual([point(c2, '2026-08').status, point(c2, '2026-08').note], ['assumed', 'Assumes nothing moved between Sep 16 and Sep 19, 2026 (not in your data).']);
+  assert.equal(same.balances.assumed.days, 4);
+});
+
+test('regression: a savings account mirrored from checking is assumed when its balance date is after that export ends', () => {
+  const ds = quarter({ savings: 'mirrored' });
+  const after = run(ds, { plan: planWith({ accounts: { chk: 412000, sav: 95500 }, accountsAsOf: '2026-09-30', accountDates: { sav: '2026-10-02' } }), settings: QUARTER_DIALS, today: '2026-10-03' });
+  const sav = account(after, 'sav');
+  assert.deepEqual(sav.mirroredFrom, { id: 'chk', name: 'Test checking' });
+  for (const m of ['2026-06', '2026-07', '2026-08', '2026-09']) assert.deepEqual([point(sav, m).status, point(sav, m).note], ['assumed', 'Assumes nothing moved between Oct 1 and Oct 2, 2026 (not in your data).'], m);
+  assert.equal(point(account(after, 'chk'), '2026-09').status, 'reconstructed');
+  assert.equal(point(after.balances.combined, '2026-09').status, 'assumed');
+  assert.deepEqual(after.balances.assumed.accounts, ['Test savings']);
+  // Dated at the end of the checking export: the mirrored history needs no assumption.
+  const onTime = run(ds, { plan: planWith({ accounts: { chk: 412000, sav: 95500 }, accountsAsOf: '2026-09-30' }), settings: QUARTER_DIALS, today: '2026-10-03' });
+  assert.equal(point(account(onTime, 'sav'), '2026-08').status, 'reconstructed');
+  assert.equal(point(account(onTime, 'sav'), '2026-08').cents, 95500 - 10000);
+  assert.equal(onTime.balances.assumed, null);
+});
+
+test('account lines say they are illustrative when they are projected; the combined line and simple mode do not', () => {
+  const ds = quarter();
+  const r = run(ds, { plan: planWith({ accounts: { chk: 412000, sav: 95500 }, accountsAsOf: '2026-09-30' }), settings: QUARTER_DIALS, today: '2026-10-03' });
+  assert.equal(r.balances.illustrative, 'Account lines are illustrative: card spending is taken from checking in the month it happens, not when the card is paid; the combined line is not affected.');
+  assert.equal(r.balances.illustrative, T.ILLUSTRATIVE);
+  const chk = account(r, 'chk'), sav = account(r, 'sav');
+  assert.ok(chk.points.filter(p => p.status === 'projected').every(p => p.illustrative === true));
+  assert.ok(chk.points.filter(p => p.status !== 'projected').every(p => p.illustrative === false));
+  assert.ok(sav.points.every(p => p.illustrative === false), 'savings is not affected by card timing');
+  assert.ok(r.balances.combined.points.every(p => p.illustrative === false));
+  const simple = run(ds, { plan: planWith({ jointCashCents: 500000, asOf: '2026-09-30' }), settings: QUARTER_DIALS, today: '2026-10-03' });
+  assert.equal(simple.balances.illustrative, null);
+  assert.equal(simple.balances.assumed, null);
+  assert.equal(run(ds, { settings: QUARTER_DIALS, today: '2026-10-03' }).balances.illustrative, null, 'no balances at all');
 });
 
 // ------------------------------------------------------------------ a fuller household (dials)
@@ -279,9 +412,76 @@ test('dial hints: biweekly pay is 26 a year and semimonthly 24 a year; they are 
   assert.equal(p2.perYear, 24);
   assert.equal(p2.perMonthCents, 193000);
   assert.equal(p2.lastDate, '2026-06-15');
-  // The hint is a fact beside the dial, not applied: the dial is the average of the months.
+  // The hint is a fact beside the dial, not applied. With no pay saved in Budget the dial is the
+  // average of the months, and it says that is not a confirmed setting.
   assert.equal(r.dialsByKey.p1.source, 'baseline');
+  assert.deepEqual([r.dialsByKey.p1.basisKind, r.dialsByKey.p1.needsConfirm, r.dialsByKey.p1.budgetCents], ['average', true, null]);
+  assert.equal(r.dialsByKey.p1.baselineCents, r.dialsByKey.p1.averageCents);
   assert.equal(r.dialsByKey.p1.baselineCents, E.money.divide(r.months.filter(m => m.status === 'actual' && m.complete).slice(-12).reduce((s, m) => s + m.in.p1, 0), 9));
+});
+
+// ------------------------------------------------------------------ money in: Budget pay first
+const stream = (id, personId, fields) => Object.assign({
+  id, label: id, personId, kind: 'contribution', netPerPaycheckCents: null, jointPerPaycheckCents: null, frequency: 'semimonthly', frequencyStatus: 'confirmed',
+  semimonthlyDays: [1, 15], anchorDate: null, monthlyDay: null, assumedPerMonthIfUnknown: 2, status: 'confirmed', startMonth: null, endMonth: null, note: '',
+}, fields);
+const withIncomes = incomes => Object.assign(planWith(), { incomes });
+
+test('money in: a person with pay saved in Budget plans at it (semimonthly 2 a month), not at the deposit average', () => {
+  const ds = household();
+  const plan = withIncomes([stream('Morgan to joint', 'p1', { jointPerPaycheckCents: 198750 })]);
+  const r = run(ds, { plan, today: '2026-07-03' });
+  const d = r.dialsByKey.p1;
+  assert.equal(r.planStart, '2026-07');
+  assert.deepEqual([d.budgetCents, d.basisKind, d.needsConfirm, d.source], [397500, 'budget', false, 'baseline']);
+  assert.equal(d.baselineCents, d.budgetCents);
+  assert.equal(d.planCents, 397500);
+  assert.equal(d.basis, 'From Budget: 2 × $1,987.50 to joint (semimonthly)');
+  assert.deepEqual(d.budget, { streams: [{ id: 'Morgan to joint', name: 'Morgan to joint', perPaycheckJointCents: 198750, perYear: 24, cadenceLabel: 'Twice a month (semimonthly)', monthlyCents: 397500, assumedCadence: false }], unknown: [] });
+  assert.equal(d.averageCents, E.money.divide(L.applyEdits(ds, {}).filter(t => t.personId === 'p1').reduce((s, t) => s + t.amountCents, 0), 9), 'the average is still reported');
+  assert.notEqual(d.averageCents, d.budgetCents);
+  assert.equal(d.hint.cadence, 'biweekly', 'the deposit hint is unchanged');
+  assert.equal(r.plan.in.p1, 397500);
+  assert.equal(r.months.find(m => m.month === '2026-09').in.p1, 397500, 'plan months use Budget pay');
+  // Set here: the household's own amount wins, and says so.
+  const direct = run(ds, { plan, settings: { dials: { p1: 400000 } }, today: '2026-07-03' }).dialsByKey.p1;
+  assert.deepEqual([direct.basisKind, direct.basis, direct.planCents, direct.baselineCents, direct.needsConfirm, direct.source], ['direct', 'Set here', 400000, 397500, false, 'direct']);
+});
+
+test('money in: no stream, or a stream with an unknown amount, falls back to the labelled average (unknown is not $0)', () => {
+  const ds = household();
+  const plan = withIncomes([stream('Morgan to joint', 'p1', { jointPerPaycheckCents: 198750 }), stream('Ellis transfer', 'p2', { jointPerPaycheckCents: null })]);
+  const r = run(ds, { plan, today: '2026-07-03' });
+  const p2 = r.dialsByKey.p2;
+  assert.deepEqual([p2.budgetCents, p2.basisKind, p2.needsConfirm], [null, 'average', true]);
+  assert.deepEqual(p2.budget, { streams: [], unknown: ['Ellis transfer'] });
+  assert.equal(p2.baselineCents, p2.averageCents);
+  assert.equal(p2.planCents, p2.averageCents);
+  assert.equal(p2.basis, 'Average of Oct 2025–Jun 2026 deposits, 9 months — not a confirmed setting');
+  // One known stream and one unknown: still unknown, never summed around the gap.
+  const mixed = run(ds, { plan: withIncomes([stream('Morgan to joint', 'p1', { jointPerPaycheckCents: 198750 }), stream('Morgan bonus', 'p1', { kind: 'other', frequency: 'monthly', monthlyDay: 28, jointPerPaycheckCents: null })]), today: '2026-07-03' }).dialsByKey.p1;
+  assert.deepEqual([mixed.budgetCents, mixed.basisKind, mixed.budget.unknown], [null, 'average', ['Morgan bonus']]);
+  assert.deepEqual(mixed.budget.streams.map(x => x.id), ['Morgan to joint']);
+  // No stream at all.
+  const none = run(ds, { plan: withIncomes([]), today: '2026-07-03' }).dialsByKey.p2;
+  assert.deepEqual([none.budgetCents, none.basisKind, none.needsConfirm, none.budget], [null, 'average', true, { streams: [], unknown: [] }]);
+});
+
+test('money in: ended streams and streams that start later are left out; biweekly is 26 a year (2,957.50 for 1,365), never 2 a month', () => {
+  const ds = household();
+  const plan = withIncomes([
+    stream('Morgan old job', 'p1', { kind: 'paycheck', netPerPaycheckCents: 260000, jointPerPaycheckCents: 150000, endMonth: '2026-05' }),
+    stream('Morgan new job', 'p1', { kind: 'paycheck', netPerPaycheckCents: 240000, jointPerPaycheckCents: 136500, frequency: 'biweekly', anchorDate: '2026-06-05', startMonth: '2026-06' }),
+    stream('Morgan next role', 'p1', { kind: 'paycheck', netPerPaycheckCents: 300000, jointPerPaycheckCents: 200000, startMonth: '2026-11' }),
+  ]);
+  const r = run(ds, { plan, today: '2026-07-03' });
+  const d = r.dialsByKey.p1;
+  assert.equal(d.budgetCents, 295750);
+  assert.equal(d.budgetCents, E.money.divide(136500 * 26, 12));
+  assert.notEqual(d.budgetCents, 2 * 136500);
+  assert.deepEqual(d.budget.streams.map(x => [x.id, x.perPaycheckJointCents, x.perYear, x.cadenceLabel, x.monthlyCents]), [['Morgan new job', 136500, 26, 'Every two weeks (biweekly)', 295750]]);
+  assert.equal(d.basis, 'From Budget: 26/12 × $1,365.00 to joint (biweekly, 26 a year)');
+  assert.equal(r.plan.in.p1, 295750);
 });
 
 test('baseline window: 3, 12 (all there are) and "all" complete months, named in the dial basis', () => {
@@ -296,7 +496,8 @@ test('baseline window: 3, 12 (all there are) and "all" complete months, named in
   assert.match(twelve.dialsByKey.bank.basis, /^Average of Oct 2025–Jun 2026, 9 months \(all there are\)/);
   const three = run(ds, { settings: { baselineMonths: 3 }, today: '2026-07-03' });
   assert.deepEqual(three.baseline.months, ['2026-04', '2026-05', '2026-06']);
-  assert.equal(three.dialsByKey.p2.basis, 'Average of Apr 2026–Jun 2026, 3 months');
+  // No pay saved in Budget here: the person dials stand in with the deposit average, labelled as such.
+  assert.equal(three.dialsByKey.p2.basis, 'Average of Apr 2026–Jun 2026 deposits, 3 months — not a confirmed setting');
   // Both bank bills are stable (monthly, within 10%): each counts at its latest charge.
   assert.equal(three.dialsByKey.bank.baselineCents, 145000 + (8800 + 8 * 210));
   assert.match(three.dialsByKey.bank.basis, /; regular bills at their latest amount$/);

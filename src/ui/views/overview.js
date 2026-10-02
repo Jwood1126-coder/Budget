@@ -94,8 +94,11 @@
       const b = tl.balances;
       const points = (list, account) => list.slice(from).map(p => ({
         month: p.month, cents: p.cents,
-        status: p.gap && p.cents !== null ? 'gap' : p.status,
-        note: account && p.anchor && account.anchor ? 'Known balance ' + exact(account.anchor.cents) + ' on ' + fmt.date(account.anchor.date) + '.' : '',
+        // 'assumed': the value rests on days no export covers (drawn dotted, never solid). An engine
+        // without that status only flags a month-end that falls inside those days (gap).
+        status: p.status === 'assumed' ? 'assumed' : p.gap && p.cents !== null ? 'gap' : p.status,
+        illustrative: p.illustrative === true,
+        note: [p.note ? String(p.note) : '', account && p.anchor && account.anchor ? 'Known balance ' + exact(account.anchor.cents) + ' on ' + fmt.date(account.anchor.date) + '.' : ''].filter(Boolean).join(' '),
       }));
       spec.lines = [];
       if (b.combined) spec.lines.push({ key: 'combined', name: 'Combined cash', role: 'combined', points: points(b.combined.points) });
@@ -129,12 +132,58 @@
     return spec;
   }
 
-  function captionOf(tl, mode) {
+  /** 'Oct 1–2, 2026', 'Sep 29 – Oct 2, 2026', 'Dec 30, 2025 – Jan 2, 2026', or one day. */
+  function dayRange(from, to) {
+    if (!to || from === to) return fmt.date(from);
+    const a = fmt.date(from), b = fmt.date(to);
+    if (from.slice(0, 7) === to.slice(0, 7)) return a.replace(/, \d{4}$/, '') + '–' + Number(to.slice(8, 10)) + ', ' + to.slice(0, 4);
+    if (from.slice(0, 4) === to.slice(0, 4)) return a.replace(/, \d{4}$/, '') + ' – ' + b;
+    return a + ' – ' + b;
+  }
+
+  /** The days the balance line is worked across without data (engine: balances.assumed), or null. */
+  function assumedOf(tl) {
+    const a = tl.balances && tl.balances.assumed;
+    const ok = g => g && E.dates.isDate(g.from) && (!g.to || E.dates.isDate(g.to));
+    if (!ok(a)) return null;
+    const gaps = Array.isArray(a.gaps) ? a.gaps.filter(ok) : [];
+    const list = gaps.length ? gaps : [a];
+    return { from: a.from, to: a.to || a.from, side: list.length === 1 ? list[0].side || a.side : null, gaps: list };
+  }
+
+  /** Dotted caption line: which days are assumed, and how to make the history exact. */
+  function assumedLine(as) {
+    const spans = as.gaps.map(g => dayRange(g.from, g.to || g.from));
+    const across = spans.length > 2 ? spans.slice(0, -1).join(', ') + ' and ' + spans[spans.length - 1] : spans.join(' and ');
+    const before = as.gaps.length === 1 && as.side === 'before';
+    let fix;
+    if (as.gaps.length > 1) fix = 'For exact history, enter each balance as of the last day its export covers, or export through today.';
+    else if (before) fix = 'For exact history, enter the balance as of ' + fmt.date(as.to) + ' or export from ' + fmt.date(as.from) + '.';
+    else fix = 'For exact history, enter the balance as of ' + fmt.date(E.dates.addDays(as.from, -1)) + ' or export through today.';
+    return 'Dotted: worked ' + (before ? 'forward' : 'back') + ' across ' + across + ', which your export does not cover (assumes nothing moved). ' + fix;
+  }
+
+  function captionOf(tl, mode, spec) {
+    const b = tl.balances;
     const parts = [];
-    if (mode === 'balance' && tl.balances.mode === 'accounts' && tl.balances.accounts.length) parts.push('Combined cash = ' + tl.balances.accounts.map(a => a.name).join(' + ') + '.');
-    if (tl.lastComplete) parts.push('Solid: your data through ' + fmt.month(tl.lastComplete) + '.');
+    const lines = spec && Array.isArray(spec.lines) ? spec.lines : [];
+    const assumed = mode === 'balance' ? assumedOf(tl) : null;
+    if (mode === 'balance' && b.mode === 'accounts' && b.accounts.length) parts.push('Combined cash = ' + b.accounts.map(a => a.name).join(' + ') + '.');
+    if (tl.lastComplete) {
+      // Months worked across assumed days are dotted: "solid" stops before them.
+      let solidTo = tl.lastComplete;
+      const main = lines.find(l => l.role === 'combined') || lines[0];
+      if (assumed && main) {
+        const solid = main.points.filter(p => p.month <= tl.lastComplete && p.cents !== null && p.status !== 'assumed' && p.status !== 'gap' && p.status !== 'projected');
+        const tail = main.points.filter(p => p.month <= tl.lastComplete && p.cents !== null).pop();
+        if (tail && tail.status === 'assumed') solidTo = solid.length ? solid[solid.length - 1].month : null;
+      }
+      if (solidTo) parts.push('Solid: your data through ' + fmt.month(solidTo) + '.');
+    }
     parts.push((mode === 'balance' ? 'Dashed' : 'Striped') + ': this plan from ' + fmt.month(tl.planStart) + '.');
-    if (mode === 'balance' && tl.balances.mode === 'simple' && tl.balances.label) parts.push(tl.balances.label + '.');
+    if (assumed) parts.push(assumedLine(assumed));
+    if (mode === 'balance' && b.illustrative && lines.some(l => l.role === 'account')) parts.push(String(b.illustrative));
+    if (mode === 'balance' && b.mode === 'simple' && b.label) parts.push(b.label + '.');
     return parts.join(' ');
   }
 
@@ -143,7 +192,8 @@
     const controls = tl.balances.mode === 'none'
       ? `<a class="plan-prompt" id="plan-prompt" href="#plan-balances" data-action="plan:goto-balances">Enter today’s balances below to see where the money is heading</a>`
       : c.segmented({ label: 'Show', name: 'plan-mode', options: MODES, value: mode, action: 'plan:mode', hideLabel: true });
-    const chart = UI.chart.cashChart(Object.assign(chartSpec(ctx, tl), { caption: captionOf(tl, mode), controls }));
+    const spec = chartSpec(ctx, tl);
+    const chart = UI.chart.cashChart(Object.assign(spec, { caption: captionOf(tl, mode, spec), controls }));
     const ranges = `<div class="plan-ranges">
         ${c.segmented({ label: 'Past', name: 'plan-past', options: PAST, value: tl.settings.past, action: 'plan:past' })}
         ${c.segmented({ label: 'Ahead', name: 'plan-horizon', options: AHEAD, value: tl.settings.horizon, action: 'plan:horizon' })}
@@ -237,9 +287,22 @@
     const reset = d.source !== 'baseline' ? c.button('Reset', { action: 'plan:reset-dial', data: { dial: d.key }, cls: 'btn-small dial-reset', id: id + '-reset', ariaLabel: 'Reset ' + label + ' to its baseline' }) : '';
     const set = d.source === 'direct' ? ' · set by you' : d.source === 'rows' ? ' · from the list below' : '';
     const hint = d.group === 'in' ? hintText(d) : '';
+    // A person's money in: from the pay saved in Budget, else the deposit average (not confirmed).
+    const person = d.group === 'in' && typeof d.basisKind === 'string';
+    const budgetLink = text => `<a class="dial-budget-link" id="${esc(id)}-budget" href="${esc(ctx.href('budget', { section: 'income' }))}">${esc(text)}</a>`;
+    let basis = esc(d.basis);
+    if (person && d.basisKind === 'budget') basis += ' · ' + budgetLink('Change in Budget');
+    if (person && d.needsConfirm) {
+      const unknown = d.budget && Array.isArray(d.budget.unknown) ? d.budget.unknown : [];
+      basis += (/[.!?]$/.test(d.basis) ? '' : '.') + (unknown.length ? ' ' + esc('Budget has no amount for: ' + unknown.join(', ') + '.') : '') + ' Enter the current amount here, or ' + budgetLink('save pay in Budget') + '.';
+    }
+    const unconfirmed = person && d.needsConfirm ? c.badge('Not confirmed', 'warn').replace('<span class="badge', `<span id="${esc(id)}-unconfirmed" class="badge`) : '';
+    const average = person && d.basisKind === 'budget' && isCents(d.averageCents) && isCents(d.budgetCents) && d.averageCents !== d.budgetCents
+      ? `<button type="button" class="btn btn-ghost btn-small dial-average" id="${esc(id)}-average" data-action="plan:use-average" data-dial="${esc(d.key)}" title="${esc(tl.baseline.label)}">${esc(`Use the ${tl.baseline.count}-month average (${amt(d.averageCents)})`)}</button>`
+      : '';
     return `<div class="dial" data-dial="${esc(d.key)}" data-cents="${value === null ? '' : value}">
         <div class="dial-head">
-          <label class="dial-label" for="${esc(id)}"><span class="key key-swatch ${esc(DIAL_CLS[d.key] || 'series-muted')}" aria-hidden="true"></span>${esc(label)}</label>
+          <span class="dial-title"><label class="dial-label" for="${esc(id)}"><span class="key key-swatch ${esc(DIAL_CLS[d.key] || 'series-muted')}" aria-hidden="true"></span>${esc(label)}</label>${unconfirmed}</span>
           <span class="input-money plan-amount dial-amount"><span aria-hidden="true">$</span><input id="${esc(id)}" type="text" inputmode="${signedDial(d) ? 'text' : 'decimal'}" autocomplete="off" spellcheck="false" value="${esc(inputText(value))}" placeholder="Unknown" data-action="plan:dial" data-commit="1" data-dial="${esc(d.key)}" aria-label="${esc(label)}, dollars a month" aria-describedby="${esc(id)}-base ${esc(id)}-basis ${esc(id)}-error"></span>
         </div>
         <div class="dial-track"${frac === null ? '' : ` style="--f:${frac.toFixed(4)}"`}>
@@ -247,8 +310,8 @@
           <input class="dial-range" id="${esc(id)}-range" type="range" min="${lo / 100}" max="${hi / 100}" step="${STEP_CENTS / 100}" value="${(value || 0) / 100}" data-action="plan:dial-range" data-dial="${esc(d.key)}" aria-label="${esc(label)}, dollars a month" aria-valuetext="${esc(amt(value || 0))} a month" aria-describedby="${esc(id)}-base">
         </div>
         <p class="field-error" id="${esc(id)}-error" role="alert" hidden></p>
-        <div class="dial-foot"><span class="dial-base" id="${esc(id)}-base">baseline ${esc(base === null ? 'unknown' : amt(base))}${esc(set)}</span>${reset}</div>
-        <p class="dial-basis" id="${esc(id)}-basis">${esc(d.basis)}</p>
+        <div class="dial-foot"><span class="dial-base" id="${esc(id)}-base">baseline ${esc(base === null ? 'unknown' : amt(base))}${esc(set)}</span><span class="dial-actions">${average}${reset}</span></div>
+        <p class="dial-basis" id="${esc(id)}-basis">${basis}</p>
         ${hint ? `<p class="dial-hint" id="${esc(id)}-hint">${esc(hint)}</p>` : ''}
         ${d.drill ? drillHtml(ctx, tl, d) : ''}
       </div>`;
@@ -530,6 +593,11 @@
       const d = model(ctx).dialsByKey[el.dataset.dial];
       if (!d) return;
       change(ctx, st => E.timeline.resetDial(st, d.key), `${dialLabel(d)} is back to its baseline (${amt(d.baselineCents)}).`);
+    },
+    'plan:use-average': (ctx, el) => {
+      const d = model(ctx).dialsByKey[el.dataset.dial];
+      if (!d || !isCents(d.averageCents)) return;
+      change(ctx, st => E.timeline.setDial(st, d.key, d.averageCents), `${d.label}: using the average of deposits.`);
     },
     'plan:use-rows': (ctx, el) => {
       const d = model(ctx).dialsByKey[el.dataset.dial];

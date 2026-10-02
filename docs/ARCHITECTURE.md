@@ -960,7 +960,8 @@ Joint cash accounts only (checking, savings, other; cards and loans are not bala
     every day in between is covered by the account's exports or is in its `gap`
     (`{ side: 'after'|'before', from, to, days }`, `gapFor`), where no transactions are assumed.
   - `anchor`: the latest known balance `{ date, cents, source }`; `first` / `last`: the earliest and
-    latest days with a known end-of-day balance `{ date, cents }` (null without an anchor).
+    latest days with a known end-of-day balance `{ date, cents }` (null without an anchor);
+    `assumed`: per month, true when that value was worked across days in the `gap`.
   - No anchor: the account's line is the change since its first covered day (`source: 'change'`),
     and a group or total that includes it is a change, not a balance (`kind: 'change'`).
   - Rows excluded as duplicate copies never move a balance; every other row does.
@@ -1001,7 +1002,15 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
     source: 'baseline'|'direct'|'rows', basis, hint, drill }`. Baseline = average of the
     `baselineMonths` complete months (`flows.baseline`, one-time purchases out, yearly spread).
     `planCents`: `settings.dials[key]`, else the drill rows when any is changed, else the baseline;
-    never clamped. `hint` (in dials): observed deposits `{ count, lastCents, lastDate,
+    never clamped. Person dials also carry `budgetCents` (the person's monthly joint amount from
+    `flows.planFunding` for `planStart`, annual-average timing: biweekly 26 a year, semimonthly 24;
+    ended and not-yet-started streams out; null when no stream counts or any counted amount is
+    unknown), `averageCents` (the deposit average of the window), `basisKind: 'budget'|'average'|
+    'direct'`, `needsConfirm` (true for 'average') and `budget: { streams: [{ id, name,
+    perPaycheckJointCents, perYear, cadenceLabel, monthlyCents, assumedCadence }], unknown: [names] }`;
+    their `baselineCents` is `budgetCents` when known, else `averageCents`, and `basis` reads
+    "From Budget: 2 × $… to joint (semimonthly)", "Average of … deposits, N months — not a
+    confirmed setting" or "Set here". `hint` (in dials): observed deposits `{ count, lastCents, lastDate,
     typicalIntervalDays, cadence, cadenceLabel, days, perYear, perMonthCents }` (semimonthly 24 a
     year, biweekly 26, matched with `schedule.paydays`). `drill` (card, bank): `{ rows,
     categoryCount, baselineCents, rowsCents, overridden, stableCount, orphanIds, tinyCategoryCents }`;
@@ -1016,7 +1025,15 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
     — one-time items with `{ id, date, month, merchant, description, accountLabel, role, dialKey,
     cents, auto }`; toggled with the `planningBaseline` ledger edit.
   - `balances`: `{ mode: 'accounts'|'simple'|'none', simple, label, rule, accounts, missing,
-    combined, policy, runsOut, lowest, notes }`. Per anchored account: points per month
+    combined, policy, runsOut, lowest, notes, assumed, illustrative }`. Points are `{ month, cents,
+    status: 'reconstructed'|'assumed'|'projected'|null, anchor, gap, note, illustrative }`: a
+    month-end worked across days the account's export does not cover (its `gap`) is `assumed`
+    with `note` "Assumes nothing moved between … (not in your data)."; only values connected to a
+    known balance through covered days are `reconstructed`. A combined point is `assumed` when any
+    member is. `assumed`: null or `{ from, to, days, accounts, gaps: [{ side, from, to, days,
+    accounts }] }` (gaps shared by several accounts are merged; `days` counts the union).
+    `illustrative`: a sentence when account lines have projected points (checking's projected
+    points carry `illustrative: true`: card spending is taken when it happens), else null. Per anchored account: points per month
     (`reconstructed` from the transactions, then `projected`: checking + net, savings + savings;
     the month of the last known day adds net × days left ÷ days in month). `combined` sums the
     anchored accounts only (`missing` ones are never counted as $0). A savings account with a

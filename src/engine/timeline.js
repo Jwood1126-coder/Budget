@@ -16,7 +16,9 @@
  * null amounts: unknown, never $0); a month from planStart on that has some data is 'partial'
  * (what happened so far is kept apart; the plan is used for the projection); the rest are 'plan'.
  *
- * Dials: one "money in" dial per person in the plan (plus "Other money in" when the baseline has
+ * Dials: one "money in" dial per person in the plan, at the pay saved in Budget (flows.planFunding,
+ * annual-average timing) or, when that is not known, the deposit average labelled as not confirmed
+ * (plus "Other money in" when the baseline has
  * deposits nobody can be matched to, or interest), and "money out" dials card, bank, savings
  * (signed: below $0 draws savings down) and other (debt payments, business purchases and
  * investments, only when the baseline has any). Each dial's baseline is the average of the
@@ -57,6 +59,7 @@
     + 'Balances may go below $0: nothing is floored or topped up, except that “cover from savings” moves a projected checking shortfall from savings.';
   const SIMPLE_RULE = 'Illustrative: the joint cash you entered plus each month’s money in minus money out (moves to and from savings stay inside joint cash). '
     + 'The month of that balance adds net × (days left in the month after its date ÷ days in the month), rounded to the cent; later months add the full net. Plan months use the dials, earlier months what actually happened.';
+  const ILLUSTRATIVE = 'Account lines are illustrative: card spending is taken from checking in the month it happens, not when the card is paid; the combined line is not affected.';
   const DIAL_LABEL = { inOther: 'Other money in', card: 'Card spending', bank: 'Bills & mortgage from the bank', savings: 'Net to savings', other: 'Debt, business & investments' };
   const IN_KEYS = ['p1', 'p2'];
 
@@ -426,7 +429,42 @@
 
   // ------------------------------------------------------------------ dials
 
-  function buildDials({ base, people, cfg, byId, requested }) {
+  /** "2 × $1,234.00 to joint (semimonthly)" for one Budget income stream (annual-average timing). */
+  function streamText(st) {
+    const per = E.money.format(st.perPaycheckJointCents);
+    const f = st.frequency;
+    if (st.perYear === null) return st.count + ' × ' + per + ' to joint (pay frequency not confirmed: ' + st.count + ' a month assumed)';
+    const times = f === 'semimonthly' ? '2' : f === 'monthly' ? '1' : st.perYear + '/12';
+    const how = f === 'semimonthly' || f === 'monthly' ? f : f + ', ' + st.perYear + ' a year';
+    return times + ' × ' + per + ' to joint (' + how + (st.assumedCadence ? ', not confirmed' : '') + ')';
+  }
+
+  /**
+   * One person's joint money in from the pay saved in Budget, for the first plan month
+   * (flows.planFunding with annual-average timing: biweekly 26 a year, semimonthly 24, never mixed).
+   * budgetCents is null when no stream counts or any counted stream's amount is unknown.
+   */
+  function budgetFor(funding, pid) {
+    const fp = funding && funding.people[pid] ? funding.people[pid] : null;
+    // Streams that reach joint through another stream (a paycheck whose money is moved by a transfer) are left out.
+    const counted = fp ? fp.streams.filter(st => !st.viaTransfers) : [];
+    const unknown = counted.filter(st => !isCents(st.monthly.joint)).map(st => st.label);
+    const streams = counted.filter(st => isCents(st.monthly.joint)).map(st => {
+      const known = E.schedule.FREQUENCIES.includes(st.frequency);
+      return {
+        id: st.id, name: st.label, perPaycheckJointCents: st.perPaycheck.joint,
+        perYear: known ? E.schedule.PER_YEAR[st.frequency] : null,
+        cadenceLabel: known ? E.schedule.LABELS[st.frequency] : 'Pay frequency not confirmed',
+        monthlyCents: st.monthly.joint,
+        assumedCadence: !known || st.basis === 'assumed' || st.frequencyStatus === 'unknown',
+        frequency: st.frequency, count: st.count,
+      };
+    });
+    const budgetCents = counted.length && !unknown.length ? streams.reduce((sum, st) => sum + st.monthlyCents, 0) : null;
+    return { budgetCents, budget: { streams: streams.map(({ frequency, count, ...rest }) => rest), unknown }, texts: streams.map(streamText) };
+  }
+
+  function buildDials({ base, people, cfg, byId, requested, funding }) {
     const n = base.count;
     const T = base.total.planning;
     const avg = cents => (n ? E.money.divide(cents, n) : null);
@@ -443,10 +481,18 @@
       return { planCents: baselineCents, source: 'baseline' };
     };
     const dials = [];
+    // Money in per person: the pay saved in Budget wins; the deposit average is only a labelled stand-in.
+    const averageText = n ? 'Average of ' + range + ' deposits, ' + plural(n, 'month') + ' — not a confirmed setting'
+      : 'No pay saved in Budget and no complete month of deposits yet — not a confirmed setting';
     for (const p of people) {
-      const baselineCents = avg(IN_KEYS.includes(p.id) ? T[p.id] : 0);
+      const averageCents = avg(IN_KEYS.includes(p.id) ? T[p.id] : 0);
+      const { budgetCents, budget, texts } = budgetFor(funding, p.id);
+      const baselineCents = budgetCents !== null ? budgetCents : averageCents;
+      const basisKind = isCents(cfg.dials[p.id]) ? 'direct' : budgetCents !== null ? 'budget' : 'average';
       dials.push(Object.assign({ key: p.id, group: 'in', label: p.name, baselineCents }, resolve(p.id, baselineCents), {
-        basis: windowText, hint: depositHint(base.credits, p.id), drill: null,
+        basis: basisKind === 'direct' ? 'Set here' : basisKind === 'budget' ? 'From Budget: ' + texts.join('; ') : averageText,
+        hint: depositHint(base.credits, p.id), drill: null,
+        budgetCents, averageCents, basisKind, needsConfirm: basisKind === 'average', budget,
       }));
     }
     const elsewhere = IN_KEYS.filter(k => !ids.has(k)).reduce((s, k) => s + T[k], 0);
@@ -515,6 +561,36 @@
 
   const prorate = (cents, daysLeft, daysInMonth) => E.money.divide(cents * daysLeft, daysInMonth);
 
+  /** 'Assumes nothing moved between Oct 1 and Oct 2, 2026 (not in your data).' for a gap. */
+  function assumedNote(gap) {
+    const a = gap.from, b = gap.to;
+    const span = a === b ? 'on ' + E.dates.label(a)
+      : 'between ' + (a.slice(0, 4) === b.slice(0, 4) ? E.dates.label(a).replace(/, \d{4}$/, '') : E.dates.label(a)) + ' and ' + E.dates.label(b);
+    return 'Assumes nothing moved ' + span + ' (not in your data).';
+  }
+
+  /** The gaps behind assumed points: { from, to, days, accounts, gaps: [{ side, from, to, days, accounts }] } or null. */
+  function assumedSummary(accounts) {
+    const gaps = [];
+    for (const a of accounts) {
+      if (!a.gap || !a.points.some(p => p.status === 'assumed')) continue;
+      const same = gaps.find(g => g.from === a.gap.from && g.to === a.gap.to);
+      if (same) same.accounts.push(a.name);
+      else gaps.push({ side: a.gap.side, from: a.gap.from, to: a.gap.to, days: a.gap.days, accounts: [a.name] });
+    }
+    if (!gaps.length) return null;
+    // Days in the union of the gaps (overlapping gaps count once).
+    const spans = gaps.map(g => [E.dates.dayNumber(g.from), E.dates.dayNumber(g.to)]).sort((x, y) => x[0] - y[0]);
+    let days = 0, cur = null;
+    for (const [lo, hi] of spans) {
+      if (cur && lo <= cur[1] + 1) cur[1] = Math.max(cur[1], hi);
+      else { if (cur) days += cur[1] - cur[0] + 1; cur = [lo, hi]; }
+    }
+    days += cur[1] - cur[0] + 1;
+    const froms = gaps.map(g => g.from).sort(), tos = gaps.map(g => g.to).sort();
+    return { from: froms[0], to: tos[tos.length - 1], days, accounts: Array.from(new Set(gaps.flatMap(g => g.accounts))), gaps };
+  }
+
   /**
    * Walk forward from a known balance: { [monthIndex]: cents|null } for months whose end is after
    * `fromDay`, adding delta(month) (pro-rated in the month that holds fromDay).
@@ -576,9 +652,10 @@
   function balancesFor({ txns, dataset, plan, months, rowsByMonth, cfg, today, anc, mirrors }) {
     const notes = [];
     const deltaOf = (key, m) => { const r = rowsByMonth.get(m); return r ? r[key] : null; };
-    const empty = { month: null, cents: null, status: null, anchor: false, gap: false };
+    const empty = { month: null, cents: null, status: null, anchor: false, gap: false, note: null, illustrative: false };
     const base = {
       mode: 'none', simple: false, label: null, rule: RULE, accounts: [], missing: anc.missing.slice(), combined: null,
+      assumed: null, illustrative: null,
       policy: { coverFromSavings: cfg.coverFromSavings, applies: false, moves: [], totalCents: 0, savingsEmptyMonth: null },
       runsOut: null, lowest: null, notes,
     };
@@ -615,15 +692,20 @@
         const gap = ha.gap;
         const gapFrom = gap ? E.dates.dayNumber(gap.from) : null, gapTo = gap ? E.dates.dayNumber(gap.to) : null;
         const anchorMonth = ha.anchor ? ha.anchor.date.slice(0, 7) : null;
+        const note = gap ? assumedNote(gap) : null;
         const points = months.map((m, i) => {
           const end = E.dates.dayNumber(E.months.end(m));
           if (end <= lastDay) {
-            // gap: this month-end falls in the days assumed to have no transactions.
+            // A value worked across days the export does not cover is an assumption ('assumed'),
+            // not history; gap: this month-end itself falls in those days.
             const v = ha.values[i];
-            return { month: m, cents: v, status: v === null ? null : 'reconstructed', anchor: m === anchorMonth, gap: v !== null && gap !== null && end >= gapFrom && end <= gapTo };
+            const assumed = v !== null && !!(ha.assumed && ha.assumed[i]);
+            return { month: m, cents: v, status: v === null ? null : assumed ? 'assumed' : 'reconstructed', anchor: m === anchorMonth,
+              gap: v !== null && gap !== null && end >= gapFrom && end <= gapTo, note: assumed ? note : null, illustrative: false };
           }
           const v = proj.has(i) ? proj.get(i) : null;
-          return { month: m, cents: v, status: v === null ? null : 'projected', anchor: m === anchorMonth, gap: false };
+          // Checking lines take card spending when it happens, not when the card is paid.
+          return { month: m, cents: v, status: v === null ? null : 'projected', anchor: m === anchorMonth, gap: false, note: null, illustrative: v !== null && a.group === 'checking' };
         });
         return {
           id: a.id, name: a.name, type: a.type, group: a.group, primary: isPrimary, source: a.source,
@@ -635,7 +717,10 @@
         };
       });
       for (const a of accounts) {
-        if (a.gap && a.note.includes('Your export')) notes.push(a.name + ': ' + a.note.slice(a.note.indexOf('Your export')));
+        if (a.gap && a.note.includes('Your export')) {
+          notes.push(a.name + ': ' + a.note.slice(a.note.indexOf('Your export'))
+            + (a.points.some(p => p.status === 'assumed') ? ' Month-end balances worked out across those days are shown as assumed.' : ''));
+        }
         if (a.dateAssumed) notes.push(a.name + ': no date was entered for its balance, so it counts as of ' + E.dates.label(a.anchor.date) + '.');
         if (a.anchor && a.anchor.date > today) notes.push(a.name + ': the balance is dated ' + E.dates.label(a.anchor.date) + ', after today.');
       }
@@ -664,14 +749,18 @@
       const combinedPoints = months.map((m, i) => {
         const ps = accounts.map(a => a.points[i]);
         if (ps.some(p => p.cents === null)) return Object.assign({}, empty, { month: m });
+        const assumed = ps.filter(p => p.status === 'assumed');
         return {
           month: m, cents: ps.reduce((s, p) => s + p.cents, 0),
-          status: ps.some(p => p.status === 'projected') ? 'projected' : 'reconstructed',
+          status: assumed.length ? 'assumed' : ps.some(p => p.status === 'projected') ? 'projected' : 'reconstructed',
           anchor: ps.some(p => p.anchor), gap: ps.some(p => p.gap),
+          note: assumed.length ? Array.from(new Set(assumed.map(p => p.note))).join(' ') : null, illustrative: false,
         };
       });
       Object.assign(base, {
         mode: 'accounts', accounts,
+        assumed: assumedSummary(accounts),
+        illustrative: accounts.some(a => a.points.some(p => p.status === 'projected')) ? ILLUSTRATIVE : null,
         combined: { label: 'Joint cash: ' + accounts.map(a => a.name).join(' + '), simple: false, members: accounts.map(a => a.id), points: combinedPoints },
       });
     } else if (anc.combined) {
@@ -685,7 +774,7 @@
       const anchorMonth = asOf.slice(0, 7);
       const points = months.map((m, i) => {
         const v = proj.has(i) ? proj.get(i) : null;
-        return { month: m, cents: v, status: v === null ? null : 'projected', anchor: m === anchorMonth, gap: false };
+        return { month: m, cents: v, status: v === null ? null : 'projected', anchor: m === anchorMonth, gap: false, note: null, illustrative: false };
       });
       notes.push(SIMPLE_LABEL + ': the joint cash balance you entered, moved by each month’s money in and out. ' + (E.balances.cashAccounts(dataset).length ? 'Enter each account’s balance for a line worked out from your transactions.' : 'Load a checking or savings export for a line worked out from your transactions.'));
       Object.assign(base, {
@@ -743,7 +832,10 @@
     const requested = cfg.baselineMonths;
     const base = E.flows.baseline(rows, { count: requested === 'all' ? Math.max(full, 1) : requested, endMonth: lastComplete || undefined });
     const byId = new Map(txns.map(t => [t.id, t]));
-    const { dials, parts, windowText } = buildDials({ base, people, cfg, byId, requested });
+    // Pay saved in Budget for the first plan month (ended streams out, later ones not yet in).
+    let funding = null;
+    try { funding = E.flows.planFunding(plan, { month: planStart, timing: 'average' }); } catch (err) { funding = null; }
+    const { dials, parts, windowText } = buildDials({ base, people, cfg, byId, requested, funding });
     const planValues = planMonth(dials, parts, people);
 
     // What happened so far in partly covered months (kept apart from the month's amounts).
@@ -884,7 +976,7 @@
   }
 
   E.timeline = {
-    BASELINE_CHOICES, HORIZONS, PAST_CHOICES, MODES, DEFAULTS, TINY_CATEGORY_CENTS, STABLE_MIN_CHARGES, STABLE_SPREAD, OTHER_CATEGORY, SIMPLE_LABEL, RULE, SIMPLE_RULE,
+    BASELINE_CHOICES, HORIZONS, PAST_CHOICES, MODES, DEFAULTS, TINY_CATEGORY_CENTS, STABLE_MIN_CHARGES, STABLE_SPREAD, OTHER_CATEGORY, SIMPLE_LABEL, RULE, SIMPLE_RULE, ILLUSTRATIVE,
     build, anchors, settings, depositHint, prorate, setDial, setRow, resetDial, resetPlan,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

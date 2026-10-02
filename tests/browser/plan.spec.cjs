@@ -16,12 +16,13 @@ function timeline(page) {
     const tl = E.timeline.build({ txns: ctx.realTxns, dataset: ctx.dataset, plan: st.plan, settings: st.ui.plan, today, coverageMap: ctx.coverageMap });
     const label = m => E.months.label(m);
     return {
-      today, todayMonth: tl.todayMonth, todayLabel: label(tl.todayMonth), firstLabel: label(tl.firstMonth), plan: tl.plan,
+      today, todayMonth: tl.todayMonth, todayLabel: label(tl.todayMonth), firstLabel: label(tl.firstMonth), planLabel: label(tl.planStart), plan: tl.plan,
       count: tl.baseline.count,
-      dials: tl.dials.map(x => ({ key: x.key, baselineCents: x.baselineCents, planCents: x.planCents, source: x.source })),
+      dials: tl.dials.map(x => ({ key: x.key, baselineCents: x.baselineCents, planCents: x.planCents, source: x.source, budgetCents: x.budgetCents, averageCents: x.averageCents })),
       card: tl.dialsByKey.card,
       oneTime: tl.baseline.oneTime,
-      balances: { mode: tl.balances.mode, runsOut: tl.balances.runsOut, combined: tl.balances.combined, accounts: tl.balances.accounts.map(a => ({ id: a.id, points: a.points })) },
+      balances: { mode: tl.balances.mode, runsOut: tl.balances.runsOut, combined: tl.balances.combined, accounts: tl.balances.accounts.map(a => ({ id: a.id, points: a.points })),
+        assumed: tl.balances.assumed || null, illustrative: tl.balances.illustrative || null },
       months: tl.months.map(m => ({ month: m.month, label: label(m.month), status: m.status })),
     };
   });
@@ -45,6 +46,23 @@ async function table(page) {
   const heads = await page.$$eval('#plan-chart-table thead th', ths => ths.map(th => th.textContent.trim()));
   const rows = await page.$$eval('#plan-chart-table tbody tr', trs => trs.map(tr => Array.from(tr.children).map(td => td.textContent.trim())));
   return { heads, rows, col: name => heads.indexOf(name) };
+}
+
+/** The chart's month row in the table twin, by its label ('Sep 2026'). */
+const row = (tb, label) => tb.rows.find(r => r[0] === label);
+/** September's x in the chart, the series whose September point is assumed, and every line path. */
+function septemberPaths(page) {
+  return page.evaluate(() => {
+    const fig = document.querySelector('#plan-chart');
+    const model = JSON.parse(fig.querySelector('script.cc-model').textContent);
+    const m = model.months.find(x => x.t === 'September 2026');
+    const keys = m.rows.filter(r => /^Assumed/.test(r.s || '')).map(r => r.k);
+    const paths = Array.from(fig.querySelectorAll('.cc-svg path.line')).map(p => ({
+      cls: p.getAttribute('class'), key: p.closest('[data-cc-series]').dataset.ccSeries,
+      xs: (p.getAttribute('d').match(/[ML][\d.]+/g) || []).map(v => Number(v.slice(1))),
+    }));
+    return { x: m.x, keys, paths, assumedPaths: paths.filter(p => /\bis-assumed\b/.test(p.cls)).length };
+  });
 }
 
 module.exports = [
@@ -73,7 +91,8 @@ module.exports = [
       assert.equal(await page.getAttribute('#plan-chart', 'data-mode'), 'balance');
       const chips = await page.$$eval('#plan-chart .cc-chip', bs => bs.map(b => [b.textContent.trim(), b.getAttribute('aria-pressed')]));
       assert.deepEqual(chips, [['Combined cash', 'true'], ['Joint checking', 'false'], ['Joint savings', 'false']]);
-      assert.match(await page.textContent('#plan-chart .cc-caption'), /^Combined cash = Joint checking \+ Joint savings\. Solid: your data through Sep 2026\. Dashed: this plan from Oct 2026\.$/);
+      // The account lines (off by default, one tap away) are illustrative: the caption says so once.
+      assert.match(await page.textContent('#plan-chart .cc-caption'), /^Combined cash = Joint checking \+ Joint savings\. Solid: your data through Sep 2026\. Dashed: this plan from Oct 2026\. Account lines are illustrative: card spending is taken from checking in the month it happens, not when the card is paid; the combined line is not affected\.$/);
       // Dials: money in by person, money out by kind, in this order.
       assert.deepEqual(await page.$$eval('#plan-dials .dial', ds => ds.map(d => d.dataset.dial)), ['p1', 'p2', 'inOther', 'card', 'bank', 'savings', 'other']);
       assert.ok(await noHorizontalScroll(page));
@@ -135,6 +154,93 @@ module.exports = [
       await page.click('#undoBtn');
       await page.waitForSelector('#plan-prompt');
       assert.equal((await state(page)).plan.balances.accounts['joint-checking'], undefined);
+    },
+  },
+  {
+    name: 'a balance dated after the export ends: the months worked across the missing days are dotted and called assumed',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      // An export without running balances: the entered balance is the only anchor for checking.
+      await page.evaluate(() => {
+        const ds = JSON.parse(JSON.stringify(window.HouseholdBudget.getDataset()));
+        for (const x of ds.transactions) delete x.balanceCents;
+        localStorage.setItem('household-budget:loaded-dataset', JSON.stringify({ dataset: ds, loadedAt: new Date().toISOString(), source: 'json', file: 'no-running-balance.json' }));
+      });
+      await page.reload();
+      await page.waitForSelector('#plan-bal-joint-checking');
+
+      // The export ends Sep 30, 2026. A checking balance with exact cents, dated Oct 2, is worked
+      // back across Oct 1–2, which no file covers: every month-end before it rests on those days.
+      await typeAmount(page, '#plan-bal-joint-checking', '6,543.21');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.balances.accounts['joint-checking'] === 654321);
+      await page.fill('#plan-bal-joint-checking-date', '2026-10-02');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.balances.accountDates['joint-checking'] === '2026-10-02');
+      await page.waitForSelector('#plan-chart[data-mode="balance"]');
+      await page.waitForFunction(() => /Dotted:/.test(document.querySelector('#plan-chart .cc-caption').textContent));
+
+      const exp = await timeline(page);
+      const as = exp.balances.assumed;
+      assert.ok(as, 'the engine reports assumed days');
+      assert.equal(as.from, '2026-10-01');
+      assert.equal(as.to, '2026-10-02');
+      const sep = exp.balances.combined.points.find(p => p.month === '2026-09');
+      assert.equal(sep.status, 'assumed', 'September rests on Oct 1–2');
+      assert.equal(sep.note, 'Assumes nothing moved between Oct 1 and Oct 2, 2026 (not in your data).');
+      const caption = await page.textContent('#plan-chart .cc-caption');
+      assert.ok(caption.includes('Dotted: worked back across Oct 1–2, 2026, which your export does not cover (assumes nothing moved). For exact history, enter the balance as of Sep 30, 2026 or export through today.'), caption);
+      assert.ok(!caption.includes('Solid: your data through Sep 2026'), 'September is not called solid history');
+      assert.ok(exp.balances.illustrative && caption.endsWith(exp.balances.illustrative), 'account lines are called illustrative');
+
+      let tb = await table(page);
+      assert.equal(row(tb, 'Sep 2026')[tb.col('Status')], 'Assumed');
+      assert.ok(row(tb, 'Sep 2026')[tb.col('Note')].includes(sep.note), 'the engine’s note is in the table');
+      const firstPlan = tb.rows.find(r => r[tb.col('Status')] === 'Projected');
+      assert.ok(firstPlan, 'the plan months follow');
+      assert.equal(firstPlan[0], exp.planLabel, 'the first plan row is ' + exp.planLabel);
+      assert.equal(row(tb, 'Oct 2026')[tb.col('Status')], 'Projected');
+      assert.match(await page.textContent('#plan-chart .cc-keys'), /Assumed \(days without data\)/);
+
+      // Nothing solid (or dashed) touches an assumed September: every path through it is dotted.
+      let svg = await septemberPaths(page);
+      assert.ok(svg.keys.includes('combined') && svg.keys.includes('acct-joint-checking'), 'combined and checking are assumed in September: ' + svg.keys);
+      const through = svg.paths.filter(p => svg.keys.includes(p.key) && p.xs.some(x => Math.abs(x - svg.x) < 0.05));
+      assert.ok(through.length >= svg.keys.length, 'each assumed line passes through September');
+      for (const p of through) assert.match(p.cls, /\bis-assumed\b/, p.key + ': ' + p.cls);
+
+      // Dated the day the export ends, the same balance needs no assumption.
+      await page.fill('#plan-bal-joint-checking-date', '2026-09-30');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.balances.accountDates['joint-checking'] === '2026-09-30');
+      await page.waitForFunction(() => !/Dotted:/.test(document.querySelector('#plan-chart .cc-caption').textContent));
+      tb = await table(page);
+      assert.equal(row(tb, 'Sep 2026')[tb.col('Status')], 'Reconstructed');
+      const after = await page.textContent('#plan-chart .cc-caption');
+      assert.ok(!after.includes('Oct 1–2'), after);
+      assert.ok(after.includes('Solid: your data through Sep 2026.'), after);
+      assert.equal((await timeline(page)).balances.assumed, null);
+      svg = await septemberPaths(page);
+      assert.equal(svg.assumedPaths, 0, 'no dotted assumed path is left');
+      assert.ok(!/Assumed \(days without data\)/.test(await page.textContent('#plan-chart .cc-keys')));
+    },
+  },
+  {
+    name: 'a later balance on top of the export’s own running balance: history stays connected, nothing is assumed',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      // The sample checking export has a running balance dated Sep 25: September's month-end is
+      // worked forward from it over covered days, so a balance dated Oct 2 only starts the plan.
+      await typeAmount(page, '#plan-bal-joint-checking', '6,543.21');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.balances.accounts['joint-checking'] === 654321);
+      await page.fill('#plan-bal-joint-checking-date', '2026-10-02');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.balances.accountDates['joint-checking'] === '2026-10-02');
+      const exp = await timeline(page);
+      assert.equal(exp.balances.assumed, null);
+      assert.equal(exp.balances.combined.points.find(p => p.month === '2026-09').status, 'reconstructed');
+      const tb = await table(page);
+      assert.equal(row(tb, 'Sep 2026')[tb.col('Status')], 'Reconstructed');
+      assert.ok(!(await page.textContent('#plan-chart .cc-caption')).includes('Dotted:'));
+      assert.equal((await septemberPaths(page)).assumedPaths, 0);
     },
   },
   {
@@ -390,12 +496,45 @@ module.exports = [
     },
   },
   {
-    name: 'who paid in: changing a deposit’s person moves it between the partners’ dials and flows columns',
+    name: 'money in starts from the pay saved in Budget; without it the average is marked not confirmed',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      for (const key of ['p1', 'p2']) {
+        assert.match(await page.textContent(`#plan-dial-${key}-basis`), /^From Budget: .+ · Change in Budget$/);
+        assert.equal(await page.getAttribute(`#plan-dial-${key}-budget`, 'href'), '#/budget?section=income');
+        assert.ok(!(await page.$(`#plan-dial-${key}-unconfirmed`)), 'no "Not confirmed" badge with pay in Budget');
+      }
+      assert.ok(!(await page.$('#plan-dial-inOther-unconfirmed')));
+      // Sam's contribution stream removed: only a paycheck with no amount is left in Budget.
+      await page.evaluate(() => {
+        const H = window.HouseholdBudget;
+        const st = H.getState();
+        st.plan.incomes = st.plan.incomes.filter(i => i.id !== 'p2-contribution');
+        H.setState(st);
+      });
+      await page.waitForSelector('#plan-dial-p2-unconfirmed');
+      assert.equal((await page.textContent('#plan-dial-p2-unconfirmed')).trim().replace(/^!/, ''), 'Not confirmed');
+      assert.ok(!(await page.$('#plan-dial-p1-unconfirmed')), 'Alex still has pay in Budget');
+      const basis = (await page.textContent('#plan-dial-p2-basis')).trim();
+      assert.match(basis, /^Average of .+ deposits, \d+ months — not a confirmed setting\. Budget has no amount for: Sam paycheck\. Enter the current amount here, or save pay in Budget\.$/);
+      assert.equal(await page.getAttribute('#plan-dial-p2-budget', 'href'), '#/budget?section=income');
+      // Entering the amount here settles it.
+      await typeAmount(page, '#plan-dial-p2', '2,700');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().ui.plan.dials.p2 === 270000);
+      await page.waitForFunction(() => !document.querySelector('#plan-dial-p2-unconfirmed'));
+      assert.equal((await page.textContent('#plan-dial-p2-basis')).trim(), 'Set here');
+    },
+  },
+  {
+    name: 'who paid in: moving a deposit changes the flows and the deposit average, not the pay from Budget',
     async run(t) {
       const { page, assert } = t;
       await t.open('#/overview');
       assert.equal(await page.$eval('#plan-deposits', d => d.open), false, 'a closed drawer');
       assert.ok(await page.evaluate(() => document.querySelector('#plan-g-in').parentElement.contains(document.querySelector('#plan-deposits'))), 'under the money-in dials');
+      // On the sample the average of deposits equals the pay in Budget: no average button yet.
+      assert.ok(!(await page.$('#plan-dial-p1-average')) && !(await page.$('#plan-dial-p2-average')));
       await page.click('#plan-deposits > summary');
       const dep = (await page.$$eval('#plan-deposits select', ss => ss.map(x => ({ id: x.dataset.txn, label: x.options[x.selectedIndex].textContent }))))
         .find(x => x.label === 'Alex (suggested)');
@@ -404,9 +543,9 @@ module.exports = [
         const H = window.HouseholdBudget, x = H.getDataset().transactions.find(y => y.id === id);
         return { cents: x.amountCents, month: H.engine.months.label(x.date.slice(0, 7)) };
       }, dep.id);
-      const count = (await timeline(page)).count;
+      const exp0 = await timeline(page);
+      const budget = key => exp0.dials.find(d => d.key === key).budgetCents;
       const base = async key => centsOf(await page.textContent('#plan-dial-' + key + '-base'));
-      const p1 = await base('p1'), p2 = await base('p2');
       await page.click('label[for^="plan-mode-flows"]');
       await page.waitForSelector('#plan-chart[data-mode="flows"]');
       const flows = async () => {
@@ -419,16 +558,30 @@ module.exports = [
       await page.focus('#plan-dep-' + dep.id); // as a click or the keyboard would
       await page.selectOption('#plan-dep-' + dep.id, 'p2');
       await page.waitForFunction(id => (window.HouseholdBudget.getState().ledgerEdits[id] || {}).person === 'p2', dep.id);
-      await page.waitForFunction(v => !document.querySelector('#plan-dial-p1-base').textContent.includes(v), amt(p1));
-      const share = Math.round(txn.cents / count);
-      assert.ok(Math.abs(p1 - (await base('p1')) - share) <= 1, 'Alex’s baseline loses the deposit’s monthly share');
-      assert.ok(Math.abs((await base('p2')) - p2 - share) <= 1, 'Sam’s baseline gains it');
+      await page.waitForSelector('#plan-dial-p1-average');
+      assert.equal(await base('p1'), budget('p1'), 'Alex’s dial still starts from the pay in Budget');
+      assert.equal(await base('p2'), budget('p2'), 'and Sam’s');
       const after = await flows();
       assert.ok(Math.abs(before.alex - after.alex - txn.cents) <= 100, 'that month’s Alex column drops by the deposit');
       assert.ok(Math.abs(after.sam - before.sam - txn.cents) <= 100, 'and Sam’s rises by it');
       assert.ok(await page.$eval('#plan-deposits', d => d.open), 'the drawer stays open');
       assert.equal(await page.inputValue('#plan-dep-' + dep.id), 'p2');
       assert.equal(await page.evaluate(() => document.activeElement.id), 'plan-dep-' + dep.id, 'focus stays on the select');
+
+      // The deposit average now differs from Budget: it can be used for the plan, and reset returns to Budget.
+      const exp1 = await timeline(page);
+      const avg = exp1.dials.find(d => d.key === 'p1').averageCents;
+      assert.ok(Math.abs(budget('p1') - avg - Math.round(txn.cents / exp1.count)) <= 1, 'Alex’s average lost the deposit’s monthly share');
+      assert.equal((await page.textContent('#plan-dial-p1-average')).trim(), `Use the ${exp1.count}-month average (${amt(avg)})`);
+      await page.click('#plan-dial-p1-average');
+      await page.waitForFunction(v => window.HouseholdBudget.getState().ui.plan.dials.p1 === v, avg);
+      await page.waitForFunction(v => document.querySelector('#plan-dial-p1').value === v, boxText(avg));
+      assert.equal((await page.textContent('#plan-dial-p1-basis')).trim(), 'Set here');
+      assert.ok(!(await page.$('#plan-dial-p1-average')), 'no average button once set here');
+      await page.click('#plan-dial-p1-reset');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().ui.plan.dials.p1 === undefined);
+      await page.waitForFunction(v => document.querySelector('#plan-dial-p1').value === v, boxText(budget('p1')));
+      assert.match(await page.textContent('#plan-dial-p1-basis'), /^From Budget: /);
     },
   },
   {

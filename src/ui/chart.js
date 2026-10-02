@@ -21,7 +21,8 @@
   const fmt = UI.fmt;
 
   const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const STATUS = { recorded: 'Recorded', reconstructed: 'Reconstructed', projected: 'Projected', gap: 'Gap' };
+  // 'assumed': worked back or forward across days no export covers (nothing assumed to move then).
+  const STATUS = { recorded: 'Recorded', reconstructed: 'Reconstructed', assumed: 'Assumed', projected: 'Projected', gap: 'Gap' };
   const ACCOUNT_CLS = ['series-2', 'series-3', 'series-4', 'series-5'];
   // Validated order (adjacent pairs, light and dark): in stacks up from blue, out stacks down from
   // magenta, so the two series that meet at the axis stay distinct under colour-vision deficiency.
@@ -73,9 +74,9 @@
       const byMonth = new Map((l.points || []).map(p => [p && p.month, p]));
       const pts = months.map(m => {
         const p = byMonth.get(m);
-        if (!p) return { cents: null, status: null, note: '' };
+        if (!p) return { cents: null, status: null, note: '', illustrative: false };
         const status = STATUS[p.status] ? p.status : (isPlan(m) ? 'projected' : 'recorded');
-        return { cents: known(p.cents) ? Math.round(p.cents) : null, status, note: p.note ? String(p.note) : '' };
+        return { cents: known(p.cents) ? Math.round(p.cents) : null, status, note: p.note ? String(p.note) : '', illustrative: p.illustrative === true };
       });
       const role = l.role === 'combined' ? 'combined' : 'account';
       let cls = l.cls;
@@ -257,8 +258,12 @@
           if (prev >= 0) {
             const a = s.pts[prev];
             let kind;
-            if (i - prev > 1) kind = s.pts.slice(prev + 1, i).some(q => q.status === 'gap') ? 'gap' : null; // bridge only a marked gap
+            // A segment takes the weaker status of its two ends, so nothing solid ever touches a gap or
+            // an assumed point (assumed -> reconstructed and assumed -> projected stay dotted).
+            const between = s.pts.slice(prev + 1, i);
+            if (i - prev > 1) kind = between.some(q => q.status === 'gap') ? 'gap' : between.some(q => q.status === 'assumed') ? 'assumed' : null; // bridge only a marked gap
             else if (a.status === 'gap' || p.status === 'gap') kind = 'gap';
+            else if (a.status === 'assumed' || p.status === 'assumed') kind = 'assumed';
             else if (a.status === 'projected' || p.status === 'projected') kind = 'projected';
             else kind = 'actual';
             if (kind) segs.push({ kind, from: prev, to: i });
@@ -272,7 +277,8 @@
           if (last && last.kind === sg.kind && last.to === sg.from) { last.idx.push(sg.to); last.to = sg.to; }
           else runs.push({ kind: sg.kind, to: sg.to, idx: [sg.from, sg.to] });
         }
-        const paths = runs.map(r => `<path class="line ${esc(s.cls)}${r.kind === 'projected' ? ' is-projected' : r.kind === 'gap' ? ' is-gap' : ''}" d="${r.idx.map((i, k) => (k ? 'L' : 'M') + f1(xc(i)) + ' ' + f1(y(s.pts[i].cents))).join(' ')}"/>`).join('');
+        const KIND_CLS = { projected: ' is-projected', gap: ' is-gap', assumed: ' is-assumed' };
+        const paths = runs.map(r => `<path class="line ${esc(s.cls)}${KIND_CLS[r.kind] || ''}" d="${r.idx.map((i, k) => (k ? 'L' : 'M') + f1(xc(i)) + ' ' + f1(y(s.pts[i].cents))).join(' ')}"/>`).join('');
         const touched = new Set(segs.flatMap(sg => [sg.from, sg.to]));
         const lonely = s.pts.map((p, i) => (known(p.cents) && !touched.has(i) ? `<circle class="cc-lone end-dot ${esc(s.cls)}" cx="${f1(xc(i))}" cy="${f1(y(p.cents))}" r="3.5"/>` : '')).join('');
         const lastIdx = s.pts.map((p, i) => (known(p.cents) ? i : -1)).filter(i => i >= 0).pop();
@@ -358,7 +364,7 @@
         for (const s of ls) {
           groups[s.key] = 'line';
           const p = s.pts[i];
-          rows.push({ k: s.key, n: s.name, v: p.status === 'gap' && !known(p.cents) ? 'No data' : money(p.cents), c: 'key-line ' + s.cls, s: statusText(p.status), note: p.note });
+          rows.push({ k: s.key, n: s.name, v: p.status === 'gap' && !known(p.cents) ? 'No data' : money(p.cents), c: 'key-line ' + s.cls, s: statusText(p.status) + (p.illustrative ? ' (illustrative)' : ''), note: p.note });
         }
       } else {
         const add = (list, label, total) => {
@@ -379,7 +385,7 @@
       return {
         x: Math.round(xc(i) * 10) / 10,
         t: fmt.monthLong(m),
-        p: plan ? 'Plan' : 'Actual',
+        p: plan ? 'Plan' : monthStatus[i] === 'assumed' ? 'Assumed' : 'Actual',
         s: mode === 'flows' ? statusText(monthStatus[i]) : '',
         rows,
         note: notes.join(' '),
@@ -394,12 +400,14 @@
       const idx = primary.pts.map((p, i) => (known(p.cents) ? i : -1)).filter(i => i >= 0);
       if (idx.length) {
         const a = idx[0], b = idx[idx.length - 1];
-        const proj = i => (primary.pts[i].status === 'projected' ? ' projected' : '');
+        const proj = i => (primary.pts[i].status === 'projected' ? ' projected' : primary.pts[i].status === 'assumed' ? ' (assumed)' : '');
         let lowest = a;
         for (const i of idx) if (primary.pts[i].cents < primary.pts[lowest].cents) lowest = i;
         summary = `${primary.name} from ${money(primary.pts[a].cents)} in ${fmt.month(months[a])} to ${money(primary.pts[b].cents)}${proj(b)} in ${fmt.month(months[b])}; lowest ${money(primary.pts[lowest].cents)}${proj(lowest)} in ${fmt.month(months[lowest])}.`;
         const gaps = primary.pts.filter(p => p.status === 'gap').length;
         if (gaps) summary += ` ${gaps} month${gaps === 1 ? '' : 's'} with a gap in the data.`;
+        const assumed = primary.pts.filter(p => p.status === 'assumed').length;
+        if (assumed) summary += ` ${assumed} month${assumed === 1 ? ' is' : 's are'} assumed: worked out across days your data does not cover (dotted).`;
       }
     } else if (mode === 'flows') {
       const avg = (vals, pick) => {
@@ -425,6 +433,7 @@
       chips = ls.map(s => chip(s.key, s.name, 'key-line ' + esc(s.cls))).join('');
       const has = st => ls.some(s => s.pts.some(p => p.status === st));
       if (has('projected')) keys.push('<span class="cc-key-item"><span class="key key-line cc-key-solid" aria-hidden="true"></span>Actual</span><span class="cc-key-item"><span class="key key-line key-dashed" aria-hidden="true"></span>Plan (projected)</span>');
+      if (has('assumed')) keys.push('<span class="cc-key-item"><span class="key key-line cc-key-dotted" aria-hidden="true"></span>Assumed (days without data)</span>');
       if (has('gap')) keys.push('<span class="cc-key-item"><span class="key key-line cc-key-dotted" aria-hidden="true"></span>Gap in the data</span>');
     } else {
       // Each group's label is glued to its first chip so a wrapped legend never strands "Out" at a line end.
@@ -443,11 +452,14 @@
       const anyNote = ls.some(s => s.pts.some(p => p.note));
       columnsT = [{ key: 'm', label: 'Month' }, { key: 'st', label: 'Status' }, ...ls.map((s, si) => ({ key: 's' + si, label: s.name, align: 'right' })), ...(anyNote ? [{ key: 'note', label: 'Note' }] : [])];
       rowsT = months.map((m, i) => {
-        const r = { m: fmt.month(m), st: statusOfRow(i), note: ls.map(s => s.pts[i].note).filter(Boolean).join('; ') };
+        const r = { m: fmt.month(m), st: statusOfRow(i), note: [...new Set(ls.map(s => s.pts[i].note).filter(Boolean))].join('; ') };
         ls.forEach((s, si) => {
           const p = s.pts[i];
           const v = p.status === 'gap' && !known(p.cents) ? 'No data' : money(p.cents);
-          r['s' + si] = v + (p.status && p.status !== monthStatus[i] ? ' (' + STATUS[p.status].toLowerCase() + ')' : '');
+          const tags = [];
+          if (p.status && p.status !== monthStatus[i]) tags.push(STATUS[p.status].toLowerCase());
+          if (p.illustrative) tags.push('illustrative');
+          r['s' + si] = v + (tags.length ? ' (' + tags.join(', ') + ')' : '');
         });
         return r;
       });
@@ -554,6 +566,7 @@
       tip.appendChild(titleRow);
       const hiddenIn = g => m.rows.some(r => r.k && hidden.has(r.k) && model.groups[r.k] === g);
       const spoken = [];
+      const noted = new Set(); // the same note on several lines is shown once
       for (const r of m.rows) {
         if (r.k && hidden.has(r.k) && !r.keep) continue;
         if (r.g === 'head') { tip.appendChild(el('div', 'cc-tip-head', r.n)); continue; }
@@ -565,9 +578,9 @@
         name.appendChild(doc.createTextNode(label));
         row.appendChild(name);
         row.appendChild(el('strong', 'cc-tip-value', r.v));
-        if (r.s) row.appendChild(el('span', 'cc-tip-status is-' + r.s.toLowerCase(), r.s));
+        if (r.s) row.appendChild(el('span', 'cc-tip-status is-' + r.s.split(' ')[0].toLowerCase(), r.s));
         tip.appendChild(row);
-        if (r.note) tip.appendChild(el('div', 'cc-tip-note', r.note));
+        if (r.note && !noted.has(r.note)) { noted.add(r.note); tip.appendChild(el('div', 'cc-tip-note', r.note)); }
         spoken.push(label + ' ' + r.v + (r.s ? ' ' + r.s.toLowerCase() : ''));
       }
       if (m.note) tip.appendChild(el('div', 'cc-tip-note', m.note));

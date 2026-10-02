@@ -207,6 +207,69 @@ test('gap points: a dotted segment, a visible break and a note in the tooltip', 
   assert.match(html, /<th scope="row" class=" ">Mar 2026<\/th><td class=" ">Gap<\/td><td class="num ">No data<\/td><td class=" ">No statement for March<\/td>/);
 });
 
+test('assumed points: dotted, never touched by a solid or dashed path, keyed, and named in readout, table and summary', () => {
+  const months = monthsFrom('2026-05', 8); // May .. Dec 2026, plan from Oct
+  const note = 'Assumes nothing moved between Oct 1 and Oct 2, 2026 (not in your data).';
+  // Jun is assumed between two reconstructed months; Aug -> Sep -> Oct runs reconstructed, assumed, projected.
+  const st = ['reconstructed', 'assumed', 'reconstructed', 'reconstructed', 'assumed', 'projected', 'projected', 'projected'];
+  const vals = [400000, 410000, 405000, 398000, 401000, 395000, 390000, 385000];
+  const html = cashChart({
+    id: 'assumed', title: 'Assumed days', mode: 'balance', months, todayMonth: '2026-10', planStart: '2026-10',
+    lines: [
+      { key: 'combined', name: 'Combined cash', role: 'combined', points: months.map((m, i) => ({ month: m, cents: vals[i], status: st[i], note: st[i] === 'assumed' ? note : undefined })) },
+      { key: 'chk', name: 'Joint checking', role: 'account', points: months.map((m, i) => ({ month: m, cents: vals[i] - 100000, status: st[i], illustrative: st[i] === 'projected', note: st[i] === 'assumed' ? note : undefined })) },
+    ],
+  });
+  const model = modelOf(html);
+  const xs = model.months.map(m => m.x);
+  const assumedIdx = st.map((v, i) => (v === 'assumed' ? i : -1)).filter(i => i >= 0);
+  assert.deepEqual(assumedIdx, [1, 4]);
+  const dotted = pathsWith(html, 'is-assumed');
+  assert.ok(dotted.length >= 2, 'assumed runs are drawn with their own dotted class');
+  for (const i of assumedIdx) assert.ok(dotted.some(p => pointsOf(p.d).some(q => q[0] === xs[i])), 'month ' + months[i] + ' is on a dotted path');
+  // No other path (solid or dashed) touches an assumed point: the transitions on both sides stay dotted.
+  const others = pathsWith(html, 'line').filter(p => !/is-assumed/.test(p.cls));
+  for (const p of others) for (const i of assumedIdx) assert.ok(!pointsOf(p.d).some(q => q[0] === xs[i]), p.cls + ' touches ' + months[i]);
+  // reconstructed -> assumed -> reconstructed: May..Jul is one dotted run; Sep -> Oct (assumed -> projected) is dotted too.
+  const runOf = p => pointsOf(p.d).map(q => xs.indexOf(q[0]));
+  assert.deepEqual(dotted.filter(p => /series-1/.test(p.cls)).map(runOf), [[0, 1, 2], [3, 4, 5]]);
+  const dashed = pathsWith(html, 'is-projected').filter(p => /series-1/.test(p.cls)).map(runOf);
+  assert.deepEqual(dashed, [[5, 6, 7]], 'the dashed plan starts at the first plan month, not at the assumed one');
+  const solid = pathsWith(html, 'line').filter(p => /series-1/.test(p.cls) && !/is-(assumed|projected|gap)/.test(p.cls)).map(runOf);
+  assert.deepEqual(solid, [[2, 3]], 'only Jul -> Aug is solid');
+  // Legend key only when assumed points exist.
+  assert.match(html, /<span class="key key-line cc-key-dotted" aria-hidden="true"><\/span>Assumed \(days without data\)/);
+  assert.doesNotMatch(cashChart({ ...base, mode: 'balance' }), /Assumed \(days without data\)/);
+  // Readout: status and the note.
+  const sep = model.months[4];
+  assert.equal(sep.p, 'Assumed');
+  assert.equal(sep.rows[0].s, 'Assumed');
+  assert.equal(sep.rows[0].note, note);
+  assert.equal(model.months[3].p, 'Actual');
+  // Table twin: the status column says Assumed and the note is there.
+  assert.match(html, new RegExp('<th scope="row" class=" ">Sep 2026</th><td class=" ">Assumed</td><td class="num ">\\$4,010</td><td class="num ">\\$3,010</td><td class=" ">' + note.replace(/[().]/g, '\\$&') + '</td></tr>'), 'one note, not repeated per line');
+  assert.match(html, /<th scope="row" class=" ">Aug 2026<\/th><td class=" ">Reconstructed<\/td>/);
+  // The screen-reader summary says so.
+  assert.match(html, /2 months are assumed: worked out across days your data does not cover \(dotted\)\./);
+});
+
+test('illustrative points say so after their status in the readout and the table', () => {
+  const months = monthsFrom('2026-09', 3);
+  const html = cashChart({
+    id: 'ill', title: 'Illustrative', mode: 'balance', months, todayMonth: '2026-09', planStart: '2026-10',
+    lines: [
+      { key: 'combined', name: 'Combined cash', role: 'combined', points: months.map((m, i) => ({ month: m, cents: 500000 + i * 1000, status: i ? 'projected' : 'reconstructed' })) },
+      { key: 'chk', name: 'Joint checking', role: 'account', points: months.map((m, i) => ({ month: m, cents: 200000 + i * 1000, status: i ? 'projected' : 'reconstructed', illustrative: i > 0 })) },
+    ],
+  });
+  const model = modelOf(html);
+  assert.equal(model.months[1].rows[0].s, 'Projected', 'the combined line is not illustrative');
+  assert.equal(model.months[1].rows[1].s, 'Projected (illustrative)');
+  assert.equal(model.months[0].rows[1].s, 'Reconstructed');
+  assert.match(html, /<th scope="row" class=" ">Oct 2026<\/th><td class=" ">Projected<\/td><td class="num ">\$5,010<\/td><td class="num ">\$2,010 \(illustrative\)<\/td>/);
+  assert.match(html, /<th scope="row" class=" ">Sep 2026<\/th><td class=" ">Reconstructed<\/td><td class="num ">\$5,000<\/td><td class="num ">\$2,000<\/td>/);
+});
+
 test('null values are skipped, never drawn as zero', () => {
   const months = monthsFrom('2026-01', 5);
   const html = cashChart({
