@@ -83,8 +83,11 @@ async function main() {
             const secondary = ['spending', 'budget', 'forecast'].includes(view);
             if (!secondary) return pg.click(`.mainnav a[data-nav="${view}"]`);
             if (vp === 'phone') {
-              if (!(await pg.$eval('.nav-more-menu', d => d.open))) await pg.click('.nav-more-menu > summary');
-              return pg.click(`.nav-more-list a[data-nav="${view}"]`);
+              // A render in flight can close the menu between the two taps; open it again if so.
+              for (let attempt = 0; attempt < 3; attempt++) {
+                if (!(await pg.$eval('.nav-more-menu', d => d.open))) await pg.click('.nav-more-menu > summary');
+                try { return await pg.click(`.nav-more-list a[data-nav="${view}"]`, { timeout: 4000 }); } catch (e) { if (attempt === 2) throw e; }
+              }
             }
             return pg.click(`.nav-desktop-only a[data-nav="${view}"]`);
           },

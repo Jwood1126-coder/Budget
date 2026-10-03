@@ -18,8 +18,8 @@ module.exports = [
         if (t.viewport === 'phone' && view === 'data') await t.page.click('.topbar-data'); else await t.nav(view);
         await t.page.waitForFunction(v => location.hash.startsWith('#/' + v), view);
         await t.page.waitForSelector('#page-title');
-        const current = await t.page.$$eval(`.mainnav a[data-nav="${view}"]`, as => as.map(a => a.getAttribute('aria-current')));
-        t.assert.ok(current.length >= 1 && current.every(c => c === 'page'), view + ' should be current in every navigation copy');
+        // aria-current is set by the render that follows the route change; wait for it rather than racing it.
+        await t.page.waitForFunction(v => { const as = [...document.querySelectorAll(`.mainnav a[data-nav="${v}"]`)]; return as.length >= 1 && as.every(a => a.getAttribute('aria-current') === 'page'); }, view);
         const focused = await t.page.evaluate(() => document.activeElement && document.activeElement.id);
         t.assert.equal(focused, 'page-title', 'heading receives focus after navigating to ' + view);
         t.assert.ok(await noHorizontalScroll(t.page), 'no horizontal page scroll on ' + view);

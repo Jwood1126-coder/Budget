@@ -1432,3 +1432,79 @@ test('a carried-over amount stays explained until it is kept or changed: per dia
   assert.deepEqual(ro.carriedOver, { from: 'bank', cardTotalCents: null, bankTotalCents: 160000, note: 'Carried over from your earlier bank spending setting of $1,600.00.', dials: ['essentials'],
     summary: 'One dial carries your earlier bank spending setting of $1,600.00 — review it, then Keep or Reset.' });
 });
+
+// ------------------------------------------------------------------ carry-over keeps the household's row changes on the other side
+// The public synthetic sample (fixtures/sample-data.json, sample-profile.json): Mortgage is paid from
+// the bank, Groceries by card. Row changes are saved under the earlier ids ('bank-c-…', 'card-c-…'),
+// as an older page saved them; migrateRows carries them over.
+{
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const FIX = path.join(__dirname, '..', '..', 'fixtures');
+  const sampleDs = L.normalizeDataset(fs.readFileSync(path.join(FIX, 'sample-data.json'), 'utf8'));
+  const sampleProfile = () => JSON.parse(fs.readFileSync(path.join(FIX, 'sample-profile.json'), 'utf8'));
+  const legacyRow = (dial, category) => dial + '-c-' + E.util.hash(category);
+  const MORTGAGE = legacyRow('bank', 'Mortgage'), GROCERIES = legacyRow('card', 'Groceries');
+  const buildSample = st => T.build({ txns: L.applyEdits(sampleDs, st.ledgerEdits), dataset: sampleDs, plan: st.plan, settings: st.ui.plan, today: '2026-10-02' });
+  /** The sample's state with row changes, dials and earlier card/bank amounts written through state paths. */
+  function sampleState({ rows = {}, dials = {}, legacy = {} } = {}) {
+    let st = E.state.defaults(sampleProfile(), sampleDs);
+    for (const [id, v] of Object.entries(rows)) st = E.state.setPath(st, 'ui.plan.rows.' + id, v);
+    for (const [k, v] of Object.entries(dials)) st = E.state.setPath(st, 'ui.plan.dials.' + k, v);
+    for (const [k, v] of Object.entries(legacy)) st = E.state.setPath(st, 'ui.plan.legacyDials.' + k, v);
+    return st;
+  }
+  /** What the plan screen does once: migrateRows, then migrateDials, with one build. */
+  const upgrade = st => { const tl = buildSample(st); return { tl, next: T.migrateDials(T.migrateRows(st, tl), tl) }; };
+
+  test('regression: a card-only carry-over keeps a bank-side row change (the mortgage row) in the plan', () => {
+    const before = buildSample(sampleState({ rows: { [MORTGAGE]: { cents: 76543 } } }));
+    assert.equal(before.dialsByKey.essentials.drill.rows.find(r => r.level === 1 && r.label === 'Mortgage').planCents, 76543, 'the row change applies before the upgrade');
+    const { tl, next } = upgrade(sampleState({ rows: { [MORTGAGE]: { cents: 76543 } }, legacy: { card: 321987 } }));
+    assert.ok(tl.migration.rows.length && tl.migration.dials);
+    const after = buildSample(next);
+    assert.equal(after.plan.out.card, 321987);
+    assert.equal(after.plan.out.bank, before.plan.out.bank, 'the bank side is what the rows give, mortgage change included');
+    assert.notEqual(after.plan.out.bank, before.dials.reduce((s, d) => s + (d.baselineBankCents || 0), 0), 'not the baseline');
+  });
+
+  test('regression: a bank-only carry-over keeps a card-side row change (the groceries row) in the plan', () => {
+    const before = buildSample(sampleState({ rows: { [GROCERIES]: { cents: 43210 } } }));
+    const { next } = upgrade(sampleState({ rows: { [GROCERIES]: { cents: 43210 } }, legacy: { bank: 234567 } }));
+    const after = buildSample(next);
+    assert.equal(after.plan.out.bank, 234567);
+    assert.equal(after.plan.out.card, before.plan.out.card, 'the card side is what the rows give, groceries change included');
+  });
+
+  test('regression: both amounts replace the rows on both sides; the other dials are not touched', () => {
+    const rows = { [MORTGAGE]: { cents: 76543 }, [GROCERIES]: { cents: 43210 } };
+    const before = buildSample(sampleState({ rows }));
+    const { next } = upgrade(sampleState({ rows, legacy: { card: 321987, bank: 234567 } }));
+    const after = buildSample(next);
+    assert.deepEqual([after.plan.out.card, after.plan.out.bank], [321987, 234567]);
+    assert.equal(['essentials', 'flexible', 'irregular'].reduce((s, k) => s + after.dialsByKey[k].planCents, 0), 556554);
+    for (const k of ['p1', 'p2', 'savings']) {
+      assert.deepEqual([after.dialsByKey[k].source, after.dialsByKey[k].planCents], [before.dialsByKey[k].source, before.dialsByKey[k].planCents], k);
+    }
+    assert.deepEqual(Object.keys(next.ui.plan.dials).sort(), ['essentials', 'flexible', 'irregular']);
+  });
+
+  test('regression: running the upgrade again changes nothing, and nothing is left to migrate', () => {
+    const { next } = upgrade(sampleState({ rows: { [MORTGAGE]: { cents: 76543 }, [GROCERIES]: { cents: 43210 } }, legacy: { card: 321987, bank: 234567 } }));
+    const again = buildSample(next);
+    assert.equal(again.migration, null);
+    assert.equal(T.migrateDials(T.migrateRows(next, again), again), next);
+    assert.deepEqual(upgrade(next).next, next);
+  });
+
+  test('regression: Flexible already set stays as set; Essentials keeps its bank rows with the mortgage change', () => {
+    const before = buildSample(sampleState({ rows: { [MORTGAGE]: { cents: 76543 } }, dials: { flexible: 87654 } }));
+    const { tl, next } = upgrade(sampleState({ rows: { [MORTGAGE]: { cents: 76543 } }, dials: { flexible: 87654 }, legacy: { card: 321987 } }));
+    assert.match(tl.migration.dials.note, /Flexible was already set by you and was left as it is/);
+    const after = buildSample(next);
+    assert.equal(next.ui.plan.dials.flexible, 87654);
+    assert.deepEqual([after.dialsByKey.flexible.source, after.dialsByKey.flexible.planCents], ['direct', 87654]);
+    assert.equal(after.dialsByKey.essentials.bankCents, before.dialsByKey.essentials.bankCents);
+    assert.equal(after.dialsByKey.irregular.bankCents, before.dialsByKey.irregular.bankCents);
+  });
+}

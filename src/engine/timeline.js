@@ -909,10 +909,13 @@
    * A card amount X is shared over the three dials' baseline card parts (C = their sum): each
    * card part becomes round(baselineCard × X / C), the rounding remainder on the largest baseline
    * card part, so the three add up to X exactly; when C is 0 the whole of X is Flexible's card
-   * part (the others' card parts are $0). A bank amount likewise on the bank parts. A side that was
-   * not set keeps its baseline parts. Each dial's amount = its card part + its bank part. A dial the
-   * household already set directly is left alone (to: null, named in `skipped` and in the note).
-   * With no baseline yet (no complete month), everything set goes to Flexible.
+   * part (the others' card parts are $0). A bank amount likewise on the bank parts. Each amount
+   * replaces the rows on its own side, as the earlier dial did. A side that was not set keeps what
+   * the rows give it now (drill rowsCardCents, and rowsCents − rowsCardCents for the bank side),
+   * so the household's row changes on that side still count. Each dial's amount = its card part +
+   * its bank part. A dial the household already set directly is left alone (to: null, named in
+   * `skipped` and in the note). With no baseline yet (no complete month), everything set goes to
+   * Flexible.
    * @returns {{ from: { card?, bank? }, to: { essentials, flexible, irregular }, parts: { [dial]: { card, bank }|null },
    *   skipped: string[], note: string }|null}
    */
@@ -922,16 +925,24 @@
     const sides = LEGACY_DIALS.filter(k => has(from, k));
     if (!sides.length) return null;
     const skipped = SPEND_DIALS.filter(k => isCents(own(cfg.dials, k)));
-    const known = SPEND_DIALS.every(k => dialsByKey[k] && isCents(dialsByKey[k].baselineCardCents) && isCents(dialsByKey[k].baselineBankCents));
+    const known = SPEND_DIALS.every(k => {
+      const d = dialsByKey[k];
+      return d && isCents(d.baselineCardCents) && isCents(d.baselineBankCents) && d.drill && isCents(d.drill.rowsCents) && isCents(d.drill.rowsCardCents);
+    });
     const parts = {};
     const how = {};
     if (!known) {
       for (const k of SPEND_DIALS) parts[k] = null;
       parts.flexible = { card: has(from, 'card') ? from.card : 0, bank: has(from, 'bank') ? from.bank : 0 };
     } else {
-      for (const k of SPEND_DIALS) parts[k] = { card: dialsByKey[k].baselineCardCents, bank: dialsByKey[k].baselineBankCents };
+      // What the rows give each side now (row changes included), until an amount replaces that side.
+      for (const k of SPEND_DIALS) {
+        const drill = dialsByKey[k].drill;
+        parts[k] = { card: drill.rowsCardCents, bank: drill.rowsCents - drill.rowsCardCents };
+      }
       for (const side of sides) {
-        const base = SPEND_DIALS.map(k => parts[k][side]);
+        // Shared out in proportion to the baseline, like the earlier dial's own baseline.
+        const base = SPEND_DIALS.map(k => (side === 'card' ? dialsByKey[k].baselineCardCents : dialsByKey[k].baselineBankCents));
         const total = base.reduce((s, v) => s + v, 0);
         const x = from[side];
         if (total === 0) {

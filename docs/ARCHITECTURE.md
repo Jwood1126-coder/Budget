@@ -1231,8 +1231,11 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
     the amounts over. A card amount X is shared over the three dials' `baselineCardCents` (sum C):
     card part = round(baselineCard × X / C), the rounding remainder on the largest baseline card
     part, so the parts add up to X exactly; C = 0 puts all of X on Flexible (the others' card parts
-    $0). A bank amount likewise on `baselineBankCents`; a side not set keeps its baseline parts; both
-    compose. `to[dial]` = card part + bank part, or null for a dial already set directly (`skipped`).
+    $0). A bank amount likewise on `baselineBankCents`; both compose, and each replaces the rows on
+    its own side (as the earlier dial did). A side not set keeps what the rows give it now, row
+    changes included (`drill.rowsCardCents`; bank: `drill.rowsCents − drill.rowsCardCents`), so a
+    card-only amount never drops a bank-side row change (and vice versa). `to[dial]` = card part +
+    bank part, or null for a dial already set directly (`skipped`).
     With no baseline yet, all of it goes to Flexible (`parts` null for the others). Note, e.g.:
     "Your earlier card spending setting of $4,200.00 was carried over by scaling the card part of
     Essentials, Flexible and Irregular (they now add up to it); adjust them individually from here."

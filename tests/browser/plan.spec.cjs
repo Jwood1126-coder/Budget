@@ -781,8 +781,12 @@ module.exports = [
     async run(t) {
       const { page, assert } = t;
       await t.open('#/overview');
+      const seqBefore = await page.evaluate(() => document.documentElement.dataset.renderSeq);
       await typeAmount(page, '#plan-dial-flexible', '1,234.56');
       await page.waitForFunction(() => window.HouseholdBudget.getState().ui.plan.dials.flexible === 123456);
+      // Let the render that follows the typed amount land before counting renders.
+      await page.waitForFunction(s => document.documentElement.dataset.renderSeq !== s, seqBefore);
+      await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
       // The legend toggle is saved without a re-render.
       const seq = await page.evaluate(() => document.documentElement.dataset.renderSeq);
       await page.click('#plan-chart .cc-chip[data-cc-key="acct-joint-checking"]');
