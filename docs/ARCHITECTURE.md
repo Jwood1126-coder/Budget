@@ -50,16 +50,26 @@ src/
     balances.js          balances over time, whose money a deposit is (BudgetEngine.balances)
     flows.js             spending by role and how it was paid, money into joint by person, savings in/out, the baseline the Plan screen's dials start from (BudgetEngine.flows)
     plan-settings.js     the plan screen's vocabulary, shared by timeline and state (BudgetEngine.planSettings)
-    timeline.js          the plan screen: months, dials, drill-down, balances that drive the line (BudgetEngine.timeline)
+    timeline-*.js        BudgetEngine.timeline by section, loaded before timeline.js (BudgetEngine._timeline,
+                         private to them): core (helpers, constants, settings; loaded first), balances,
+                         spending (groups, drill-down, irregular items), dials (deposit hints, carry-over),
+                         changes (planned changes, templates), export (toCSV), writes (state writes, upgrades)
+    timeline.js          the plan screen: build, the Trends series, the public API (BudgetEngine.timeline)
     state.js             saved-state schema, migration, storage  (BudgetEngine.state)
     attention.js         "needs attention" list (Review)         (BudgetEngine.attention)
   ui/
-    core.js              escaping, formatting, DOM helpers       (BudgetUI.dom/.fmt)
+    core.js              escaping, formatting, DOM helpers       (BudgetUI.dom/.fmt): fmt.amount (cents
+                         only when non-zero), dom.centsToInputText (an exact-entry box: 2,222.02)
     components.js        breadcrumbs, tables, form fields, line and column charts (BudgetUI.c)
     chart.js             the Plan screen's cash chart: drawing, hover, keyboard, legend (BudgetUI.chart)
     router.js            hash routing                            (BudgetUI.router)
     shared.js            transaction labels, table, category and correction forms several views share (BudgetUI.shared)
     views/*.js           one file per view                       (BudgetUI.views.<name>)
+    views/plan/*.js      the Plan view (views/overview.js) by section, loaded before it: common (the
+                         model, formatting), chart, balances, dials, changes, actions (the plan:*
+                         table)                                  (BudgetUI._plan, private to Plan).
+                         A developer build (`--view x`) stubs only files directly in views/, so
+                         these are always bundled whole
     app.js               bootstrap, state store, event wiring    (BudgetUI.app) — loaded last
   styles/*.css           base tokens/components + one file per view
   layout.html            document shell with placeholders
@@ -1184,7 +1194,24 @@ Joint cash accounts only (checking, savings, other; cards and loans are not bala
   candidates the per-paycheck/per-transfer amount must match one; otherwise null ("other").
 
 ### BudgetEngine.timeline
-The plan screen's model, built once per render. Pure; `today` is passed in.
+The plan screen's model, built once per render. Pure; `today` is passed in. One module in eight
+files, split by section and loaded in this order (`src/manifest.json`):
+
+| File | Holds |
+| --- | --- |
+| `engine/timeline-core.js` | the shared helpers (`isObj`, `isCents`, `has`, `own`, `plural`, `sumKnown`, `roundCents`, `fail`, `median`, `late`), the constants (the `planSettings` lists, `BALANCE_SERIES`, `BALANCE_SERIES_PREFIX`, `LEGACY_DIALS`, `IN_KEYS`, `MERCHANT_KEY`, `DIAL_LABEL`) and `settings`; creates `BudgetEngine._timeline` |
+| `engine/timeline-balances.js` | known balances (`anchors`), mirrored savings (`mirrorPlan`), the balance lines with their assumed and illustrative points (`balancesFor`), `prorate`; `RULE`, `SIMPLE_RULE`, `SIMPLE_LABEL`, `ILLUSTRATIVE` |
+| `engine/timeline-spending.js` | spending by group (`spendGroups`, row ids: `rowIdOf`), the essentials and flexible drill-down with its pattern badges (`drillFor`), the irregular items (`irregularFor`); `TINY_CATEGORY_CENTS`, `STABLE_MIN_CHARGES`, `STABLE_SPREAD`, `OTHER_CATEGORY` |
+| `engine/timeline-dials.js` | observed deposits (`depositHint`), the dials and `carriedOver` (`buildDials`), one plan month (`planMonth`), the carry-over of the earlier card/bank dials (`legacyDialsPlan`) |
+| `engine/timeline-changes.js` | planned changes (`readChanges`, `changeActiveIn`, `applyChange`, `summarizeChanges`) and `templates` |
+| `engine/timeline-export.js` | `toCSV` |
+| `engine/timeline-writes.js` | the state writes (below), `migrateRows`, `migrateDials`, `pendingUpgrade`, `acceptCarriedOver` |
+| `engine/timeline.js` | `build`, the Trends series catalogue, and `BudgetEngine.timeline`, assembled from the parts |
+
+`BudgetEngine._timeline` is private to these files; the public API is `BudgetEngine.timeline`
+(below). Each part adds to it what the others use, and calls another part's function only when it
+runs, through `late(name)`: `timeline-core.js` loads first, `timeline.js` last (it refuses to load,
+naming what is missing, when a public name has not been added), the parts in between in any order.
 - `build({ txns, dataset, plan, settings, today, coverageMap? })` — `txns` effective (no what-if),
   `plan` = `state.plan` (with `plan.changes`), `settings` = `state.ui.plan`, `today` 'YYYY-MM-DD'. Returns
   `{ today, todayMonth, planStart, lastComplete, firstMonth, lastMonth, horizon, months, window,
@@ -1290,11 +1317,22 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
     role, dialKey ('irregular' for card and bank purchases), cents, auto }`; toggled with the
     `planningBaseline` ledger edit. `plan`: when `changed`, one plan month at baseline dials (same
     shape as `plan`), else null.
-  - `series`: the Trends chart's lines, `[{ key, name, group: 'in'|'out'|'savings'|'net', values }]`
-    aligned with `months` (actual months from what happened, null when incomplete; partial and plan
-    months from the plan). Keys, in order: `in-<personId>` per person, `in-other`, `in-total`,
-    `card`, `bank`, `essentials`, `flexible`, `irregular`, `other-out`, `out-total`, `to-savings`,
-    `from-savings`, `net`, `combined-change` (`SERIES` lists the fixed ones).
+  - `series`: the Trends chart's lines, `[{ key, name, group: 'in'|'out'|'savings'|'net'|'balances',
+    kind: 'flow'|'balance', unit: 'perMonth'|'atMonthEnd', values }]`, `values` aligned with
+    `months`. First the monthly amounts (`kind: 'flow'`, `unit: 'perMonth'`: actual months from
+    what happened, null when incomplete; partial and plan months from the plan). Keys, in order:
+    `in-<personId>` per person, `in-other`, `in-total`, `card`, `bank`, `essentials`, `flexible`,
+    `irregular`, `other-out`, `out-total`, `to-savings`, `from-savings`, `net`, `combined-change`
+    (`SERIES` lists the fixed ones). Then the balances (`group: 'balances'`, `kind: 'balance'`,
+    `unit: 'atMonthEnd'`): each balance line's month-end cents, the same as its points' `cents`
+    (null where not known; projected months included, which the chart dashes from `planStart` like
+    every line): `balance-combined` ("Combined cash", `balances.combined`, either mode),
+    `balance-<accountId>` ("<account name> balance") per account in `balances.accounts`, and
+    `balance-savings-total` ("Savings total") when two or more savings accounts have a line (null in
+    a month where any of them is unknown). No balance line, no balance series; an account whose id
+    would give one of the fixed keys has no series of its own. Every key can be saved in
+    `ui.plan.trends.series`: `planSettings.BALANCE_SERIES` lists the fixed balance keys, and
+    `TREND_SERIES.includes` also accepts `balance-` + any account id (`planSettings.isBalanceSeries`).
   - `migration`: null, or `{ rows: [{ from, to }], dropped, superseded, rowsNote, dials, note }`
     when `settings.rows` still holds changes saved under the earlier card/bank dials, or
     `settings.legacyDials` holds amounts set for them. A row change applies to the same row
@@ -1526,7 +1564,7 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
 
 | Route | View |
 | --- | --- |
-| `#/overview` | Plan (`views/overview.js`, one `timeline.build` per render): the cash chart first (Balance: combined cash and, switched off until chosen, each account, plus a faint baseline-plan line once a dial has moved and markers for planned changes; Flows: money in by person, other and from savings, out as essentials, flexible, irregular, savings and debt/business/investing, with a net line; Trends: any monthly series as lines with an optional trailing average and a straight-line trend; Past 6/12/all and Ahead 6/12/24/60 months; Export CSV); the balances it starts from (taken from the data — statement or bank running balance — with their source shown; an entered balance is an override); the dials (money in by person from the pay saved in Budget, money out as Essentials, Flexible spending, Irregular costs, Net to savings and Other; slider in $25 steps plus an exact box; essentials and flexible open into categories and places with pattern badges that can be unticked, given an amount or moved between the two groups; irregular lists the one-time items in the allowance); the headline (all accounts per month, then checking); the Planned changes drawer (dated one-time and monthly changes, the Baby template); More options (baseline window, cover from savings). Every change goes through `app.update` and can be undone; view settings and legend toggles are saved without a re-render |
+| `#/overview` | Plan (`views/overview.js` composing `views/plan/*.js`, one `timeline.build` per render): the cash chart first (Balance: combined cash with each savings account's line, each checking account's line switched off until chosen (`ui.plan.hidden` null), plus a faint baseline-plan line once a dial has moved and markers for planned changes; Flows: money in by person, other and from savings, out as essentials, flexible, irregular, savings and debt/business/investing, with a net line; Trends: any monthly series, and in a Balances group the month-end balances (combined cash, each cash account, savings in total when there are two or more savings accounts), as lines with an optional trailing average and a straight-line trend; the y-axis title is "Monthly, $ per month", "$ at month end" or, with both kinds picked, "$ — monthly amounts and month-end balances", and the caption then adds that balance lines are month-end levels; Past 6/12/all and Ahead 6/12/24/60 months; Export CSV); the balances it starts from (taken from the data — statement or bank running balance — with their source shown; an entered balance is an override); the dials (money in by person from the pay saved in Budget, money out as Essentials, Flexible spending, Irregular costs, Net to savings and Other; slider in $25 steps plus an exact box; essentials and flexible open into categories and places with pattern badges that can be unticked, given an amount or moved between the two groups; irregular lists the one-time items in the allowance); the headline (all accounts per month, then checking); the Planned changes drawer (dated one-time and monthly changes, the Baby template); More options (baseline window, cover from savings). Every change goes through `app.update` and can be undone; view settings and legend toggles are saved without a re-render |
 | `#/spending?period=2026-09&cat=Groceries&merchant=…&txn=…&q=…&window=3` | month → category → merchant → transaction drilldown with breadcrumbs |
 | `#/budget?section=income|bills|targets|savings|debts` | edit plan inputs; planned vs actual; consequences |
 | `#/forecast?scenario=…&compare=a,b&horizon=36` | scenarios, events, projections, side-by-side |

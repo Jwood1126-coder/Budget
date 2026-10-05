@@ -9,7 +9,8 @@ const SRC = path.join(__dirname, '..', 'src');
 function loadEngine({ only } = {}) {
   const manifest = JSON.parse(fs.readFileSync(path.join(SRC, 'manifest.json'), 'utf8'));
   for (const rel of manifest.engine) {
-    if (only && !only.some(name => rel.endsWith(name))) continue;
+    // A whole file name: 'core.js' is engine/core.js, not engine/timeline-core.js.
+    if (only && !only.some(name => rel === name || rel.endsWith('/' + name))) continue;
     const file = path.join(SRC, rel);
     if (fs.existsSync(file)) require(file);
   }

@@ -1099,18 +1099,71 @@ test('a savings account with only a supplied balance is worked back from the tra
 test('series: every catalogue key is there, aligned with the months; incomplete months are null; plan months use the plan', () => {
   const ds = small();
   const r = run(ds, { plan: planWith({ accounts: { chk: 350000 }, accountDates: { chk: '2026-05-31' } }), settings: LOSING });
-  assert.deepEqual(r.series.map(s => s.key), ['in-p1', 'in-p2', 'in-other', 'in-total', 'card', 'bank', 'essentials', 'flexible', 'irregular', 'other-out', 'out-total', 'to-savings', 'from-savings', 'net', 'combined-change']);
-  assert.deepEqual(r.series.map(s => s.group), ['in', 'in', 'in', 'in', 'out', 'out', 'out', 'out', 'out', 'out', 'out', 'savings', 'savings', 'net', 'net']);
+  // The monthly amounts first; the balance series follow them (next test).
+  const flows = r.series.filter(s => s.kind === 'flow');
+  assert.deepEqual(r.series.slice(0, flows.length), flows);
+  assert.ok(flows.every(s => s.unit === 'perMonth'));
+  assert.deepEqual(flows.map(s => s.key), ['in-p1', 'in-p2', 'in-other', 'in-total', 'card', 'bank', 'essentials', 'flexible', 'irregular', 'other-out', 'out-total', 'to-savings', 'from-savings', 'net', 'combined-change']);
+  assert.deepEqual(flows.map(s => s.group), ['in', 'in', 'in', 'in', 'out', 'out', 'out', 'out', 'out', 'out', 'out', 'savings', 'savings', 'net', 'net']);
   assert.equal(r.series[0].name, 'Morgan');
   assert.ok(r.series.every(s => s.values.length === r.months.length));
   const s = key => r.series.find(x => x.key === key).values;
   const iFeb = r.months.findIndex(m => m.month === '2026-02'), iApr = r.months.findIndex(m => m.month === '2026-04'), iAug = r.months.findIndex(m => m.month === '2026-08');
   assert.equal(r.months[iFeb].complete, false);
-  assert.ok(r.series.every(x => x.values[iFeb] === null), 'an incomplete month is unknown in every series');
+  assert.ok(flows.every(x => x.values[iFeb] === null), 'an incomplete month is unknown in every monthly series');
   assert.deepEqual(['in-p1', 'card', 'bank', 'essentials', 'out-total', 'net', 'combined-change'].map(k => s(k)[iApr]), [200000, 16125, 120000, 136125, 136125, 63875, 63875]);
   assert.deepEqual(['in-total', 'essentials', 'flexible', 'out-total', 'net', 'to-savings', 'from-savings'].map(k => s(k)[iAug]), [200000, 150000, 95000, 245000, -45000, 0, 0]);
   // Every series the chart draws (the person series too) can be chosen and saved in ui.plan.trends.
   for (const k of r.series.map(x => x.key)) assert.ok(E.state.TREND_SERIES.includes(k), k + ' can be saved in ui.plan.trends');
+});
+
+test('series: balance lines at month end (combined, each account, savings total), aligned with the balance points, and saveable', () => {
+  // Checking, a card and two savings accounts, each with its own export (1 March to 31 May 2026).
+  const txns = small({ withSavings: true }).transactions.slice();
+  txns.push(row('sav2', '2026-04-30', 1250, { kind: 'income', subtype: 'interest', category: 'Interest', merchant: 'Interest', description: 'INTEREST PAID' }));
+  const cover = [{ start: '2026-03-01', end: '2026-05-31' }];
+  const ds = L.normalizeDataset({ schemaVersion: 2, datasetId: 'timeline-test', isSynthetic: true, transactions: txns, accounts: [
+    { id: 'chk', label: 'Test checking', type: 'checking', scope: 'joint', coverage: cover },
+    { id: 'card', label: 'Test card', type: 'credit_card', scope: 'joint', coverage: cover, paidInFull: true },
+    { id: 'sav', label: 'Test savings', type: 'savings', scope: 'joint', coverage: cover },
+    { id: 'sav2', label: 'Rainy day', type: 'savings', scope: 'joint', coverage: cover },
+  ] });
+  const r = run(ds, { plan: planWith({ accounts: { chk: 350000, sav: 90000, sav2: 40000 }, accountsAsOf: '2026-05-31' }), settings: LOSING });
+  const bal = r.series.filter(s => s.kind === 'balance');
+  assert.deepEqual(r.series.slice(-bal.length), bal, 'after the monthly series');
+  assert.deepEqual(bal.map(s => [s.key, s.name]), [
+    ['balance-combined', 'Combined cash'], ['balance-chk', 'Test checking balance'], ['balance-sav', 'Test savings balance'],
+    ['balance-sav2', 'Rainy day balance'], ['balance-savings-total', 'Savings total'],
+  ]);
+  assert.ok(bal.every(s => s.group === 'balances' && s.unit === 'atMonthEnd' && s.values.length === r.months.length));
+  const values = key => bal.find(s => s.key === key).values;
+  assert.deepEqual(values('balance-combined'), r.balances.combined.points.map(p => p.cents));
+  for (const id of ['chk', 'sav', 'sav2']) assert.deepEqual(values('balance-' + id), account(r, id).points.map(p => p.cents), id);
+  assert.deepEqual(values('balance-savings-total'), r.months.map((m, i) => {
+    const a = account(r, 'sav').points[i].cents, b = account(r, 'sav2').points[i].cents;
+    return a === null || b === null ? null : a + b;
+  }));
+  // Known before the export starts (worked back), and projected months are there too.
+  const iFeb = r.months.findIndex(m => m.month === '2026-02'), iAug = r.months.findIndex(m => m.month === '2026-08');
+  assert.equal(values('balance-sav2')[iFeb], 40000 - 1250);
+  assert.equal(point(r.balances.combined, '2026-08').status, 'projected');
+  assert.ok(bal.every(s => s.values[iAug] !== null), 'projected months are included');
+  // Saveable in ui.plan.trends.series: the account keys too, though account ids come with the data.
+  let st = E.state.defaults({ people: PEOPLE }, ds);
+  st = E.state.setPath(st, 'ui.plan.trends.series', ['balance-combined', 'balance-sav2', 'balance-savings-total', 'net']);
+  assert.deepEqual(st.ui.plan.trends.series, ['balance-combined', 'balance-sav2', 'balance-savings-total', 'net']);
+  assert.deepEqual(E.state.sanitize(JSON.parse(JSON.stringify(st))).state.ui.plan.trends.series, st.ui.plan.trends.series, 'kept when the budget is opened again');
+  assert.deepEqual(run(ds, { settings: st.ui.plan }).settings.trends.series, st.ui.plan.trends.series);
+  assert.equal(E.state.TREND_SERIES.includes('balance-'), false, 'a key needs an account id after the prefix');
+  // One savings account: no total. Simple mode: the combined line only. No balance known: none.
+  const one = run(small({ withSavings: true }), { plan: planWith({ accounts: { chk: 350000, sav: 90000 }, accountsAsOf: '2026-05-31' }), settings: LOSING });
+  assert.deepEqual(one.series.filter(s => s.kind === 'balance').map(s => s.key), ['balance-combined', 'balance-chk', 'balance-sav']);
+  const simple = run(small(), { plan: planWith({ jointCashCents: 500000, asOf: '2026-05-31' }), settings: LOSING });
+  assert.equal(simple.balances.mode, 'simple');
+  assert.deepEqual(simple.series.filter(s => s.kind === 'balance').map(s => [s.key, s.values]), [['balance-combined', simple.balances.combined.points.map(p => p.cents)]]);
+  const none = run(small(), { settings: LOSING });
+  assert.equal(none.balances.combined, null);
+  assert.deepEqual(none.series.filter(s => s.kind === 'balance'), []);
 });
 
 /** A small RFC 4180 reader for the tests: rows of fields. */
@@ -1541,6 +1594,25 @@ test('a carried-over amount stays explained until it is kept or changed: per dia
     assert.equal(again.migration, null);
     assert.equal(T.migrateDials(T.migrateRows(next, again), again), next);
     assert.deepEqual(upgrade(next).next, next);
+  });
+
+  test('series: the sample balance lines are in the Trends catalogue, at month end, and can be saved', () => {
+    const tl = buildSample(sampleState());
+    const bal = tl.series.filter(s => s.kind === 'balance');
+    assert.deepEqual(tl.balances.accounts.map(a => [a.id, a.group]), [['joint-checking', 'checking'], ['joint-savings', 'savings']]);
+    assert.deepEqual(bal.map(s => [s.key, s.name, s.group, s.unit]), [
+      ['balance-combined', 'Combined cash', 'balances', 'atMonthEnd'],
+      ['balance-joint-checking', 'Joint checking balance', 'balances', 'atMonthEnd'],
+      ['balance-joint-savings', 'Joint savings balance', 'balances', 'atMonthEnd'],
+    ], 'one savings account: no savings total');
+    assert.deepEqual(bal[0].values, tl.balances.combined.points.map(p => p.cents));
+    tl.balances.accounts.forEach((a, i) => assert.deepEqual(bal[i + 1].values, a.points.map(p => p.cents), a.id));
+    const iPlan = tl.months.findIndex(m => m.month === tl.planStart);
+    assert.equal(tl.balances.combined.points[tl.months.length - 1].status, 'projected');
+    assert.ok(bal.every(s => s.values.slice(iPlan).every(v => Number.isSafeInteger(v))), 'every plan month has a projected month-end balance');
+    let st = sampleState();
+    st = E.state.setPath(st, 'ui.plan.trends.series', bal.map(s => s.key));
+    assert.deepEqual(buildSample(st).settings.trends.series, bal.map(s => s.key));
   });
 
   test('regression: Flexible already set stays as set; Essentials keeps its bank rows with the mortgage change', () => {

@@ -663,7 +663,6 @@
     const net = E.money.isCents(s.netPerPaycheckCents) ? s.netPerPaycheckCents : null;
     const joint = E.money.isCents(s.jointPerPaycheckCents) ? s.jointPerPaycheckCents : null;
     const hasContribution = (ctx.state.plan.incomes || []).some(x => x.kind === 'contribution' && x.personId === s.personId && x.personId);
-    const unit = isContribution ? 'transfer' : 'paycheck';
 
     // Amount fields
     const amountFields = isContribution

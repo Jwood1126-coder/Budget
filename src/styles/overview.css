@@ -1,6 +1,7 @@
 /* ==========================================================================
-   Plan (#/overview, src/ui/views/overview.js): the chart card, balances, dials with their
-   drill-down, planned changes and More options. Base tokens only, so dark mode follows base.css.
+   Plan (#/overview, src/ui/views/overview.js and src/ui/views/plan/*.js): the chart card,
+   balances, dials with their drill-down, planned changes and More options. Base tokens only, so
+   dark mode follows base.css.
    ========================================================================== */
 .plan { display: flex; flex-direction: column; gap: var(--space-4); }
 .plan-h { margin: 0 0 var(--space-3); font-size: 1rem; }

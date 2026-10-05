@@ -200,14 +200,14 @@
    *   net { key, name, values } | null,
    *   trends { series: [{ key, name, cls?, values: [cents|null per month] }], ma: 0|3|6, trend: bool },
    *   markers [{ month, label, cents?, kind 'oneTime'|'monthly' }] (presentation only, any mode),
-   *   hidden [keys], format, caption, tableCaption,
+   *   hidden [keys], format, caption, tableCaption, axisTitle (the y-axis title, when not the mode's own),
    *   controls (trusted HTML placed on the title row, e.g. the mode switch), titleHidden.
    */
   function cashChart(spec = {}) {
     const {
       id, title = '', mode: modeIn = 'balance', months: monthsIn = [], todayMonth = null, planStart = null,
       lines = [], columns: columnsIn, net = null, hidden = [], format: formatIn, caption = '', tableCaption,
-      controls = '', titleHidden = false, trends: trendsIn = null, markers: markersIn = [],
+      controls = '', titleHidden = false, trends: trendsIn = null, markers: markersIn = [], axisTitle: axisTitleIn = '',
     } = spec || {};
     const columns = columnsIn || {};
     const mode = modeIn === 'flows' ? 'flows' : modeIn === 'trends' ? 'trends' : 'balance';
@@ -219,7 +219,7 @@
     const signed = v => (known(v) && v > 0 ? '+' : '') + money(v);
     const hiddenSet = new Set((hidden || []).map(String));
     const isPlan = m => !!planStart && m >= planStart;
-    const axisTitle = mode === 'balance' ? 'Balance, $ at month end' : mode === 'trends' ? 'Monthly, $ per month' : 'Flows, $ per month';
+    const axisTitle = axisTitleIn ? String(axisTitleIn) : mode === 'balance' ? 'Balance, $ at month end' : mode === 'trends' ? 'Monthly, $ per month' : 'Flows, $ per month';
     // Title and controls share the top row, so the legend below has the full width in both modes.
     const head = (keysHtml, chipsHtml) => `<div class="cc-top${titleHidden ? ' is-title-hidden' : ''}">
         <p class="cc-title${titleHidden ? ' sr-only' : ''}" id="${esc(figId)}-title">${esc(title)}</p>

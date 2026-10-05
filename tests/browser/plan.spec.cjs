@@ -28,6 +28,16 @@ function timeline(page) {
     };
   });
 }
+/** The Trends series the engine offers for the current state: key, name, group, kind and unit. */
+function seriesInfo(page) {
+  return page.evaluate(() => {
+    const H = window.HouseholdBudget, E = H.engine, ctx = H.context(), st = H.getState();
+    const d = new Date();
+    const today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    const tl = E.timeline.build({ txns: ctx.realTxns, dataset: ctx.dataset, plan: st.plan, settings: st.ui.plan, today, coverageMap: ctx.coverageMap });
+    return tl.series.map(s => ({ key: s.key, name: s.name, group: s.group, kind: s.kind, unit: s.unit }));
+  });
+}
 const dialOf = (exp, key) => exp.dials.find(d => d.key === key);
 const near = (a, b, tol) => Math.abs(a - b) <= tol;
 
@@ -96,11 +106,11 @@ module.exports = [
       assert.equal(r.above, 0, 'nothing above the chart card');
       assert.deepEqual(r.ids, ['plan-chart-card', 'plan-balances', 'plan-dials', 'plan-changes', 'plan-more', 'plan-live', 'plan-sample'], 'chart → balances → dials → drawers');
       assert.ok(!/safe to spend|affordable|cash available|bank balance/i.test(r.text), 'no promises about spendable cash');
-      // Balance mode by default (the sample knows its balances); the account lines start switched off.
+      // Balance mode by default (the sample knows its balances); savings shows with the combined line, checking starts switched off.
       assert.equal(await page.getAttribute('#plan-chart', 'data-mode'), 'balance');
       assert.deepEqual(await page.$$eval('input[name="plan-mode"]', xs => xs.map(x => x.value)), ['balance', 'flows', 'trends']);
       const chips = await page.$$eval('#plan-chart .cc-chip', bs => bs.map(b => [b.textContent.trim(), b.getAttribute('aria-pressed')]));
-      assert.deepEqual(chips, [['Combined cash', 'true'], ['Joint checking', 'false'], ['Joint savings', 'false']], 'no baseline line while nothing changed');
+      assert.deepEqual(chips, [['Combined cash', 'true'], ['Joint checking', 'false'], ['Joint savings', 'true']], 'no baseline line while nothing changed');
       assert.equal(await page.$$eval('#plan-chart .cc-ghost-line', x => x.length), 0);
       // The account lines (off by default, one tap away) are illustrative: the caption says so once.
       assert.match(await page.textContent('#plan-chart .cc-caption'), /^Combined cash = Joint checking \+ Joint savings\. Solid: your data through Sep 2026\. Dashed: this plan from Oct 2026\. Account lines are illustrative: card spending is taken from checking in the month it happens, not when the card is paid; the combined line is not affected\.$/);
@@ -715,6 +725,57 @@ module.exports = [
     },
   },
   {
+    name: 'trends: a Balances group adds month-end balances; the axis title says what the lines measure',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      const balance = await table(page);
+      await page.click('label[for^="plan-mode-trends"]');
+      await page.waitForSelector('#plan-chart[data-mode="trends"]');
+      const series = await seriesInfo(page);
+      const savings = series.find(s => s.key === 'balance-joint-savings');
+      assert.ok(savings, 'the engine offers the savings balance: ' + series.map(s => s.key).join(', '));
+      assert.deepEqual([savings.group, savings.kind, savings.unit], ['balances', 'balance', 'atMonthEnd']);
+      // "Add a line…": a Balances group after Net, with every balance series the engine offers.
+      assert.deepEqual((await page.$$eval('#plan-trend-add optgroup', gs => gs.map(g => g.label))).slice(-2), ['Net', 'Balances']);
+      const options = await page.$$eval('#plan-trend-add optgroup[label="Balances"] option', os => os.map(o => [o.value, o.textContent.trim()]));
+      assert.deepEqual(options, series.filter(s => s.group === 'balances').map(s => [s.key, s.name]));
+      assert.ok(options.some(([key]) => key === 'balance-joint-savings'), 'the sample’s savings balance is listed');
+      const axis = () => page.textContent('#plan-chart .cc-axis-title').then(x => x.trim());
+      const caption = () => page.textContent('#plan-chart .cc-caption');
+      assert.equal(await axis(), 'Monthly, $ per month', 'card spending only');
+      // Picked: a line like the others (solid in actual months, dashed in the plan), next to card spending.
+      await page.selectOption('#plan-trend-add', 'balance-joint-savings');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().ui.plan.trends.series.join() === 'card,balance-joint-savings');
+      const line = '#plan-chart .cc-trend-series[data-cc-series="balance-joint-savings"] path.line:not(.cc-ma-line):not(.cc-trend-line)';
+      await page.waitForSelector(line);
+      assert.ok(await page.$(line + ':not(.is-projected)'), 'actual months: solid');
+      assert.ok(await page.$(line + '.is-projected'), 'plan months: dashed');
+      assert.equal(await page.getAttribute('#plan-trend-balance-joint-savings', 'aria-label'), `Remove ${savings.name} from the chart`);
+      assert.equal(await axis(), '$ — monthly amounts and month-end balances', 'card spending and a balance');
+      assert.equal(await caption(), 'Monthly amounts from your data; dashed = this plan. Balance lines are month-end levels, not monthly amounts. Average = trailing 3 months. Trend = straight-line fit of the actual months.');
+      // The same month-end figures as the savings line in the Balance view.
+      const tb = await table(page);
+      let compared = 0;
+      for (const r of tb.rows) {
+        const cents = centsOf(r[tb.col(savings.name)]);
+        if (cents === null) continue;
+        assert.equal(cents, centsOf(row(balance, r[0])[balance.col('Joint savings')]), r[0]);
+        compared++;
+      }
+      assert.ok(compared >= 12, compared + ' months compared');
+      // Only balances: the axis says month end and the caption needs no note.
+      await page.click('#plan-trend-card');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().ui.plan.trends.series.join() === 'balance-joint-savings');
+      await page.waitForFunction(() => !document.querySelector('#plan-chart .cc-trend-series[data-cc-series="card"]'));
+      assert.equal(await axis(), '$ at month end');
+      assert.ok(!(await caption()).includes('Balance lines'), await caption());
+      await page.reload();
+      await page.waitForSelector(line);
+      assert.equal(await axis(), '$ at month end', 'the choice survives a reload');
+    },
+  },
+  {
     name: 'reset all puts every dial back to its baseline, and Undo brings the values back',
     async run(t) {
       const { page, assert } = t;
@@ -779,7 +840,7 @@ module.exports = [
       await page.click('#plan-chart .cc-chip[data-cc-key="acct-joint-checking"]');
       await page.waitForFunction(() => Array.isArray(window.HouseholdBudget.getState().ui.plan.hidden) && !window.HouseholdBudget.getState().ui.plan.hidden.includes('acct-joint-checking'));
       assert.equal(await page.evaluate(() => document.documentElement.dataset.renderSeq), seq, 'no re-render for a legend toggle');
-      assert.deepEqual((await state(page)).ui.plan.hidden, ['acct-joint-savings']);
+      assert.deepEqual((await state(page)).ui.plan.hidden, [], 'savings already showed: now nothing is hidden');
       await page.click('label[for^="plan-mode-flows"]');
       await page.waitForFunction(() => window.HouseholdBudget.getState().ui.plan.mode === 'flows');
       await page.reload();
@@ -790,7 +851,32 @@ module.exports = [
       await page.click('label[for^="plan-mode-balance"]');
       await page.waitForSelector('#plan-chart[data-mode="balance"]');
       assert.equal(await page.getAttribute('#plan-chart .cc-chip[data-cc-key="acct-joint-checking"]', 'aria-pressed'), 'true');
-      assert.equal(await page.getAttribute('#plan-chart .cc-chip[data-cc-key="acct-joint-savings"]', 'aria-pressed'), 'false');
+      assert.equal(await page.getAttribute('#plan-chart .cc-chip[data-cc-key="acct-joint-savings"]', 'aria-pressed'), 'true');
+    },
+  },
+  {
+    name: 'balance view on a fresh profile: savings shows with the combined line, checking starts hidden; a legend toggle is kept',
+    viewport: 'both',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      assert.equal((await state(page)).ui.plan.hidden, null, 'nothing chosen yet');
+      const pressed = () => page.$$eval('#plan-chart .cc-chip', bs => bs.map(b => [b.dataset.ccKey, b.getAttribute('aria-pressed')]));
+      const drawn = key => page.isVisible(`#plan-chart g.cc-series[data-cc-series="${key}"] path.line`);
+      assert.deepEqual(await pressed(), [['combined', 'true'], ['acct-joint-checking', 'false'], ['acct-joint-savings', 'true']]);
+      assert.ok(await drawn('combined'));
+      assert.ok(await drawn('acct-joint-savings'), 'the savings line is drawn');
+      assert.ok(!(await drawn('acct-joint-checking')), 'the checking line is not');
+      // Switching savings off is saved as the household's own choice and kept after a reload.
+      await page.click('#plan-chart .cc-chip[data-cc-key="acct-joint-savings"]');
+      await page.waitForFunction(() => (window.HouseholdBudget.getState().ui.plan.hidden || []).includes('acct-joint-savings'));
+      assert.deepEqual([...(await state(page)).ui.plan.hidden].sort(), ['acct-joint-checking', 'acct-joint-savings']);
+      assert.ok(!(await drawn('acct-joint-savings')));
+      await page.reload();
+      await page.waitForSelector('#plan-chart[data-mode="balance"]');
+      assert.deepEqual(await pressed(), [['combined', 'true'], ['acct-joint-checking', 'false'], ['acct-joint-savings', 'false']]);
+      assert.ok(!(await drawn('acct-joint-savings')), 'still off after a reload');
+      assert.ok(await noHorizontalScroll(page));
     },
   },
   {

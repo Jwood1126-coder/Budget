@@ -31,6 +31,10 @@
     money(cents, { whole = false, signed = false, fallback = 'Unknown' } = {}) {
       return E.money.format(cents, { decimals: whole ? 0 : 2, signed, fallback });
     },
+    /** Dollars, with cents only when there are any: $2,222.02, $250 ; null -> 'Unknown'. */
+    amount(cents) {
+      return Number.isSafeInteger(cents) && cents % 100 !== 0 ? fmt.money(cents) : fmt.money(cents, { whole: true });
+    },
     /** Signed difference such as +$120 or −$35, for "vs usual" columns. */
     diff(cents, { whole = false, fallback = '—' } = {}) {
       if (cents === null || cents === undefined) return fallback;
@@ -67,11 +71,18 @@
     return (neg ? '-' : '') + s;
   }
 
+  /** Amount for an exact-entry box: cents kept, thousands separated, an ASCII minus (2,222.02 ; -1,236.48 ; 250). */
+  function centsToInputText(cents) {
+    if (!Number.isSafeInteger(cents)) return '';
+    const abs = Math.abs(cents);
+    return (cents < 0 ? '-' : '') + Math.floor(abs / 100).toLocaleString('en-US') + (abs % 100 ? '.' + String(abs % 100).padStart(2, '0') : '');
+  }
+
   /** Stable DOM id from arbitrary text (paths, category names). */
   function domId(prefix, text) {
     return prefix + '-' + String(text).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '-' + E.util.hash(String(text)).slice(0, 4);
   }
 
-  UI.dom = { esc, attrs, $, $$, centsToInput, domId };
+  UI.dom = { esc, attrs, $, $$, centsToInput, centsToInputText, domId };
   UI.fmt = fmt;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

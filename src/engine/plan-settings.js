@@ -5,8 +5,9 @@
  * Two modules need these names when they load: BudgetEngine.timeline, which draws the plan, and
  * BudgetEngine.state, which saves the household's plan settings in ui.plan. This file loads
  * before both (src/manifest.json) and both read their copies from here, so they cannot drift.
- * Data only. The rules for each ui.plan field (default, limit, how it is checked and written)
- * are the one descriptor table in state.js (PLAN_UI), which builds on these lists.
+ * Data only (plus isBalanceSeries, the pattern for the per-account balance series keys). The rules
+ * for each ui.plan field (default, limit, how it is checked and written) are the one descriptor
+ * table in state.js (PLAN_UI), which builds on these lists.
  */
 (function (root) {
   const E = root.BudgetEngine || (root.BudgetEngine = {});
@@ -47,8 +48,28 @@
     { key: 'net', name: 'Left in checking', group: 'net' },
     { key: 'combined-change', name: 'Change in joint cash', group: 'net' },
   ].map(s => Object.freeze(s)));
-  /** Every series key ui.plan.trends.series can hold: the person series, then SERIES. */
-  const TREND_SERIES = list(PEOPLE.map(p => 'in-' + p).concat(SERIES.map(s => s.key)));
+  /**
+   * The Trends chart's balance series (month-end amounts, not amounts per month), besides one per
+   * cash account with a balance line (BALANCE_SERIES_PREFIX + account id, named after the
+   * account): joint cash combined, and the savings accounts together (when there are two or more).
+   */
+  const BALANCE_SERIES_PREFIX = 'balance-';
+  const BALANCE_SERIES = list([
+    { key: 'balance-combined', name: 'Combined cash', group: 'balances' },
+    { key: 'balance-savings-total', name: 'Savings total', group: 'balances' },
+  ].map(s => Object.freeze(s)));
+  /** A balance series key: one of BALANCE_SERIES, or 'balance-' + an account id. */
+  const isBalanceSeries = key => typeof key === 'string' && key.length > BALANCE_SERIES_PREFIX.length && key.startsWith(BALANCE_SERIES_PREFIX);
+  /**
+   * Every series key ui.plan.trends.series can hold: the person series, then SERIES, as listed;
+   * and the balance series, which its `includes` accepts as well (account ids come with the data,
+   * so they cannot be listed here).
+   */
+  const TREND_SERIES = (() => {
+    const keys = PEOPLE.map(p => 'in-' + p).concat(SERIES.map(s => s.key));
+    Object.defineProperty(keys, 'includes', { value: (key, from) => Array.prototype.includes.call(keys, key, from) || isBalanceSeries(key) });
+    return Object.freeze(keys);
+  })();
 
   // The choices the plan screen offers for its scalar settings, and their defaults.
   const BASELINE_CHOICES = list([3, 6, 12, 'all']);
@@ -61,6 +82,7 @@
 
   E.planSettings = Object.freeze({
     PEOPLE, DIAL_KEYS, RETIRED_DIALS, SPEND_GROUPS, SPEND_DIALS, CHANGE_KINDS, CHANGE_GROUPS, SERIES, TREND_SERIES,
+    BALANCE_SERIES, BALANCE_SERIES_PREFIX, isBalanceSeries,
     BASELINE_CHOICES, HORIZONS, PAST_CHOICES, MODES, TREND_MA, DEFAULTS, TREND_DEFAULTS,
   });
 })(typeof globalThis !== 'undefined' ? globalThis : this);
