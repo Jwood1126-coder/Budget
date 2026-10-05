@@ -1906,3 +1906,34 @@ describe('mergeDataset: data whose pairs were never recorded', () => {
     for (const t of unpaired.transactions) assert.equal(dataset.transactions.find(x => x.id === t.id), t);
   });
 });
+
+describe('investment accounts', () => {
+  const INVEST = { id: 'inv', label: 'Index fund', type: 'investment', scope: 'joint' };
+  test('a balance-only investment account: listed in accounts with statement balances and no files; never expected for spending', () => {
+    const { dataset, report } = I.buildDataset({
+      datasetId: 't', generatedAt: '2026-04-01', isSynthetic: true, accounts: [CHECKING, INVEST],
+      files: [{ name: 'chk.csv', accountId: 'chk', coverageStart: '2026-03-01', coverageEnd: '2026-03-31', text: 'Date,Description,Amount\n03/02/2026,SAMPLE GROCER,-40.00\n03/05/2026,TRANSFER TO FUND,-200.00\n' }],
+      balances: [{ accountId: 'inv', date: '2026-03-31', amount: '12,345.67', note: 'Quarterly statement' }],
+    });
+    const inv = dataset.accounts.find(a => a.id === 'inv');
+    assert.deepEqual([inv.type, inv.coverage], ['investment', []]);
+    assert.deepEqual(dataset.balances, [{ accountId: 'inv', date: '2026-03-31', cents: 1234567, source: 'statement', note: 'Quarterly statement' }]);
+    assert.equal(report.months.find(m => m.month === '2026-03').spendingCoverage, 'full', 'an investment account is not a spending account');
+    const normalized = E.ledger.normalizeDataset(dataset);
+    assert.equal(normalized.accounts.find(a => a.id === 'inv').type, 'investment');
+    assert.equal(E.ledger.coverage(normalized, '2026-03').status, 'full');
+    // Never cash: the joint cash accounts leave it out.
+    assert.deepEqual(E.balances.cashAccounts(dataset).map(a => a.id), ['chk']);
+  });
+  test('a transfer between checking and an investment account is investing on both sides, counted once', () => {
+    const accounts = [CHECKING, INVEST];
+    const out = txn({ accountId: 'chk', date: '2026-03-05', amountCents: -20000, kind: 'transfer', subtype: 'internal', category: 'Transfer' });
+    const inn = txn({ accountId: 'inv', date: '2026-03-06', amountCents: 20000, kind: 'transfer', subtype: 'internal', category: 'Transfer' });
+    const [a, b] = I.pairTransfers([out, inn], accounts);
+    assert.deepEqual([a.subtype, b.subtype, a.pairId, b.pairId], ['investment', 'investment', inn.id, out.id]);
+    const withType = (t, type) => Object.assign({}, t, { accountType: type, accountScope: 'joint' });
+    assert.equal(E.ledger.measure(withType(a, 'checking')).savedCents, 20000, 'the cash side counts');
+    assert.equal(E.ledger.measure(withType(b, 'investment')).savedCents, 0, 'the investment side of a pair does not count again');
+    assert.equal(E.ledger.measure(withType(Object.assign({}, b, { pairId: null }), 'investment')).savedCents, 20000, 'unless its cash side is not in the data');
+  });
+});

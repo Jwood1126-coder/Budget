@@ -96,7 +96,7 @@ test('defaults: compares the baseline with the first other scenario', () => {
 
 test('defaults: joint scope, overview route, what-ifs off and epoch timestamps', () => {
   const st = base();
-  assert.deepEqual(st.ui, { scope: 'joint', lastRoute: '#/overview', whatIf: { excludePendingReimbursements: false, excludeBusinessCandidates: false }, plan: { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null, groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true } }, dismissed: {} });
+  assert.deepEqual(st.ui, { scope: 'joint', lastRoute: '#/overview', whatIf: { excludePendingReimbursements: false, excludeBusinessCandidates: false }, plan: { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null, groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true }, otherDial: 'debt', investReturnPct: null, scenariosCopied: true }, dismissed: {} });
   assert.deepEqual(st.meta, { createdAt: '1970-01-01T00:00:00.000Z', updatedAt: '1970-01-01T00:00:00.000Z', migratedFrom: null, migrationNotes: [], legacySnapshot: null });
   assert.equal(st.scenarios[1].createdAt, '1970-01-01T00:00:00.000Z');
 });
@@ -640,11 +640,15 @@ test('sanitize: references, checklist, ui and meta are validated', () => {
   const r = S.sanitize(raw, profile(), DS);
   assert.deepEqual(r.state.references.map(x => x.id), ['q3']);
   assert.deepEqual(r.state.checklist, { balances: true });
-  assert.deepEqual(r.state.ui, { scope: 'household', lastRoute: '#/forecast?horizon=36', whatIf: { excludePendingReimbursements: true, excludeBusinessCandidates: false }, plan: { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null, groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true } }, dismissed: { tip1: true } });
+  assert.deepEqual(r.state.ui, { scope: 'household', lastRoute: '#/forecast?horizon=36', whatIf: { excludePendingReimbursements: true, excludeBusinessCandidates: false }, plan: { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null, groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true }, otherDial: 'debt', investReturnPct: null, scenariosCopied: true }, dismissed: { tip1: true } });
   assert.equal(r.state.meta.createdAt, NOW);
   assert.equal(r.state.meta.updatedAt, '1970-01-01T00:00:00.000Z');
   assert.equal(r.state.meta.migratedFrom, null);
-  assert.deepEqual(r.state.meta.migrationNotes, ['ok']);
+  // A saved ui without ui.plan is from before the integrated plan: the profile's Forecast scenarios
+  // are copied into plan.changes once, and that is recorded too.
+  assert.equal(r.state.meta.migrationNotes[0], 'ok');
+  assert.match(r.state.meta.migrationNotes[1], /^plan\.changes: 8 changes from your Forecast scenarios were copied/);
+  assert.equal(r.state.meta.migrationNotes.length, 2);
   for (const re of [/Backwards.*end date/, /No dates.*start date is missing/, /checklist: dropped entries/, /meta\.updatedAt/, /meta\.migratedFrom/]) assert.ok(hasNote(r.notes, re), String(re));
 });
 
@@ -2018,7 +2022,7 @@ test('Plan settings: dials keep signed cents through saving, loading and unrelat
   assert.equal(st.ui.plan.dials.flexible, 0, 'zero is an amount, not "use the baseline"');
   assert.deepEqual(st.ui.plan, { baselineMonths: 'all', horizon: 60, past: 6, mode: 'flows', coverFromSavings: false,
     dials: { savings: -123648, essentials: 234567, flexible: 0, p1: 398800 }, rows: { 'essentials-m-x1y2': { included: false }, 'flexible-r-z9': { cents: 12345 } }, hidden: ['p2', 'combined'],
-    groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true } });
+    groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true }, otherDial: 'debt', investReturnPct: null, scenariosCopied: true });
   // Through storage and back.
   const store = new Map();
   const storage = { getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k), key: i => Array.from(store.keys())[i] ?? null, get length() { return store.size; } };
@@ -2036,7 +2040,7 @@ test('Plan settings: dials keep signed cents through saving, loading and unrelat
   assert.throws(() => S.setPath(st, 'ui.plan.mode', 'chart'), isValidationError());
   assert.throws(() => S.setPath(st, 'ui.plan.dials.essentials', 1.5), isValidationError(/whole cents/));
   assert.throws(() => S.setPath(st, 'ui.plan.dials.card', 1000), isValidationError(/Card and bank spending are worked out/));
-  assert.throws(() => S.setPath(st, 'ui.plan.dials.mystery', 1000), isValidationError(/Plan amounts can be set for: p1, p2, inOther, essentials, flexible, irregular, savings, other/));
+  assert.throws(() => S.setPath(st, 'ui.plan.dials.mystery', 1000), isValidationError(/Plan amounts can be set for: p1, p2, inOther, essentials, flexible, irregular, savings, investing, other/));
   assert.throws(() => S.setPath(st, 'ui.plan.rows.essentials-m-x1y2', { included: 'no' }), isValidationError());
   assert.throws(() => S.setPath(st, 'ui.plan.rows.essentials-m-x1y2', { cents: 0.5 }), isValidationError(/whole cents/));
   assert.throws(() => S.setPath(st, 'ui.plan.hidden', ['ok', 'not ok!']), isValidationError());
@@ -2052,7 +2056,7 @@ test('Plan settings: dials keep signed cents through saving, loading and unrelat
   raw.ui.plan = { baselineMonths: 7, horizon: 24, dials: { essentials: 'lots', flexible: 5000, 'bad key!': 1, mystery: 2 }, rows: { 'essentials-m-a': { included: 'x' }, 'essentials-m-b': { cents: -250 }, 'essentials-m-c': { cents: 1, extra: true } }, hidden: 'p1' };
   const r = S.sanitize(raw, profile(), DS);
   assert.deepEqual(r.state.ui.plan, { baselineMonths: 12, horizon: 24, past: 12, mode: 'balance', coverFromSavings: true, dials: { flexible: 5000 }, rows: { 'essentials-m-b': { cents: -250 } }, hidden: null,
-    groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true } });
+    groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true }, otherDial: 'debt', investReturnPct: null, scenariosCopied: true });
   for (const re of [/ui\.plan\.baselineMonths/, /ui\.plan\.dials: dropped plan amounts.*"mystery"/, /ui\.plan\.rows: dropped plan row changes/, /ui\.plan\.hidden/]) assert.ok(hasNote(r.notes, re), String(re));
 });
 
@@ -2063,7 +2067,7 @@ test('Plan settings: the earlier Home settings (ui.home) move to ui.plan once, l
   const r = S.sanitize(raw, profile(), DS);
   assert.equal(r.state.ui.home, undefined, 'ui.home is dropped');
   assert.deepEqual(r.state.ui.plan, { baselineMonths: 6, horizon: 60, past: 12, mode: 'balance', coverFromSavings: true, dials: { p1: 300000, savings: -5075 }, rows: {}, hidden: null,
-    groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true }, legacyDials: { card: 0, bank: 187612 } }, 'card and bank wait in legacyDials for the plan screen');
+    groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true }, otherDial: 'debt', investReturnPct: null, scenariosCopied: true, legacyDials: { card: 0, bank: 187612 } }, 'card and bank wait in legacyDials for the plan screen');
   const note = r.notes.find(n => /^ui\.home: /.test(n));
   assert.ok(note, 'noted');
   assert.match(note, /p1 \$3,000\.00, card \$0\.00, bank \$1,876\.12, savings −\$50\.75, baselineMonths 6, horizon 60/);
@@ -2215,10 +2219,11 @@ test('plan.changes: absent in older budgets becomes [] quietly; entries are vali
   ];
   const r = S.sanitize(raw, profile(), DS);
   assert.deepEqual(r.state.plan.changes, [
-    { id: 'car', label: 'Car seat', kind: 'oneTime', group: 'irregular', personId: null, startMonth: '2028-03', endMonth: null, cents: 25000, accepted: false, template: 'baby', note: 'Estimate' },
-    { id: 'leave', label: 'Leave', kind: 'monthly', group: 'income', personId: 'p1', startMonth: '2028-05', endMonth: '2028-07', cents: null, accepted: true, template: 'baby', note: '' },
-    { id: 'gym', label: 'Gym', kind: 'monthly', group: 'flexible', personId: null, startMonth: '2026-11', endMonth: null, cents: -1500, accepted: false, template: null, note: '' },
-    { id: 'odd', label: 'Odd group', kind: 'monthly', group: 'flexible', personId: null, startMonth: '2026-11', endMonth: null, cents: 1, accepted: false, template: null, note: '' },
+    // scenario: null (no what-if) is filled in for changes saved before it existed.
+    { id: 'car', label: 'Car seat', kind: 'oneTime', group: 'irregular', personId: null, startMonth: '2028-03', endMonth: null, cents: 25000, accepted: false, template: 'baby', scenario: null, note: 'Estimate' },
+    { id: 'leave', label: 'Leave', kind: 'monthly', group: 'income', personId: 'p1', startMonth: '2028-05', endMonth: '2028-07', cents: null, accepted: true, template: 'baby', scenario: null, note: '' },
+    { id: 'gym', label: 'Gym', kind: 'monthly', group: 'flexible', personId: null, startMonth: '2026-11', endMonth: null, cents: -1500, accepted: false, template: null, scenario: null, note: '' },
+    { id: 'odd', label: 'Odd group', kind: 'monthly', group: 'flexible', personId: null, startMonth: '2026-11', endMonth: null, cents: 1, accepted: false, template: null, scenario: null, note: '' },
   ]);
   for (const re of [/plan\.changes\[id=car\]\.endMonth: a one-time change has no end month/, /plan\.changes\[id=gym\]\.personId: only an income change belongs to a person/, /plan\.changes\[id=bad\] \("No start"\): start month is missing/, /plan\.changes\[id=odd\]\.group/, /plan\.changes\[5\]: not a valid entry/]) assert.ok(hasNote(r.notes, re), String(re));
   assert.deepEqual(S.sanitize(r.state, profile(), DS).state, r.state, 'sanitizing again changes nothing');
@@ -2264,7 +2269,7 @@ test('income streams take an optional gross pay per paycheck (whole cents, never
 
 /** ui.plan's defaults and constants as they were written out before the descriptor table. */
 const PLAN_UI_DEFAULT_BEFORE = { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null,
-  groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true } };
+  groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true }, otherDial: 'debt', investReturnPct: null, scenariosCopied: true };
 const TRENDS_DEFAULT_BEFORE = { series: ['card'], ma: 3, trend: true };
 
 test('ui.plan descriptor: the defaults derived from PLAN_UI are the ones written out before, and every field is documented', () => {
@@ -2280,7 +2285,8 @@ test('ui.plan descriptor: the defaults derived from PLAN_UI are the ones written
   fresh.dials.p1 = 1;
   assert.deepEqual(S.defaults(null, DS).ui.plan, PLAN_UI_DEFAULT_BEFORE);
   // One row per field, in the saved order; optional fields have no default.
-  assert.deepEqual(S.PLAN_UI.map(d => d.name), ['baselineMonths', 'horizon', 'past', 'mode', 'coverFromSavings', 'dials', 'rows', 'hidden', 'groups', 'irregularOff', 'trends', 'legacyDials', 'cardSplit']);
+  // otherDial, investReturnPct and scenariosCopied came with the integrated plan (investments, what-ifs).
+  assert.deepEqual(S.PLAN_UI.map(d => d.name), ['baselineMonths', 'horizon', 'past', 'mode', 'coverFromSavings', 'dials', 'rows', 'hidden', 'groups', 'irregularOff', 'trends', 'otherDial', 'investReturnPct', 'scenariosCopied', 'legacyDials', 'cardSplit']);
   for (const d of S.PLAN_UI) {
     assert.deepEqual(d.default, d.optional ? undefined : PLAN_UI_DEFAULT_BEFORE[d.name], d.name);
     assert.equal(d.optional, d.name === 'legacyDials' || d.name === 'cardSplit', d.name);
@@ -2300,13 +2306,14 @@ test('ui.plan descriptor: the defaults derived from PLAN_UI are the ones written
 test('plan vocabulary: one list each, shared by state and timeline, with the values written out before', () => {
   const T = E.timeline;
   const before = {
-    DIAL_KEYS: ['p1', 'p2', 'inOther', 'essentials', 'flexible', 'irregular', 'savings', 'other'],
+    // investing: net to investments, split out of other (now debt & business).
+    DIAL_KEYS: ['p1', 'p2', 'inOther', 'essentials', 'flexible', 'irregular', 'savings', 'investing', 'other'],
     RETIRED_DIALS: ['card', 'bank'],
     SPEND_GROUPS: ['essentials', 'flexible'],
     SPEND_DIALS: ['essentials', 'flexible', 'irregular'],
     CHANGE_KINDS: ['oneTime', 'monthly'],
     CHANGE_GROUPS: ['income', 'essentials', 'flexible', 'irregular', 'savings'],
-    TREND_SERIES: ['in-p1', 'in-p2', 'in-other', 'in-total', 'card', 'bank', 'essentials', 'flexible', 'irregular', 'other-out', 'out-total', 'to-savings', 'from-savings', 'net', 'combined-change']
+    TREND_SERIES: ['in-p1', 'in-p2', 'in-other', 'in-total', 'card', 'bank', 'essentials', 'flexible', 'irregular', 'other-out', 'investing', 'out-total', 'to-savings', 'from-savings', 'net', 'combined-change']
   };
   for (const [k, v] of Object.entries(before)) {
     assert.deepEqual(S[k], v, k);
@@ -2350,6 +2357,10 @@ const PLAN_UI_PATHS = [
   ['cardSplit.essentials', [[{ cents: 320000, card: 120000, fromCard: 420000 }, { cents: 320000, card: 120000, fromCard: 420000 }], [{ cents: -500, card: -500 }, { cents: -500, card: -500 }]],
     [{ cents: 1 }, { cents: 1, card: 0.5 }, { cents: 1, card: 1, fromBank: 'x' }]],
   ['cardSplit.card', [], [{ cents: 1, card: 1 }]],
+  ['dials.investing', [[-2500, -2500], [0, 0]], [0.5]],
+  ['otherDial', [['debt', 'debt'], ['withInvesting', 'withInvesting']], ['investments', null]],
+  ['investReturnPct', [[5, 5], [0, 0], [6.5, 6.5], ['4', 4], [null, null]], [-1, 26, 'high']],
+  ['scenariosCopied', [[false, false], [true, true]], ['maybe', null]],
   ['futureField', [], [1]],
   ['home', [], [{}]]
 ];
@@ -2364,7 +2375,7 @@ test('ui.plan paths: every field accepts and refuses the same values through set
     for (const value of refused) assert.throws(() => S.setPath(st, 'ui.plan.' + p, value), isValidationError(), p + ' refuses ' + JSON.stringify(value));
   }
   // The messages that name what is allowed.
-  assert.throws(() => S.setPath(st, 'ui.plan.dials.card', 1000), isValidationError(/^Plan amounts can be set for: p1, p2, inOther, essentials, flexible, irregular, savings, other\. Card and bank spending are worked out/));
+  assert.throws(() => S.setPath(st, 'ui.plan.dials.card', 1000), isValidationError(/^Plan amounts can be set for: p1, p2, inOther, essentials, flexible, irregular, savings, investing, other\. Card and bank spending are worked out/));
   assert.throws(() => S.setPath(st, 'ui.plan.cardSplit.card', { cents: 1, card: 1 }), isValidationError(/^A card part can be kept for: essentials, flexible, irregular\.$/));
   assert.throws(() => S.setPath(st, 'ui.plan.groups.' + 'g'.repeat(121), 'flexible'), isValidationError(/1 to 120 characters/));
   assert.throws(() => S.setPath(st, 'ui.plan.futureField', 1), isValidationError(/no field "ui\.plan\.futureField"/));
@@ -2386,20 +2397,24 @@ function beforeUpgrades() {
   const raw = JSON.parse(JSON.stringify(base()));
   raw.ui.home = { p1InCents: 300000, savedCents: 2500, cardCents: 88000, bankCents: null, outCents: 450000, baselineMonths: 6, horizon: 24 };
   raw.ui.plan.dials = { bank: -1500 };
+  // Saved before the integrated plan: no markers yet (the profile's scenarios have events to copy).
+  delete raw.ui.plan.otherDial;
+  delete raw.ui.plan.scenariosCopied;
   return raw;
 }
 
 test('V5 upgrades: a registry run in order by sanitize; each entry runs once, and running again gives the same budget and no new notes', () => {
-  assert.deepEqual(S.V5_UPGRADES.map(u => u.id), ['ui.home', 'ui.plan.dials.card-bank']);
+  assert.deepEqual(S.V5_UPGRADES.map(u => u.id), ['ui.home', 'ui.plan.dials.card-bank', 'ui.plan.otherDial', 'plan.changes.scenarios']);
   for (const u of S.V5_UPGRADES) assert.deepEqual(Object.keys(u).sort(), ['applies', 'apply', 'id']);
   const raw = deepFreeze(beforeUpgrades());
   const once = S.upgrade(raw);
-  assert.deepEqual(once.applied, ['ui.home', 'ui.plan.dials.card-bank']);
+  // No other amount was saved, so the otherDial entry has nothing to mark (its default is right).
+  assert.deepEqual(once.applied, ['ui.home', 'ui.plan.dials.card-bank', 'plan.changes.scenarios']);
   assert.equal(once.raw.ui.home, undefined);
   assert.deepEqual(once.raw.ui.plan.dials, { p1: 300000, savings: 2500 });
   assert.deepEqual(once.raw.ui.plan.legacyDials, { card: 88000, bank: -1500 }, 'the Home card amount and the bank dial both wait');
-  // The same notes, word for word, as sanitize gave before the registry existed.
-  assert.deepEqual(once.notes, [
+  // The same notes, word for word, as sanitize gave before the registry existed (then the scenario copy's).
+  assert.deepEqual(once.notes.slice(0, 2), [
     'ui.home: the Home settings moved to the plan screen (ui.plan): p1 $3,000.00, card $880.00, savings $25.00. Not carried over: the earlier single spending amount ($4,500.00): spending is now planned as essentials, flexible and irregular.',
     'ui.plan.dials: card spending $880.00 and bank spending −$15.00 set on the plan screen will be carried over to essentials, flexible and irregular spending the next time Plan opens (card and bank spending are now worked out from those).'
   ]);
@@ -2407,8 +2422,10 @@ test('V5 upgrades: a registry run in order by sanitize; each entry runs once, an
   const twice = S.upgrade(once.raw);
   assert.deepEqual(twice, { raw: once.raw, notes: [], applied: [] });
   // Each entry alone: after it ran, it no longer applies (safe to run twice), and it left a note.
+  const withOther = JSON.parse(JSON.stringify(raw));
+  withOther.ui.plan.dials.other = 30000;
   for (const u of S.V5_UPGRADES) {
-    let r = raw;
+    let r = u.id === 'ui.plan.otherDial' ? withOther : raw;
     if (u.id !== 'ui.home') r = S.V5_UPGRADES[0].apply(r).raw;
     assert.equal(u.applies(r), true, u.id);
     const a = u.apply(r);
@@ -2431,7 +2448,7 @@ test('V5 upgrades: a registry run in order by sanitize; each entry runs once, an
   const b = S.upgrade(blank);
   assert.deepEqual([b.applied, b.notes, b.raw.ui.plan.dials], [['ui.plan.dials.card-bank'], [], { p1: 1 }]);
   assert.deepEqual(S.upgrade(base()).applied, []);
-  for (const odd of [null, 1, 'x', [], {}, { ui: 'x' }, { ui: { plan: 'x' } }, { ui: { plan: { dials: 'x' } } }]) assert.deepEqual(S.upgrade(odd).applied, [], JSON.stringify(odd));
+  for (const odd of [null, 1, 'x', [], {}, { ui: 'x' }, { ui: { plan: 'x' } }, { ui: { plan: { dials: 'x' } } }, { scenarios: 'x', plan: {} }, { ui: 'x', plan: {}, scenarios: [{ id: 's', events: [{}] }] }]) assert.deepEqual(S.upgrade(odd).applied, [], JSON.stringify(odd));
   assert.deepEqual(S.upgrade({ ui: { home: 'x' } }).notes, ['ui.home: the earlier Home settings were not readable ("x"); dropped.']);
 });
 
@@ -2505,4 +2522,93 @@ test('forward compatibility: a key that cannot be kept ("__proto__") is dropped 
   const fromProfile = JSON.parse(JSON.stringify(base()));
   delete fromProfile.plan;
   assert.equal(S.sanitize(fromProfile, prof, DS).notes.some(n => /kept as saved/.test(n)), false);
+});
+
+// ===================================================================== Forecast scenarios become what-ifs on the plan
+
+/** A budget saved before the integrated plan, with invented scenarios of every event type. */
+function beforeWhatIfs() {
+  const raw = JSON.parse(JSON.stringify(base()));
+  delete raw.ui.plan.scenariosCopied;
+  raw.plan.incomes = [{ id: 'pay-b', label: 'Partner B pay', personId: 'p2', kind: 'paycheck', netPerPaycheckCents: 210000, jointPerPaycheckCents: 150000, frequency: 'biweekly', frequencyStatus: 'confirmed', status: 'confirmed' }];
+  raw.plan.changes = [{ id: 'mine', label: 'Mine', kind: 'monthly', group: 'flexible', personId: null, startMonth: '2026-11', endMonth: null, cents: 100, accepted: true, template: null, note: '' }];
+  raw.scenarios = [raw.scenarios[0], {
+    id: 'move', name: 'Move to the coast', description: '', createdAt: NOW, updatedAt: NOW,
+    assumptions: { incomeTiming: 'conservative', annualReturnPct: 0, costGrowthPct: 0, incomeGrowthPct: 0 },
+    events: [
+      { id: 'movers', type: 'one_time', label: 'Movers', month: '2027-03', amountCents: 320000, direction: 'expense', category: 'Home maintenance & repairs', goalId: null, note: 'Two quotes.' },
+      { id: 'deposit-back', type: 'one_time', label: 'Deposit back', month: '2027-04', amountCents: 150000, direction: 'income', category: null, goalId: null, note: '' },
+      { id: 'rent', type: 'recurring', label: 'Rent', startMonth: '2027-03', endMonth: '2028-02', monthlyCents: 210000, direction: 'expense', category: 'Mortgage', note: '' },
+      { id: 'ferry', type: 'recurring', label: 'Ferry passes', startMonth: '2027-03', endMonth: null, monthlyCents: 9000, direction: 'expense', category: 'Travel', note: '' },
+      { id: 'lodger', type: 'recurring', label: 'Lodger', startMonth: '2027-05', endMonth: null, monthlyCents: 60000, direction: 'income', category: null, note: '' },
+      { id: 'parttime', type: 'recurring', label: 'Part-time', startMonth: '2027-06', endMonth: null, monthlyCents: 40000, direction: 'income_loss', category: null, note: '' },
+      { id: 'newjob', type: 'income_change', label: 'New job', streamId: 'pay-b', startMonth: '2027-03', endMonth: null, jointPerPaycheckCents: 162000, note: '' },
+      { id: 'leave', type: 'income_change', label: 'Leave', streamId: 'pay-b', startMonth: '2027-07', endMonth: '2027-09', jointPerPaycheckCents: null, note: '' },
+      { id: 'internet-up', type: 'bill_change', label: 'Faster internet', billId: 'internet', startMonth: '2027-03', endMonth: null, monthlyCents: 9500, note: '' },
+      { id: 'groceries-up', type: 'target_change', label: 'Groceries up', category: 'Groceries', startMonth: '2027-03', endMonth: null, monthlyCents: 70000, note: '' },
+      { id: 'boat', type: 'goal', label: 'Boat fund', goal: { id: 'boat', label: 'Boat', targetCents: 500000, targetMonth: null, savedCents: null, monthlyCents: 10000, spendAtTarget: false, note: '' } },
+      { id: 'someday', type: 'recurring', label: 'Someday', startMonth: null, endMonth: null, monthlyCents: 100, direction: 'expense', category: null, note: '' },
+      { id: 'mine', type: 'one_time', label: 'Same id as a change', month: '2027-01', amountCents: 1, direction: 'expense', category: null, goalId: null, note: '' },
+    ],
+  }];
+  return raw;
+}
+
+test('scenarios to what-ifs: every dated event is copied once into plan.changes, tagged, not accepted; the scenarios stay as they are', () => {
+  const raw = deepFreeze(beforeWhatIfs());
+  const r = S.sanitize(raw, profile(), DS);
+  const copied = r.state.plan.changes.filter(c => c.scenario);
+  const pick = c => [c.id, c.kind, c.group, c.personId, c.startMonth, c.endMonth, c.cents, c.accepted, c.scenario];
+  assert.deepEqual(copied.map(pick), [
+    ['sc-movers', 'oneTime', 'irregular', null, '2027-03', null, 320000, false, 'Move to the coast'],
+    ['sc-deposit-back', 'oneTime', 'income', null, '2027-04', null, 150000, false, 'Move to the coast'],
+    ['sc-rent', 'monthly', 'essentials', null, '2027-03', '2028-02', 210000, false, 'Move to the coast'],
+    ['sc-ferry', 'monthly', 'flexible', null, '2027-03', null, 9000, false, 'Move to the coast'],
+    ['sc-lodger', 'monthly', 'income', null, '2027-05', null, 60000, false, 'Move to the coast'],
+    ['sc-parttime', 'monthly', 'income', null, '2027-06', null, -40000, false, 'Move to the coast'],
+    // The monthly difference to joint: (1,620 − 1,500) × 26 ÷ 12.
+    ['sc-newjob', 'monthly', 'income', 'p2', '2027-03', null, 26000, false, 'Move to the coast'],
+    ['sc-leave', 'monthly', 'income', 'p2', '2027-07', '2027-09', null, false, 'Move to the coast'],
+    ['sc-internet-up', 'monthly', 'essentials', null, '2027-03', null, null, false, 'Move to the coast'],
+    ['sc-groceries-up', 'monthly', 'essentials', null, '2027-03', null, null, false, 'Move to the coast'],
+    ['sc-mine', 'oneTime', 'irregular', null, '2027-01', null, 1, false, 'Move to the coast'],
+  ].concat(r.state.plan.changes.filter(c => c.scenario && c.scenario !== 'Move to the coast').map(pick)));
+  assert.equal(byId(r.state.plan.changes, 'sc-movers').note, 'Copied from the Forecast scenario “Move to the coast”. Two quotes.');
+  assert.match(byId(r.state.plan.changes, 'sc-leave').note, /it changes Partner B pay; enter the monthly change to joint \(negative for a drop\)\.$/);
+  assert.match(byId(r.state.plan.changes, 'sc-internet-up').note, /it sets Internet to \$95\.00 a month; enter the monthly difference\./);
+  assert.match(byId(r.state.plan.changes, 'sc-groceries-up').note, /it sets the Groceries target to \$700\.00 a month/);
+  assert.deepEqual(byId(r.state.plan.changes, 'mine'), Object.assign({ scenario: null }, raw.plan.changes[0]), 'the household’s own change is untouched');
+  assert.deepEqual(r.state.scenarios, S.sanitize(Object.assign({}, raw, { ui: Object.assign({}, raw.ui, { plan: Object.assign({}, raw.ui.plan, { scenariosCopied: true }) }) }), profile(), DS).state.scenarios, 'the scenarios themselves are unchanged');
+  assert.equal(r.state.ui.plan.scenariosCopied, true);
+  const note = r.notes.find(n => n.startsWith('plan.changes: '));
+  assert.equal(note, 'plan.changes: 11 changes from your Forecast scenarios were copied to the plan’s planned changes, not accepted, each tagged with its scenario (“Move to the coast”: 11); 3 have no amount yet. The scenarios themselves are unchanged. Not copied: Boat fund (a savings goal: add it in Budget), Someday (no start month yet).');
+  assert.equal(r.state.meta.migrationNotes.filter(n => n === note).length, 1);
+  // Once: loading again copies nothing; a copied change the household removes stays removed.
+  const again = S.sanitize(JSON.parse(JSON.stringify(r.state)), profile(), DS);
+  assert.deepEqual([again.state, again.notes], [r.state, []]);
+  const removed = S.removeItem(r.state, 'changes', 'sc-rent');
+  assert.equal(byId(S.sanitize(JSON.parse(JSON.stringify(removed)), profile(), DS).state.plan.changes, 'sc-rent'), undefined);
+  // The upgrade itself is safe to run twice, and an id already in plan.changes is never copied over.
+  const once = S.upgrade(raw);
+  assert.deepEqual(S.upgrade(once.raw).applied, []);
+  const pre = JSON.parse(JSON.stringify(raw));
+  pre.plan.changes.push({ id: 'sc-rent', label: 'Rent (mine)', kind: 'monthly', group: 'essentials', startMonth: '2027-03', cents: 5 });
+  const kept = S.sanitize(pre, profile(), DS).state.plan.changes;
+  assert.deepEqual([kept.filter(c => c.id === 'sc-rent').length, byId(kept, 'sc-rent').label], [1, 'Rent (mine)']);
+  // New budgets are marked already: their scenarios are not copied.
+  assert.equal(base().ui.plan.scenariosCopied, true);
+  assert.deepEqual(S.sanitize(JSON.parse(JSON.stringify(base())), profile(), DS).state.plan.changes, []);
+});
+
+test('scenarios to what-ifs: bounded by the planned-change limit; long scenario names are shortened to 60 characters', () => {
+  const raw = beforeWhatIfs();
+  raw.plan.changes = Array.from({ length: S.LIMITS.planChanges - 2 }, (_, i) => ({ id: 'c' + i, label: 'C' + i, kind: 'monthly', group: 'flexible', startMonth: '2026-11', cents: i }));
+  raw.scenarios[1].name = 'A very long name for a scenario that goes on and on past sixty characters';
+  const r = S.sanitize(raw, profile(), DS);
+  assert.equal(r.state.plan.changes.length, S.LIMITS.planChanges);
+  const copied = r.state.plan.changes.filter(c => c.scenario);
+  assert.deepEqual(copied.map(c => c.id), ['sc-movers', 'sc-deposit-back']);
+  assert.equal(copied[0].scenario, raw.scenarios[1].name.slice(0, 60));
+  assert.ok(hasNote(r.notes, /Not copied: .*Rent \(no room for more planned changes\)/));
+  assert.ok(!hasNote(r.notes, /plan\.changes: only 100 entries can be kept/), 'nothing was dropped');
 });

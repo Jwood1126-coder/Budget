@@ -100,14 +100,31 @@
    * row when it is paid only that way (returned in `legacy` for migrateRows).
    * Every row lists the transactions behind it in the baseline months (txnIds, newest first; a
    * category: all of its rows'), so the screen can show them and have them recategorized.
+   * Category budgets (plan.targets, `targets`): a category row's plan amount is its change in
+   * ui.plan.rows when that has an amount (source 'set'), else its budget when that is a number
+   * (source 'budget'), else what its rows give (source 'history'); `budgetCents` is the budget or
+   * null. A budget is for the whole category: a place moved to a group as a whole takes its share
+   * of the history out of it (`budgetMovedCents`; never below $0), and changes to the rows under
+   * it (a place left out, a place's amount) move it by exactly what they change. A category with
+   * a budget is never grouped into "Other", and one with a budget but no history in this group
+   * gets a row of its own (history: false, defaultCents 0, no level-2 rows). The dial's baseline
+   * counts each category at its budget (less what moved out) when it has one, else its default.
    */
-  function drillFor(group, base, byId, cfg) {
+  function drillFor(group, base, byId, cfg, targets) {
+    const budgetOf = category => (category !== OTHER_CATEGORY && isCents(own(targets, category)) && targets[category] >= 0 ? targets[category] : null);
     const n = base.count;
     const regularAt = base.regularAt || 2;
-    const empty = { kind: 'categories', group, rows: [], categoryCount: 0, baselineCents: null, rowsCents: null, baselineCardCents: null, rowsCardCents: null,
+    const empty = { kind: 'categories', group, rows: [], categoryCount: 0, baselineCents: null, rowsCents: null, baselineCardCents: null, rowsCardCents: null, budgetCount: 0,
       cardShare: 0, overridden: false, stableCount: 0, yearlyCount: 0, orphanIds: Object.keys(cfg.rows).filter(id => id.startsWith(group + '-')), tinyCategoryCents: TINY_CATEGORY_CENTS, legacy: [], superseded: [] };
     if (!n) return empty;
     const cats = new Map();
+    // Per category with a budget: the monthly share of its places moved to a group as a whole.
+    const movedShare = new Map();
+    for (const x of base.spends || []) {
+      if (x.kind === 'oneTime') continue;
+      for (const sh of sharesOf(x, x.planCents, byId, cfg)) if (sh.moved && budgetOf(sh.category) !== null) movedShare.set(sh.category, (movedShare.get(sh.category) || 0) + sh.cents);
+    }
+    for (const [k, v] of movedShare) movedShare.set(k, E.money.divide(v, n));
     const yearly = new Set();
     for (const x of base.spends || []) {
       if (x.kind === 'oneTime') continue;
@@ -179,10 +196,17 @@
       return { category: c.category, synthetic: c.synthetic, regular, rest, avg, items: ms.flatMap(m => m.items) };
     });
     // Tiny categories (two or more) become one "Other" row; a category called "Other" joins it.
-    const tiny = real.filter(c => !c.synthetic && (Math.abs(c.avg) < TINY_CATEGORY_CENTS || c.category === OTHER_CATEGORY));
+    // A category with a budget keeps a row of its own, so its budget applies.
+    const tiny = real.filter(c => !c.synthetic && budgetOf(c.category) === null && (Math.abs(c.avg) < TINY_CATEGORY_CENTS || c.category === OTHER_CATEGORY));
     const grouped = tiny.length >= 2 ? tiny : [];
     const shown = real.filter(c => !grouped.includes(c)).map(c => ({ label: c.category, synthetic: c.synthetic, members: [c] }));
     shown.sort((a, b) => b.members[0].avg - a.members[0].avg || (a.label < b.label ? -1 : a.label > b.label ? 1 : (a.synthetic ? 1 : -1)));
+    // Budgets for categories with no history in this group: a row each, after the ones with history.
+    const seenCats = new Set(real.filter(c => !c.synthetic).map(c => c.category));
+    const budgetOnly = Object.keys(isObj(targets) ? targets : {})
+      .filter(k => budgetOf(k) !== null && !seenCats.has(k) && categoryGroup(k, cfg).group === group)
+      .sort((a, b) => budgetOf(b) - budgetOf(a) || (a < b ? -1 : 1));
+    for (const k of budgetOnly) shown.push({ label: k, synthetic: false, members: [{ category: k, synthetic: false, regular: [], rest: null, avg: 0, items: [] }], noHistory: true });
     if (grouped.length) shown.push({ label: OTHER_CATEGORY, synthetic: false, members: grouped });
 
     const ov = id => (isObj(own(cfg.rows, id)) ? cfg.rows[id] : null);
@@ -202,6 +226,7 @@
     const rows = [];
     const ids = new Set();
     const defaultCardOf = new Map();
+    const baseOf = new Map();
     let overridden = false, stableCount = 0;
     for (const g of shown) {
       const catId = rowIdOf(group, 'c', g.synthetic ? MERCHANT_KEY + g.label : g.label);
@@ -232,6 +257,8 @@
         k.defaultCents = k.stable ? k.latestCents : k.avgCents;
         k.override = o;
         k.included = !(o && o.included === false);
+        k.budgetCents = null;
+        k.source = o && isCents(o.cents) ? 'set' : 'history';
         k.planCents = o && isCents(o.cents) ? o.cents : k.defaultCents;
         k.cardCents = k.planCents === k.defaultCents ? k.defaultCard : roundCents(k.planCents * k.cardShare);
         k.bankCents = k.planCents - k.cardCents;
@@ -256,19 +283,32 @@
         groupKey: g.synthetic ? MERCHANT_KEY + g.label : single ? single.category : null,
         groupSource: g.synthetic ? 'override' : single ? categoryGroup(single.category, cfg).source : null,
         paidBy: paidByOf(st), cardShare: shareOf(st), seenMonths: seen, ofMonths: n,
-        pattern: kids.length && kids.every(k => k.pattern === 'bill') ? 'bill' : seen >= regularAt ? 'everyday' : 'occasional' };
+        pattern: kids.length && kids.every(k => k.pattern === 'bill') ? 'bill' : seen >= regularAt ? 'everyday' : 'occasional',
+        history: !g.noHistory };
       const o = overrideFor(row);
       if (o) overridden = true;
       ids.add(catId);
       const included = kids.filter(k => k.included);
       const defaultCard = kids.reduce((s, k) => s + defaultCardOf.get(k.id), 0);
+      // The card part of an amount for the whole category: its default's own split, else by share.
+      const cardOf = cents => (cents === row.defaultCents ? defaultCard : roundCents(cents * row.cardShare));
+      const budget = g.synthetic || !single ? null : budgetOf(g.label);
+      // A budget is for the whole category: a place moved out of it as a whole takes its share
+      // along (never below $0), and changes to the rows under it move it by what they change.
+      const movedOut = budget === null ? 0 : (movedShare.get(g.label) || 0);
+      const budgetBase = budget === null ? null : Math.max(0, budget - movedOut);
+      const kidsDelta = kids.reduce((s, k) => s + (k.included ? k.planCents : 0) - k.defaultCents, 0);
       row.override = o;
       row.included = !(o && o.included === false);
-      row.planCents = o && isCents(o.cents) ? o.cents : included.reduce((s, k) => s + k.planCents, 0);
-      row.cardCents = o && isCents(o.cents)
-        ? (o.cents === row.defaultCents ? defaultCard : roundCents(o.cents * row.cardShare))
-        : included.reduce((s, k) => s + k.cardCents, 0);
+      row.budgetCents = budget;
+      row.budgetMovedCents = budget === null ? 0 : budget - budgetBase;
+      row.source = o && isCents(o.cents) ? 'set' : budget !== null ? 'budget' : 'history';
+      if (row.source === 'set') { row.planCents = o.cents; row.cardCents = cardOf(o.cents); }
+      else if (row.source === 'budget') { row.planCents = budgetBase + kidsDelta; row.cardCents = cardOf(row.planCents); }
+      else { row.planCents = included.reduce((s, k) => s + k.planCents, 0); row.cardCents = included.reduce((s, k) => s + k.cardCents, 0); }
       row.bankCents = row.planCents - row.cardCents;
+      // The plan with no change on this screen: the budget when there is one, else the default.
+      baseOf.set(catId, budget !== null ? { cents: budgetBase, card: cardOf(budgetBase) } : { cents: row.defaultCents, card: defaultCard });
       defaultCardOf.set(catId, defaultCard);
       rows.push(row, ...kids);
     }
@@ -277,9 +317,10 @@
     return {
       kind: 'categories', group, rows,
       categoryCount: categories.length,
-      baselineCents: categories.reduce((s, r) => s + r.defaultCents, 0),
+      baselineCents: categories.reduce((s, r) => s + baseOf.get(r.id).cents, 0),
       rowsCents: on.reduce((s, r) => s + r.planCents, 0),
-      baselineCardCents: categories.reduce((s, r) => s + defaultCardOf.get(r.id), 0),
+      baselineCardCents: categories.reduce((s, r) => s + baseOf.get(r.id).card, 0),
+      budgetCount: categories.filter(r => r.budgetCents !== null).length,
       rowsCardCents: on.reduce((s, r) => s + r.cardCents, 0),
       cardShare: shareOf(stats(real.flatMap(c => c.items))),
       overridden,

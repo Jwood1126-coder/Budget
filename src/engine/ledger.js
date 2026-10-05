@@ -16,7 +16,7 @@
     transfer: ['savings', 'contribution', 'internal', 'investment'],
     debt_payment: ['loan', 'store_card', 'other']
   };
-  const ACCOUNT_TYPES = ['checking', 'savings', 'credit_card', 'loan', 'other'];
+  const ACCOUNT_TYPES = ['checking', 'savings', 'credit_card', 'loan', 'investment', 'other'];
   const SCOPES = ['joint', 'personal'];
   /** Sources of a posted balance in `dataset.balances`, by precedence (a statement beats the bank). */
   const BALANCE_RANK = { bank: 1, statement: 2 };
@@ -718,9 +718,9 @@
           // Money a partner moves in from a personal account outside the data.
           if (txn.accountScope !== 'personal') out.contributionCents = a - paidBack;
         } else if (txn.subtype === 'savings' || txn.subtype === 'investment') {
-          if (txn.accountType === 'savings') {
-            // Count the savings side only when the cash side is not in the data; otherwise the
-            // same move would be counted twice.
+          if (txn.accountType === 'savings' || txn.accountType === 'investment') {
+            // Count the savings (or investment) side only when the cash side is not in the data;
+            // otherwise the same move would be counted twice.
             if (!txn.pairId || txn.pairMissing) out.savedCents = a;
           } else {
             out.savedCents = 0 - a; // money leaving cash for savings is positive saving

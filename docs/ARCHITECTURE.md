@@ -145,7 +145,9 @@ Dataset = {
 Account = {
   id: string,                   // 'joint-checking'
   label: string,                // 'Joint checking'
-  type: 'checking'|'savings'|'credit_card'|'loan'|'other',   // missing -> 'other' (warning)
+  type: 'checking'|'savings'|'credit_card'|'loan'|'investment'|'other',   // missing -> 'other' (warning).
+                                //   investment: never joint cash (not in balances.cashAccounts, not a
+                                //   spending account); may be balance-only (no files, statement balances)
   scope: 'joint'|'personal',    // joint = shared household account; missing -> 'joint' (warning)
   ownerId: null|'p1'|'p2',      // personal accounts only
   paidInFull: boolean,          // credit cards paid in full monthly (purchases are the spending)
@@ -209,7 +211,9 @@ wins. Producers:
 - `tools/import.cjs`: the config's optional `balances` list, `[{ accountId, date, cents }]` or
   `"amount": "1,234.56"` instead of `cents`, optional `source` (default `statement`) and `note`;
   validated by `importer.statementBalances` (the account must exist, the date be valid, one entry
-  per account and date). Plus `importer.bankBalances`: for each checking/savings/other account
+  per account and date). An account listed in `accounts` with no files is balance-only: its
+  statement balances are all the data knows of it (the way to add an investment account, type
+  `investment`, whose transactions are not exported). Plus `importer.bankBalances`: for each checking/savings/other account
   whose export has a Balance column, the end-of-day running balance of the account's last row,
   dated the account's last covered day (only when that row lies in the last coverage range and
   every row of its day prints a balance; card and loan "balances" are amounts owed and are never
@@ -248,7 +252,7 @@ Newer exports are added to an existing dataset instead of replacing it:
 | --- | --- | --- |
 | `spend` | **Spending** (consumption, including housing payment, bills, fees). Refunds are `spend` rows with positive flow and reduce spending. | `spendCents = -amountCents - reimbursedCents` |
 | `income` | **Income** (payroll, interest, other). Never includes transfers. | `amountCents - reimbursedCents` |
-| `transfer` `savings`/`investment` | **Saved.** On a non-savings account (the cash side) `savedCents = -amountCents`. On an account typed `savings` it counts only when `pairId` is null **or** its pair is not in the dataset (`pairMissing`), so a paired move counts once and a dangling pair is not lost. | see left |
+| `transfer` `savings`/`investment` | **Saved.** On a non-savings account (the cash side) `savedCents = -amountCents`. On an account typed `savings` or `investment` it counts only when `pairId` is null **or** its pair is not in the dataset (`pairMissing`), so a paired move counts once and a dangling pair is not lost. | see left |
 | `transfer` `contribution` | **Contributions in** (from a partner's personal account outside the data), on any non-personal account, as the signed amount: money sent back out reduces it. | `amountCents - reimbursedCents` |
 | `transfer` `internal` | Not income, not spending, not saving. | — |
 | `card_payment` | Excluded: paying a card bill moves money; the card's purchases are the spending. `summarize` reports it once, on the paying (non-card) side. | — |
@@ -267,6 +271,7 @@ unexplained deposits; closest date next; deterministic id tie-break.
 | transfer / card payment / debt payment | `credit_card` account | both sides become `card_payment` (a debt payment to a card whose purchases are in the data would double count) |
 | transfer / debt payment | `loan` account | cash side `debt_payment`/`loan`; loan side a neutral `transfer`/`internal`, so the payment counts once |
 | transfer | any account, unexplained income `other` (still `needs_category_review`) | income upgraded to `transfer`/`internal`; income classified by a user rule is never upgraded |
+| transfer | `investment` account (either side) | both sides labelled `investment` (not when either side is `contribution`) |
 | transfer | `savings` account, or either side subtype `savings` | both sides labelled `savings` (not when either side is `contribution`/`investment`) |
 
 Unpaired rows get `unpaired_transfer` and a note: every unpaired `card_payment` (the cash-side
@@ -470,7 +475,10 @@ PlannedChange = {                      // up to 100; validated like every list i
   endMonth: 'YYYY-MM'|null,            // monthly only (cleared on a one-time change); never before startMonth
   cents: signed cents|null,            // null = amount not known yet: listed and reported, never applied as $0
   accepted: boolean (false),           // false = listed only, not applied
-  template: string|null,               // e.g. 'baby' for items from timeline.templates.baby
+  template: string|null,               // the pack it came from: 'babyFirstYear', 'childcare', 'kidCosts' (timeline.templates);
+                                       //   'baby' on changes saved from the earlier Baby template (kept as saved)
+  scenario: string|null,               // the what-if it belongs to (≤ 60 chars; null: none). Applied like any change once
+                                       //   accepted; build({ compare: name }) draws the plan with all of them (tl.compare)
   note
 }
 
@@ -577,13 +585,22 @@ State = {
                 mode: 'balance'|'flows'|'trends' ('balance'), coverFromSavings: boolean (true),
                 dials: { [dialKey]: signed cents|null },          // set directly; null/absent = not set; 0 is an amount.
                                                                   // dialKey ∈ state.DIAL_KEYS: p1, p2, inOther, essentials,
-                                                                  // flexible, irregular, savings, other (others refused)
+                                                                  // flexible, irregular, savings, investing, other (others refused)
                 rows: { [rowId]: { included?: boolean, cents?: signed cents } },  // essentials/flexible drill-down changes
                 hidden: string[]|null,                            // chart series switched off; null = never chosen
                 groups: { [categoryName | 'merchant:' + place]: 'essentials'|'flexible' },  // household's grouping ({}); keys ≤ 120 chars, up to 300
                 irregularOff: { [txnId]: true },                  // one-time costs left out of the irregular allowance ({}); up to 1,000
                 trends: { series: string[] (['card']; keys from state.TREND_SERIES, up to 16; unknown ones dropped),
                           ma: 0|3|6 (3), trend: boolean (true) },     // the Trends chart
+                otherDial: 'debt'|'withInvesting' ('debt'),      // what dials.other holds: 'debt' = debt & business (investments
+                                                                  // have dials.investing); 'withInvesting' = an amount saved before
+                                                                  // that, still including investments, split once on the plan
+                                                                  // screen (timeline.splitOther; set by the ui.plan.otherDial upgrade)
+                investReturnPct: number 0..25|null (null),       // yearly growth (%) the household entered for the investments
+                                                                  // line, compounded monthly, labelled illustrative; null = none
+                scenariosCopied: boolean (true),                 // the Forecast scenarios' events were copied into plan.changes
+                                                                  // (absent in budgets saved before: the plan.changes.scenarios
+                                                                  // upgrade copies them once and sets it)
                 legacyDials?: { card?: signed cents, bank?: signed cents },  // absent unless waiting: amounts set for the
                                                                   // earlier card/bank dials, until Plan carries them over
                 cardSplit?: { [essentials|flexible|irregular]: { cents: signed cents, card: signed cents,
@@ -643,10 +660,23 @@ budget; the input is not changed). **Every entry must be safe to run twice** (af
 `applies` is false, or `apply` changes nothing more) **and must leave a note** whenever it changes
 what the household saved. `sanitize` shows the note and records it once in `meta.migrationNotes`,
 matched by its text, so a released note's text never changes. Entries, in order: `ui.home` (the
-earlier Home settings move to `ui.plan`, `migrateHome`) and `ui.plan.dials.card-bank` (card and bank
-dials wait in `ui.plan.legacyDials`, `migratePlanDials`). Upgrades that need the data run on the
-plan screen instead, under the same rules: `timeline.pendingUpgrade(tl)` names them (`migrateRows`,
-`migrateDials`).
+earlier Home settings move to `ui.plan`, `migrateHome`), `ui.plan.dials.card-bank` (card and bank
+dials wait in `ui.plan.legacyDials`, `migratePlanDials`), `ui.plan.otherDial` (a `dials.other`
+amount saved before investments had their own dial is marked `otherDial: 'withInvesting'`, with a
+note that it will be split; budgets saved since carry `otherDial`) and `plan.changes.scenarios` (once,
+when `ui.plan.scenariosCopied` is absent and a scenario other than the baseline has events: each
+event is copied into `plan.changes` as a what-if, `copyScenarioChanges`: id `'sc-' + eventId` (an
+id already there is left alone), `scenario` = the scenario's name (≤ 60 chars), `accepted: false`, a
+note "Copied from the Forecast scenario “…”" plus the event's note; recurring → monthly (expense:
+essentials or flexible by its category; income +; income_loss −), one_time → oneTime (expense:
+irregular; income: income), income_change → monthly income for the stream's person with the monthly
+difference to joint ((new − old joint per paycheck) × paychecks a year ÷ 12) when both amounts and
+the frequency are known, else no amount, bill_change and target_change → monthly with no amount
+and a note saying what they set; savings-goal events and events with no (start) month are not
+copied and are named in the note; up to the planned-change limit. The scenarios stay as they are.
+`scenariosCopied` is true by default, so new budgets never copy). Upgrades that need the data run
+on the plan screen instead, under the same rules: `timeline.pendingUpgrade(tl)` names them
+(`migrateRows`, `migrateDials`, `splitOther`).
 
 **Forward compatibility.** A budget saved by a newer copy of the app may hold fields this copy does
 not know, and the page saves the budget as soon as it opens. So when loading (`sanitize`,
@@ -1203,7 +1233,8 @@ Projection = {
 - Also exported: `MAX_MONTHS = 120`, `EVENT_TYPES`.
 
 ### BudgetEngine.flows
-Joint accounts only. Every counted row gets one role: `card` (purchases and refunds on a card or
+Joint accounts only (rows on an account typed `investment` are not joint cash and are left out; a
+transfer to one counts on the cash side). Every counted row gets one role: `card` (purchases and refunds on a card or
 financing account), `bank` (spending paid from checking or another cash account, the mortgage
 included), `repayment` (checking → card: settles purchases already counted, never spending),
 `debt`, `business` (purchases marked as business costs), `savings`, `investment`, `interest`,
@@ -1266,23 +1297,59 @@ files, split by section and loaded in this order (`src/manifest.json`):
 | File | Holds |
 | --- | --- |
 | `engine/timeline-core.js` | the shared helpers (`isObj`, `isCents`, `has`, `own`, `plural`, `sumKnown`, `roundCents`, `fail`, `median`, `late`), the constants (the `planSettings` lists, `BALANCE_SERIES`, `BALANCE_SERIES_PREFIX`, `LEGACY_DIALS`, `IN_KEYS`, `MERCHANT_KEY`, `DIAL_LABEL`) and `settings`; creates `BudgetEngine._timeline` |
-| `engine/timeline-balances.js` | known balances (`anchors`), mirrored savings (`mirrorPlan`), the balance lines with their assumed and illustrative points (`balancesFor`), `prorate`; `RULE`, `SIMPLE_RULE`, `SIMPLE_LABEL`, `ILLUSTRATIVE` |
+| `engine/timeline-balances.js` | known balances (`anchors`), mirrored savings (`mirrorPlan`), the balance lines with their assumed and illustrative points (`balancesFor`), the investments line (`investmentsFor`), `prorate`; `RULE`, `SIMPLE_RULE`, `SIMPLE_LABEL`, `ILLUSTRATIVE`, `INVEST_RULE` |
 | `engine/timeline-spending.js` | spending by group (`spendGroups`, row ids: `rowIdOf`), the essentials and flexible drill-down with its pattern badges (`drillFor`), the irregular items (`irregularFor`); `TINY_CATEGORY_CENTS`, `STABLE_MIN_CHARGES`, `STABLE_SPREAD`, `OTHER_CATEGORY` |
 | `engine/timeline-dials.js` | observed deposits (`depositHint`), the dials and `carriedOver` (`buildDials`), one plan month (`planMonth`), the carry-over of the earlier card/bank dials (`legacyDialsPlan`) |
-| `engine/timeline-changes.js` | planned changes (`readChanges`, `changeActiveIn`, `applyChange`, `summarizeChanges`) and `templates` |
+| `engine/timeline-changes.js` | planned changes (`readChanges`, `changeActiveIn`, `applyChange`, `summarizeChanges`), the changes worked out from Budget (`billChanges`, `goalChanges`) and `templates` (the packs) |
 | `engine/timeline-export.js` | `toCSV` |
-| `engine/timeline-writes.js` | the state writes (below), `migrateRows`, `migrateDials`, `pendingUpgrade`, `acceptCarriedOver` |
+| `engine/timeline-writes.js` | the state writes (below), `migrateRows`, `migrateDials`, `splitOther`, `pendingUpgrade`, `acceptCarriedOver` |
 | `engine/timeline.js` | `build`, the Trends series catalogue, and `BudgetEngine.timeline`, assembled from the parts |
 
 `BudgetEngine._timeline` is private to these files; the public API is `BudgetEngine.timeline`
 (below). Each part adds to it what the others use, and calls another part's function only when it
 runs, through `late(name)`: `timeline-core.js` loads first, `timeline.js` last (it refuses to load,
 naming what is missing, when a public name has not been added), the parts in between in any order.
-- `build({ txns, dataset, plan, settings, today, coverageMap? })` — `txns` effective (no what-if),
-  `plan` = `state.plan` (with `plan.changes`), `settings` = `state.ui.plan`, `today` 'YYYY-MM-DD'. Returns
+- `build({ txns, dataset, plan, settings, today, coverageMap?, compare? })` — `txns` effective (no
+  what-if), `plan` = `state.plan` (with `plan.changes`, and from Budget its `targets`, `bills` and
+  `savings`), `settings` = `state.ui.plan`, `today` 'YYYY-MM-DD', `compare` a scenario name. Returns
   `{ today, todayMonth, planStart, lastComplete, firstMonth, lastMonth, horizon, months, window,
-  people, dials, dialsByKey, groups, plan, changed, changedBy, changes, baseline, balances, series,
-  migration, carriedOver, settings }`:
+  people, dials, dialsByKey, groups, plan, changed, changedBy, changes, bills, goals, markers,
+  scenarios, compare, summary, baseline, balances, series, migration, carriedOver, settings }`:
+  - **Budget reaches the plan** (the integrated plan): category budgets (`plan.targets`) are what
+    the essentials and flexible rows plan at (see `drill`); joint bills the history does not hold
+    are added and ones that end are taken out, and savings goals spent at their target leave
+    savings, as read-only changes worked out from Budget (see `changes`, `bills`); the savings
+    goals' monthly amounts are the savings dial's baseline (see `dials`). All of these are the
+    plan as it stands: they are in the ghost too, and do not make it `changed`.
+  - `bills`: what happened to each bill, `[{ id, label, status, changeId }]`. A bill is **seen**
+    when the baseline months already hold it (so the dials count it): a debt-payment bill (`type`
+    'debt') when there is any debt payment in them; any other bill with a category when any card
+    or bank purchase in them (one-time, yearly, regular or everyday; not a refund) has a part in
+    that category. A bill with `status` 'planned', or a `startMonth` after `planStart`, is never
+    seen. Statuses: `seen` (nothing to do), `ends` (seen, with an `endMonth` on or after the
+    baseline's first month: change `'bill-<id>-ends'`, −amount a month from the month after it, or
+    `planStart` when later), `added` (not seen: change `'bill-<id>'`, +amount a month from its
+    `startMonth` or `planStart` when later, through its `endMonth`; group `essentials`, or `debt`
+    for a debt payment: `out.debt`, `out.other`, `out.total`), `ended` (not seen, ended before
+    `planStart`), `notJoint` (`fundedFrom` p1/p2/unknown: never on the joint plan), `noAmount`
+    (null or $0), `noCategory` (not a debt payment and no category: it cannot be matched to the
+    history, so it is never added — that could count it twice), `inBudget` (its category has a
+    budget, which already plans that category).
+  - `goals`: `plan.savings` with `{ id, label, targetCents, savedCents, monthlyCents, targetMonth,
+    spendAtTarget, cumulativeCents, reachMonth, already }`. The projected savings balance (the
+    savings accounts' lines added up) reaches goal k in the first month, from the last complete
+    month on, at or above the targets of goals 1..k added up (list order, cumulative; goals with no
+    target add nothing and have no month); no savings line: no months. `already`: reached in the
+    first month looked at. `markers`: `[{ kind: 'goal', id, month, label: '<label> reached', cents }]`.
+  - `scenarios`: `[{ name, count, accepted }]`, the what-ifs in `plan.changes` (`scenario`), by
+    name. `compare`: null, or for `input.compare` naming one: `{ scenario, changeIds, addedIds
+    (its changes not accepted yet, with an amount: the ones added), unset, points: [{ month, cents,
+    status }] (the combined line with them applied; null except in projected months), runsOut,
+    lowest, months: [{ month, in, out, savings, net, combinedChange }] (plan months) }`.
+  - `summary`: "this month's plan", the first plan month with everything in it (dials, accepted
+    changes, what Budget adds): `{ month, inCents, inByPerson: { [personId], other }, outByGroup:
+    { essentials, flexible, irregular, other }, outCents, savingsCents, investingCents, leftCents }`
+    (`leftCents` = in − out − savings, out including investing); null without a plan month.
   - `carriedOver`: null, or the spending dials' `carriedOver` once for the headline area, plus
     `dials` (keys) and `summary`: "Three dials carry your earlier card spending setting of $4,200.00
     — review them, then Keep or Reset." ("Two dials carry …", "One dial carries … — review it, …").
@@ -1292,19 +1359,29 @@ naming what is missing, when a public name has not been added), the parts in bet
     coverage, in: { [personId], unassigned, other, total }, out: { essentials, flexible, irregular,
     card, bank, debt, business, invest, other, total }, savings, net, combinedChange, oneOffs,
     oneOffCents, actualSoFar, changesApplied, baseline }`. `out.essentials + flexible + irregular =
-    card + bank`; `out.other = debt + business + invest`; `out.total = card + bank + other`;
+    card + bank`; `out.other = debt + business` (debt & business); `out.invest` = net to
+    investments; `out.total = card + bank + other + invest`;
     `combinedChange = in.total − out.total` (moves to and from savings stay inside joint cash);
     `net = combinedChange − savings` (left in checking). Actual months come from `flows.breakdown`
     (incomplete ones: amounts null, `actualSoFar` = the covered part, same shape); their spending is
     split by group with the same rules as the dials (one-time costs: the baseline window's
     classification, else one over every month with data). From `planStart` on, amounts come from
     the dials plus the accepted planned changes, and a partly covered month is `partial`.
-    `changesApplied: [{ id, label, group, cents }]` (plan months; [] otherwise). `baseline`: for plan
-    months when `changed`, `{ in, out, savings, net, combinedChange }` at baseline dials with no
-    planned changes (totals); otherwise null.
+    `changesApplied: [{ id, label, group, cents, source }]` (plan months; [] otherwise; the changes
+    worked out from Budget too). `baseline`: for plan months when `changed`, `{ in, out, savings,
+    net, combinedChange }` at baseline dials with no planned changes (totals; the changes worked out
+    from Budget applied); otherwise null.
   - `dials`: one `in` dial per person in the plan (`inOther` when the baseline has unmatched
     deposits or interest), then the `out` dials in `groups.out` order: `essentials`, `flexible`,
-    `irregular`, `savings` (signed) and `other` (debt, business, investments; only when nonzero).
+    `irregular`, `savings` (signed), `investing` (signed: net transfers to investment accounts;
+    shown when its baseline is nonzero, it is set, the data has an investment account, or an
+    earlier `other` amount waits to be split) and `other` ("Debt & business": debt payments and
+    business purchases; only when nonzero or set). The savings dial's baseline is the savings
+    goals' monthly amounts added up when any goal has one (`budgetCents`; basis "From Budget: 3
+    savings goals ($450.00 a month)"), else the average (`averageCents`); it also has `basisKind:
+    'budget'|'average'|'direct'`. While `settings.otherDial` is 'withInvesting', a `dials.other`
+    amount X reads as other = X − the investing baseline (source 'direct') with investing at its
+    baseline, and the other dial has `split: { fromCents, investingCents, otherCents }` (else null).
     Card and bank spending are not dials: they are derived (see `plan.out.card`/`bank`).
     Every dial: `{ key, group, label, baselineCents, planCents, source: 'baseline'|'direct'|'rows',
     basis, hint, drill }`. Baseline = average of the `baselineMonths` complete months
@@ -1336,12 +1413,26 @@ naming what is missing, when a public name has not been added), the parts in bet
     `settings.groups[category]` overrides it, and `settings.groups['merchant:' + place]` moves every
     purchase of that place (all its categories) into a synthetic category row named after the place
     in the chosen group. One-time costs are never in these groups: they are the `irregular` dial.
+  - **Category budgets** (`plan.targets`): a level-1 row of one category plans at its change in
+    `ui.plan.rows` when that has an amount (`source: 'set'`), else at its budget when that is a
+    number (`source: 'budget'`), else at what its rows give (`source: 'history'`); `budgetCents` is
+    the budget or null (level-2 rows: null, `source` 'set'|'history'). A budget is for the whole
+    category: a place moved to a group as a whole takes its share of the category's history out of
+    it (`budgetMovedCents`, never below $0), and changes to the rows under it (a place left out, a
+    place's amount) move it by exactly what they change, so the drill-down still works. A budget for
+    a category with no history in its group (`settings.groups`, else the taxonomy) is a row of its
+    own: `history: false`, `defaultCents` 0, no level-2 rows, no transactions. The dial's
+    `baselineCents` counts each category at its budget (less what moved out) when it has one, else
+    its `defaultCents`; the basis adds "; N category budgets from Budget". A budget of null is "not
+    set". The grouped "Other" and places moved as a whole plan from `ui.plan.rows` only.
   - `drill` (essentials, flexible): `{ kind: 'categories', group, rows, categoryCount, baselineCents,
     rowsCents, baselineCardCents, rowsCardCents, cardShare, overridden, stableCount, yearlyCount,
-    orphanIds, tinyCategoryCents }`; rows are categories (level 1, tiny ones grouped as "Other") and
+    orphanIds, tinyCategoryCents, budgetCount }`; rows are categories (level 1, tiny ones grouped as
+    "Other", never one with a budget) and
     regular places plus "Everything else" (level 2) with stable ids `<group>-c|m|r-<hash>` (the hash
     of the same parts as the earlier card/bank ids). Every row has `avgCents` (the average; card and
-    bank averages added), `defaultCents` (its plan amount with no change), `planCents`, `override`,
+    bank averages added), `defaultCents` (its plan amount from its history), `planCents`, `override`,
+    `budgetCents` and `source` (below),
     `included`, `group`, `synthetic` (a place moved as a whole), `paidBy: 'card'|'bank'|'mixed'`,
     `cardShare` (0..1, by amount), `cardCents` / `bankCents` (its plan amount split; at the default
     exactly the card and bank averages), `pattern: 'bill'|'everyday'|'occasional'` (bill = regular
@@ -1375,14 +1466,22 @@ naming what is missing, when a public name has not been added), the parts in bet
     max(0, −savings)); `out.card` / `out.bank` derived from the spending dials.
   - `changed`: any dial not at its baseline, or any planned change applied; `changedBy: { dials,
     changes }`.
-  - `changes`: `{ list, applied, unset, totalOneTimeCents, monthlyNowCents }` — `list`: each valid
-    `plan.changes` entry with `status: 'unset'|'notAccepted'|'applied'|'outside'`, `monthsApplied`,
-    `appliedCents`; `applied`: how many applied; `unset`: ids with no amount (never applied as $0).
+  - `changes`: `{ list, applied, derived, unset, totalOneTimeCents, monthlyNowCents }` — `list`: each
+    valid `plan.changes` entry (`source: 'plan'`, `readOnly: false`, `scenario`), then the changes
+    worked out from Budget (`source: 'bill'` with `billId`, or `'goal'` with `goalId`; `readOnly:
+    true`, `accepted: true`: edited in Budget, never by `setChange`/`acceptChanges`), each with
+    `status: 'unset'|'notAccepted'|'applied'|'outside'`, `monthsApplied`, `appliedCents`;
+    `applied`: how many of the household's own applied; `derived`: how many are worked out from
+    Budget; `unset`: ids with no amount (never applied as $0). A savings goal spent at its target
+    (`spendAtTarget`, `targetCents`, `targetMonth`): change `'goal-<id>'`, one-time, irregular, with
+    `fromSavings: true`: in that month the amount is spent (`out.irregular`, `out.bank`,
+    `out.total`) and leaves savings (`savings` − amount), so checking is unchanged.
     Accepted changes with an amount add to plan months from `startMonth` (one-time: that month only;
     monthly: through `endMonth` when set): income to `in[personId]` (`in.other` without a person),
     spending groups to that group, `out.bank` and `out.total`, savings to `savings`. Totals count
-    money out of checking as positive (spending and savings +, income −): `totalOneTimeCents` over
-    the applied one-time changes, `monthlyNowCents` over the monthly ones in the first plan month.
+    money out of checking as positive (spending and savings +, income −), over the household's own
+    changes: `totalOneTimeCents` over the applied one-time changes, `monthlyNowCents` over the
+    monthly ones in the first plan month.
   - `baseline`: `{ setting, count, months, start, end, label, oneTime, oneTimeCents, keptIn, yearly,
     regularAt, plan }` — one-time items with `{ id, date, month, merchant, description, accountLabel,
     role, dialKey ('irregular' for card and bank purchases), cents, auto }`; toggled with the
@@ -1393,20 +1492,27 @@ naming what is missing, when a public name has not been added), the parts in bet
     `months`. First the monthly amounts (`kind: 'flow'`, `unit: 'perMonth'`: actual months from
     what happened, null when incomplete; partial and plan months from the plan). Keys, in order:
     `in-<personId>` per person, `in-other`, `in-total`, `card`, `bank`, `essentials`, `flexible`,
-    `irregular`, `other-out`, `out-total`, `to-savings`, `from-savings`, `net`, `combined-change`
+    `irregular`, `other-out` ("Debt & business"), `investing` ("Into investments": `out.invest`),
+    `out-total`, `to-savings`, `from-savings`, `net`, `combined-change`
     (`SERIES` lists the fixed ones). Then the balances (`group: 'balances'`, `kind: 'balance'`,
     `unit: 'atMonthEnd'`): each balance line's month-end cents, the same as its points' `cents`
     (null where not known; projected months included, which the chart dashes from `planStart` like
     every line): `balance-combined` ("Combined cash", `balances.combined`, either mode),
     `balance-<accountId>` ("<account name> balance") per account in `balances.accounts`, and
     `balance-savings-total` ("Savings total") when two or more savings accounts have a line (null in
-    a month where any of them is unknown). No balance line, no balance series; an account whose id
+    a month where any of them is unknown), and `balance-investments` ("Investments",
+    `balances.investments.points`) when the data has an investment account. No balance line, no
+    balance series; an account whose id
     would give one of the fixed keys has no series of its own. Every key can be saved in
     `ui.plan.trends.series`: `planSettings.BALANCE_SERIES` lists the fixed balance keys, and
     `TREND_SERIES.includes` also accepts `balance-` + any account id (`planSettings.isBalanceSeries`).
-  - `migration`: null, or `{ rows: [{ from, to }], dropped, superseded, rowsNote, dials, note }`
-    when `settings.rows` still holds changes saved under the earlier card/bank dials, or
-    `settings.legacyDials` holds amounts set for them. A row change applies to the same row
+  - `migration`: null, or `{ rows: [{ from, to }], dropped, superseded, rowsNote, dials, other, note }`
+    when `settings.rows` still holds changes saved under the earlier card/bank dials,
+    `settings.legacyDials` holds amounts set for them, or a `dials.other` amount waits to be split
+    (`other`: `{ fromCents, investingCents, otherCents, investingSet, note }`, note "ui.plan.dials.other:
+    your amount for debt, business and investments ($600.00) was split now that investments have a
+    dial of their own: Investing is set to $200.00, its average; Debt & business is set to
+    $400.00." — or null when the investing baseline is $0; `migration.note` adds it without its path). A row change applies to the same row
     (`<group>` instead of `card`/`bank` in its id) when that row is paid only that way and is not the
     grouped "Other"; `migrateRows` makes that permanent. `rowsNote`: the row note
     ('ui.plan.rows: …', recorded by `migrateRows`) or null. `note`: what to show once — the row note
@@ -1432,7 +1538,20 @@ naming what is missing, when a public name has not been added), the parts in bet
     Flexible and Irregular were already set by you."; no baseline: "…was carried over to Flexible
     (there is no baseline yet to scale it by); adjust it from here."
   - `balances`: `{ mode: 'accounts'|'simple'|'none', simple, label, rule, accounts, missing,
-    combined, policy, runsOut, lowest, notes, assumed, illustrative }`. Points are `{ month, cents,
+    combined, policy, runsOut, lowest, notes, assumed, illustrative, investments }`.
+    `investments` (`investmentsFor`): null without a joint investment account, else `{ accounts:
+    [{ id, name, primary, anchor, known, note, points }], points, missing, returnPct, illustrative,
+    rule, notes }` — never part of `combined` or `accounts`. Known balances as for cash accounts
+    (supplied with the data or entered, worked across the account's own transactions where its
+    export covers the days; a balance-only account is known on its balance dates), then after the
+    last known day each month adds `out.invest` to the main account (the latest known balance;
+    others stay level; pro-rated in the month of that day). With `settings.investReturnPct` (set by
+    the household; default null: no growth) each projected month also grows by that rate a year,
+    compounded monthly ((1 + r)^(1/12) − 1, rounded to the cent), and those points are
+    `'illustrative'` instead of `'projected'`; `illustrative` then reads "Illustrative: grows 6% a
+    year, compounded monthly, at the rate you entered. Not a forecast of returns." `points`: the
+    accounts added up (null where any is unknown). Rows on an investment account are not joint
+    money (`flows.breakdown` leaves them out); a transfer to it counts once, on the cash side. Points are `{ month, cents,
     status: 'reconstructed'|'assumed'|'projected'|null, anchor, gap, note, illustrative }`: a
     month-end worked across days the account's export does not cover (its `gap`) is `assumed`
     with `note` "Assumes nothing moved between … (not in your data)."; only values connected to a
@@ -1472,30 +1591,50 @@ naming what is missing, when a public name has not been added), the parts in bet
   input only while no account has a balance.
 - `toCSV(tl, { people?, format? }) -> string` — RFC 4180, CRLF, deterministic. Block "Settings"
   (`key,value` rows: today, baseline window/setting/months used/from/to, plan start, last month,
-  horizon, cover from savings, `dial.<key>.label|baseline|plan|source|card|bank`, `group.<key>`,
+  horizon, cover from savings, `invest_return_pct`, `dial.<key>.label|baseline|plan|source|card|bank`, `group.<key>`,
   `row.<id>.label|included|amount`, `one_time.<txnId>.label|date|amount|state` ('in the irregular
   allowance' | 'left out by you' | 'counted as regular spending'), `balance.<accountId>.name|date|
-  amount|source` (simple mode: `balance.joint_cash.*`), `change.<id>.label|kind|group|person|start|
-  end|amount|accepted|status`), a blank line, then block "Months": `month,status,in_<personId>…,
+  amount|source` (simple mode: `balance.joint_cash.*`), `investment.<accountId>.name|date|amount|
+  source`, `change.<id>.label|kind|group|person|start|end|amount|accepted|status|source|scenario`
+  (the changes worked out from Budget too), `goal.<id>.label|target|reach`), a blank line, then
+  block "Months": `month,status,in_<personId>…,
   in_other,in_total,essentials,flexible,irregular,other_out,out_total,to_savings,from_savings,
   combined_change,net_checking,combined_balance,combined_status,<accountId>_balance,
-  <accountId>_status…`. Dollars as plain decimals ("-1234.50"; `format: 'cents'` for whole cents),
+  <accountId>_status…,investing[,investments_balance,investments_status]` (net to investments last,
+  so the earlier columns keep their places; the investments line when there is one). Dollars as plain decimals ("-1234.50"; `format: 'cents'` for whole cents),
   unknown as empty, statuses as words; free text starting with = + - @ gets a leading '.
-- `templates.list() -> [{ key: 'baby', label: 'Baby', needs: ['dueDate'] }]`,
-  `templates.baby(dueDate 'YYYY-MM-DD') -> item[]` — generic US estimates timed from the due month
-  D (car seat, nursery D−2; starter clothes, feeding gear, monitor D−1; delivery out-of-pocket D+1;
-  crib D+4; diapers, formula, clothes, copays monthly from D; baby food from D+6; childcare from
-  D+3; parental leave income change D..D+2 with no amount), all `accepted: false`,
-  `template: 'baby'`, each note saying it is an estimate to adjust.
+- `templates.list() -> [{ key: 'babyFirstYear', label, needs: ['dueDate'] }, { key: 'childcare',
+  label, needs: ['startMonth', 'monthlyCents'], defaultCents: 120000 }, { key: 'kidCosts', label,
+  needs: ['dueDate'] }]` — the packs: generic placeholder estimates in the style of US national
+  averages (not the household's data, not quotes), every item an ordinary planned change with
+  `accepted: false`, `personId: null`, its pack's `template`, a note saying it is a generic estimate
+  to adjust, and `scenario` when `opts.scenario` is given (shortened to 60 characters).
+  `templates.babyFirstYear(dueDate, opts?)` (due month D: car seat and stroller, nursery D−2;
+  starter clothes and feeding gear D−1; birth out-of-pocket D+1; diapers, formula, health, clothes
+  monthly D..D+11; parental leave income change D..D+2 with no amount),
+  `templates.childcare(startMonth, monthlyCents = 120000, opts?)` (one monthly change, open-ended),
+  `templates.kidCosts(dueDate, opts?)` (from D+12: food, health, clothes, activities open-ended;
+  diapers through D+35). `templates.baby(dueDate)`: the earlier Baby template, unchanged (14 items,
+  `template: 'baby'`), kept while the screen still offers it; changes saved from it stay as saved.
 - State writes (return a new State, validated through `state.setPath` / `addItem` / `updateItem`):
-  `setDial(state, key, cents|null)`, `setRow(state, rowId, { included?, cents? })`,
+  `setDial(state, key, cents|null)` (setting `other` while `otherDial` is 'withInvesting' makes it
+  'debt'), `setRow(state, rowId, { included?, cents? }, tl?)` (on a level-1 row of one category —
+  not the grouped "Other", not a place moved as a whole; found in `tl`, else from the row id against
+  the budget's keys and the taxonomy — an amount of 0 or more is the category's budget:
+  `plan.targets[category]` is set and the row's `cents` in `ui.plan.rows` removed, its `included`
+  kept; null clears the budget to null when it was there; a negative amount stays in
+  `ui.plan.rows`), `setTarget(state, category, cents|null)` (what Budget writes),
   `resetDial(state, key, tl?)` (irregular: also clears `irregularOff`; with `tl`, also the earlier card/bank row changes its rows use), `resetPlan(state)` (dials, rows
   and `irregularOff`; groups and planned changes stay), `setGroup(state, key, 'essentials'|
   'flexible'|null, tl?)` (key = category or 'merchant:' + place; with the current `tl` a category's
   row changes follow it to the other group), `setIrregular(state, txnId, included)`,
   `addChange(state, item | item[])`, `setChange(state, id, patch)` (switching to one-time clears
   `endMonth`, away from income clears `personId`, unless the patch sets them),
-  `removeChange(state, id)`, `acceptChanges(state, id | ids, accepted = true)`,
+  `removeChange(state, id)`, `acceptChanges(state, id | ids, accepted = true)`, `splitOther(state,
+  tl)` (`tl.migration.other`: investing set directly to its baseline unless set in the meantime,
+  other to the saved amount minus it, `otherDial` 'debt', the note appended to
+  `meta.migrationNotes`; with no investments in the baseline only `otherDial` changes, no note;
+  `otherDial` 'withInvesting' with no other amount: just 'debt'; safe to run twice),
   `migrateRows(state, tl)` (moves the earlier card/bank row changes `tl.migration` matched, removes
   the rest, and appends `tl.migration.rowsNote` to `meta.migrationNotes`; returns the same state
   when there is nothing to do), `migrateDials(state, tl)` (sets each `tl.migration.dials.to` amount
@@ -1504,7 +1643,7 @@ naming what is missing, when a public name has not been added), the parts in bet
   `tl.migration.dials.note` to `meta.migrationNotes`; returns the same state when nothing is
   waiting). The plan screen runs `migrateDials(migrateRows(state, tl), tl)` once, as one change,
   and shows `tl.migration.note`; `pendingUpgrade(tl)` names that: null when nothing is waiting,
-  else `{ steps, note, apply }` — `steps` ⊆ `['migrateRows', 'migrateDials']` in that order, `note`
+  else `{ steps, note, apply }` — `steps` ⊆ `['migrateRows', 'migrateDials', 'splitOther']` in that order, `note`
   = `tl.migration.note`, `apply(state)` runs the steps (safe to run twice; section 7, upgrades). `setDial` removes the dial's `cardSplit` entry; `resetPlan` clears
   `cardSplit`. `acceptCarriedOver(state, key | keys)` ("Keep") removes only the
   `fromCard`/`fromBank` marker: the amount and its card part stay, so card and bank totals do not
@@ -1687,8 +1826,9 @@ Deliberate gaps in the current engine; each needs a contract decision before it 
   `partial`. There is no account end date or "closed" flag; use `coverageOverrides` meanwhile.
 - **Coverage has no scope:** gaps in a personal account (or a declared personal account with no
   export) make joint-view months partial too.
-- **Investment accounts must be typed `savings`:** a paired savings/investment transfer between two
-  non-savings accounts (e.g. a brokerage typed `other`) nets to $0 saved. In the joint view, money
+- **Investment accounts must be typed `investment`** (or `savings`): a paired savings/investment
+  transfer between two accounts typed `checking`/`other` nets to $0 saved. Only joint investment
+  accounts have a line on the plan (personal ones, e.g. a retirement account, are not shown). In the joint view, money
   moved from a personal account that is in the data into joint savings shows no saving
   (`measure` has no scope).
 - **Pay schedules:** holidays are not modelled. Years with a 53rd weekly or 27th biweekly payday

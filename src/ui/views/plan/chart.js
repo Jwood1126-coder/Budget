@@ -89,7 +89,7 @@
       hidden: mode === 'trends' ? [] : hiddenOf(ctx, tl),
       title: TITLE[mode], titleHidden: UI.chart.isNarrow(), tableCaption: TITLE[mode],
       // Accepted planned changes, marked on the bottom edge in every mode (from the plan start when earlier).
-      markers: tl.changes.list.filter(ch => ch.status === 'applied')
+      markers: tl.changes.list.filter(ch => ch.status === 'applied' && !ch.readOnly)
         .map(ch => ({ month: ch.startMonth < tl.planStart ? tl.planStart : ch.startMonth, label: ch.label, cents: ch.cents, kind: ch.kind })),
     };
     if (mode === 'balance') {
@@ -105,6 +105,10 @@
       spec.lines = [];
       if (b.combined) spec.lines.push({ key: 'combined', name: 'Combined cash', role: 'combined', points: points(b.combined.points) });
       for (const a of b.accounts) spec.lines.push({ key: 'acct-' + a.id, name: a.name, role: 'account', points: points(a.points, a) });
+      // Investments: their own line, never part of combined cash (growth only at a rate the household entered: illustrative).
+      if (b.investments && b.investments.points.some(p => p.cents !== null)) {
+        spec.lines.push({ key: 'balance-investments', name: 'Investments', role: 'account', points: b.investments.points.slice(from).map(p => ({ month: p.month, cents: p.cents, status: p.status === 'illustrative' ? 'projected' : p.status, illustrative: p.status === 'illustrative', note: p.status === 'illustrative' ? b.investments.illustrative : '' })) });
+      }
       // The plan at baseline (no dial moved, no planned change): a faint line to compare with.
       const ghost = tl.changed && b.combined && Array.isArray(b.combined.baselinePoints) ? b.combined.baselinePoints : null;
       if (ghost) spec.lines.push({ key: 'ghost', name: 'Baseline plan', role: 'ghost', points: ghost.slice(from).map((cents, i) => ({ month: months[i], cents, status: cents === null ? null : 'projected' })) });

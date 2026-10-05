@@ -10,7 +10,8 @@
  *   debt        loan and store-card payments recorded as debt payments
  *   business    purchases marked as business costs (they still left a joint account)
  *   savings     transfers to and from cash savings (gross in, gross out, net)
- *   investment  transfers to and from investments (kept apart from cash savings)
+ *   investment  transfers to and from investments (kept apart from cash savings); rows on an
+ *               investment account itself are not joint cash and are left out
  *   interest    interest paid by the bank
  *   credit      money in: a partner's pay or transfer (p1 / p2), or unassigned when nobody can say whose
  *   internal    moves between the household's own accounts (not money in or out)
@@ -167,6 +168,9 @@
     const explain = E.balances.incomeAttribution(plan || {}).explain;
     const byMonth = new Map(list.map(m => [m, []]));
     for (const t of E.ledger.filter(txns, { scope: 'joint', includeExcluded: true })) {
+      // Money inside an investment account (its own buys, sells, dividends) is not joint cash; a
+      // transfer to it is counted once, on the cash side (role investment).
+      if (t.accountType === 'investment') continue;
       const m = t.date.slice(0, 7);
       if (byMonth.has(m)) byMonth.get(m).push(t);
     }

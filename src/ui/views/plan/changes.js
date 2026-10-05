@@ -14,20 +14,24 @@
 
   const KIND_LABEL = { oneTime: 'One-time', monthly: 'Monthly' };
   const CHANGE_GROUP_LABEL = { income: 'Income', essentials: 'Essentials', flexible: 'Flexible', irregular: 'Irregular', savings: 'Savings' };
+  /** Groups only the changes worked out from Budget use (read-only rows). */
+  const DERIVED_GROUP_LABEL = { debt: 'Debt & business' };
   const STATUS_BADGE = { applied: ['Applied', 'good'], notAccepted: ['Not accepted', 'neutral'], unset: ['Amount not set', 'warn'], outside: ['Outside horizon', 'neutral'] };
 
   // ------------------------------------------------------------------ 4. planned changes
   /** Cost of a change to checking: spending and savings count up, income counts down. */
   const costOf = ch => (ch.group === 'income' ? 0 - ch.cents : ch.cents);
 
+  /** The household's own changes (plan.changes): the summary counts these; what Budget adds is listed apart. */
   function changesSummary(tl) {
     const ch = tl.changes;
-    if (!ch.list.length) return 'Planned changes';
-    const parts = ['Planned changes', `${ch.applied} of ${ch.list.length} applied`];
+    const own = ch.list.filter(x => !x.readOnly);
+    if (!own.length) return 'Planned changes';
+    const parts = ['Planned changes', `${ch.applied} of ${own.length} applied`];
     if (ch.unset.length) parts.push(`${ch.unset.length} without an amount`);
     if (ch.totalOneTimeCents) parts.push('one-time ' + amt(ch.totalOneTimeCents));
     // Monthly changes: what they add a month in the first plan month they apply.
-    const byId = new Map(ch.list.map(x => [x.id, x]));
+    const byId = new Map(own.map(x => [x.id, x]));
     const first = tl.months.find(m => m.month >= tl.planStart && m.changesApplied.some(a => (byId.get(a.id) || {}).kind === 'monthly'));
     if (first) {
       const cents = first.changesApplied.filter(a => (byId.get(a.id) || {}).kind === 'monthly').reduce((s, a) => s + costOf(byId.get(a.id)), 0);
@@ -40,7 +44,25 @@
   /** The note a template wrote, without the sentence every estimate shares. */
   const noteOf = ch => String(ch.note || '').replace(/\s*A generic estimate: adjust it to your own quotes and plans\.\s*$/, '').trim();
 
+  /** A change worked out from Budget (a bill or a savings goal): shown, edited in Budget. */
+  function derivedRow(ch) {
+    const id = 'plan-ch-' + ch.id;
+    const [statusText, tone] = STATUS_BADGE[ch.status] || ['', 'neutral'];
+    const when = ch.kind === 'monthly' ? 'from ' + fmt.month(ch.startMonth) + (ch.endMonth ? ' until ' + fmt.month(ch.endMonth) : '') : 'in ' + fmt.month(ch.startMonth);
+    const group = CHANGE_GROUP_LABEL[ch.group] || DERIVED_GROUP_LABEL[ch.group] || ch.group;
+    return `<li class="plan-ch-item is-${esc(ch.status)} is-derived" data-change="${esc(ch.id)}">
+        <div class="plan-ch-main">
+          <span class="plan-ch-label">${esc(ch.label)}</span>
+          <span class="plan-ch-amt">${esc(amt(ch.cents))}${ch.kind === 'monthly' ? '/mo' : ''}</span>
+          <span class="plan-ch-status">${badgeWithId(id + '-status', statusText, tone)} ${c.badge(ch.source === 'goal' ? 'savings goal' : 'bill', 'info')}</span>
+        </div>
+        <p class="plan-ch-when fine">${esc(KIND_LABEL[ch.kind] + ' · ' + group + ' · ' + when)}</p>
+        ${ch.note ? `<p class="plan-ch-note fine">${esc(ch.note)}</p>` : ''}
+      </li>`;
+  }
+
   function changeRow(tl, ch) {
+    if (ch.readOnly) return derivedRow(ch);
     const id = 'plan-ch-' + ch.id;
     const path = 'plan.changes[id=' + ch.id + ']';
     const name = ch.label;
@@ -80,13 +102,15 @@
   }
 
   function changesHtml(ctx, tl) {
-    const list = tl.changes.list;
+    const list = tl.changes.list.filter(ch => !ch.readOnly);
+    const fromBudget = tl.changes.list.filter(ch => ch.readOnly);
     const waiting = list.filter(ch => !ch.accepted).length;
     const accepted = list.length - waiting;
     const bulk = list.length ? `<p class="plan-ch-bulk">${waiting ? c.button(`Accept all ${waiting}`, { action: 'plan:change-accept-all', id: 'plan-ch-accept-all', cls: 'btn-small' }) : ''}${accepted ? c.button('Unaccept all', { action: 'plan:change-unaccept-all', id: 'plan-ch-unaccept-all', cls: 'btn-small btn-ghost' }) : ''}</p>` : '';
-    const table = list.length
+    const table = (list.length
       ? `<ul class="plan-ch-list" id="plan-ch-list" aria-label="Planned changes">${list.map(ch => changeRow(tl, ch)).join('')}</ul>${bulk}`
-      : '<p class="fine plan-ch-empty">No planned changes yet.</p>';
+      : '<p class="fine plan-ch-empty">No planned changes yet.</p>')
+      + (fromBudget.length ? `<p class="drill-h">From Budget (bills and savings goals; change them in Budget)</p><ul class="plan-ch-list" id="plan-ch-budget" aria-label="Changes from Budget">${fromBudget.map(ch => changeRow(tl, ch)).join('')}</ul>` : '');
     const add = `<form class="plan-ch-add" id="plan-ch-add" data-action="plan:add-change" novalidate>
         <p class="drill-h">Add a change</p>
         <div class="plan-ch-addrow">
@@ -99,7 +123,7 @@
         </div>
         <p class="field-error" id="plan-ch-new-error" role="alert" hidden></p>
       </form>`;
-    const templates = E.timeline.templates.list().filter(tp => tp.key === 'baby').map(() => `<div class="plan-ch-template" id="plan-tpl-baby-box">
+    const templates = [E.timeline.templates.baby].filter(Boolean).map(() => `<div class="plan-ch-template" id="plan-tpl-baby-box">
         <p class="drill-h">Templates</p>
         <div class="plan-ch-addrow">
           <label class="plan-ch-field"><span>Baby: due date</span><input type="date" id="plan-tpl-baby-date" aria-describedby="plan-tpl-baby-help plan-tpl-baby-date-error"></label>

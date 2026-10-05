@@ -148,7 +148,16 @@
     };
   }
 
-  function buildDials({ base, people, cfg, byId, requested, funding }) {
+  /**
+   * The dials. `targets` (plan.targets) are the category budgets the essentials and flexible rows
+   * use; `goals` (plan.savings) give the savings dial its baseline when any has a monthly amount;
+   * `investments`: whether the data has an investment account (the investing dial is shown then
+   * even with no transfers to it yet). While ui.plan.otherDial is 'withInvesting' (an amount saved
+   * for `other` before investments had their own dial), that amount is read as debt & business
+   * plus investments at their baseline (other = amount − the investing baseline) until the plan
+   * screen makes the split permanent (timeline.splitOther).
+   */
+  function buildDials({ base, people, cfg, byId, requested, funding, targets, goals, investments }) {
     const n = base.count;
     const T = base.total.planning;
     const avg = cents => (n ? E.money.divide(cents, n) : null);
@@ -157,8 +166,13 @@
     const windowText = !n ? 'No complete month yet, so there is no baseline'
       : requested === 'all' ? 'Average of all ' + plural(n, 'complete month') + ', ' + range
         : 'Average of ' + range + ', ' + plural(n, 'month') + (n < requested ? ' (all there are)' : '');
+    // The amounts set directly; an earlier `other` amount still holding investments reads as its debt & business part.
+    const setDials = Object.assign({}, cfg.dials);
+    const investBase = avg(T.investNet);
+    const splitWaiting = cfg.otherDial === 'withInvesting' && isCents(own(setDials, 'other'));
+    if (splitWaiting) setDials.other = setDials.other - (investBase || 0);
     const resolve = (key, baselineCents, rowsCents, rowsSet) => {
-      if (isCents(own(cfg.dials, key))) return { planCents: cfg.dials[key], source: 'direct' };
+      if (isCents(own(setDials, key))) return { planCents: setDials[key], source: 'direct' };
       if (rowsSet) return { planCents: rowsCents, source: 'rows' };
       return { planCents: baselineCents, source: 'baseline' };
     };
@@ -187,14 +201,15 @@
     }
     const legacy = [], superseded = [];
     for (const key of SPEND_GROUPS) {
-      const drill = drillFor(key, base, byId, cfg);
+      const drill = drillFor(key, base, byId, cfg, targets);
       legacy.push(...drill.legacy);
       superseded.push(...drill.superseded);
       delete drill.legacy;
       delete drill.superseded;
       const extra = n && drill.yearlyCount ? plural(drill.yearlyCount, 'yearly bill') + ' spread over 12 months' : '';
       const d = Object.assign({ key, group: 'out', label: DIAL_LABEL[key], baselineCents: drill.baselineCents }, resolve(key, drill.baselineCents, drill.rowsCents, drill.overridden), {
-        basis: windowText + (extra ? '; ' + extra : '') + (drill.stableCount ? '; regular bills at their latest amount' : ''), hint: null, drill,
+        basis: windowText + (extra ? '; ' + extra : '') + (drill.stableCount ? '; regular bills at their latest amount' : '')
+          + (drill.budgetCount ? '; ' + plural(drill.budgetCount, 'category budget') + ' from Budget' : ''), hint: null, drill,
       });
       dials.push(Object.assign(d, splitSpending(d, drill, own(cfg.cardSplit, key))));
     }
@@ -207,16 +222,30 @@
       basis: irrBasis, hint: null, drill: irr,
     });
     dials.push(Object.assign(irregular, splitSpending(irregular, irr, own(cfg.cardSplit, 'irregular'))));
-    const savingsBase = avg(T.savingsNet);
+    // Net to savings: the savings goals' monthly amounts saved in Budget, when any has one; else the average.
+    const averageSavings = avg(T.savingsNet);
+    const funded = (Array.isArray(goals) ? goals : []).filter(g => g && isCents(g.monthlyCents) && g.monthlyCents >= 0);
+    const goalsCents = funded.length ? funded.reduce((sum, g) => sum + g.monthlyCents, 0) : null;
+    const savingsBase = goalsCents !== null ? goalsCents : averageSavings;
+    const savingsKind = isCents(own(setDials, 'savings')) ? 'direct' : goalsCents !== null ? 'budget' : 'average';
     dials.push(Object.assign({ key: 'savings', group: 'out', label: DIAL_LABEL.savings, baselineCents: savingsBase }, resolve('savings', savingsBase), {
-      basis: windowText + (n ? ' (into savings minus out of savings)' : ''), hint: null, drill: null,
+      basis: goalsCents !== null ? 'From Budget: ' + plural(funded.length, 'savings goal') + ' (' + E.money.format(goalsCents) + ' a month)'
+        : windowText + (n ? ' (into savings minus out of savings)' : ''),
+      hint: null, drill: null, budgetCents: goalsCents, averageCents: averageSavings, basisKind: savingsKind,
     }));
-    const otherBase = avg(T.debt + T.business + T.investNet);
+    // Net to investments: transfers to investment accounts minus money brought back (never joint cash).
+    if ((investBase !== null && investBase !== 0) || isCents(own(setDials, 'investing')) || investments || splitWaiting) {
+      dials.push(Object.assign({ key: 'investing', group: 'out', label: DIAL_LABEL.investing, baselineCents: investBase }, resolve('investing', investBase), {
+        basis: windowText + (n ? ' (into investments minus money brought back)' : ''), hint: null, drill: null,
+      }));
+    }
+    const otherBase = avg(T.debt + T.business);
     parts.debt = avg(T.debt);
     parts.business = avg(T.business);
-    if ((otherBase !== null && otherBase !== 0) || isCents(own(cfg.dials, 'other'))) {
+    if ((otherBase !== null && otherBase !== 0) || isCents(own(setDials, 'other'))) {
       dials.push(Object.assign({ key: 'other', group: 'out', label: DIAL_LABEL.other, baselineCents: otherBase }, resolve('other', otherBase), {
-        basis: windowText + (n ? ' (debt payments, business purchases and investments)' : ''), hint: null, drill: null,
+        basis: windowText + (n ? ' (debt payments and business purchases)' : ''), hint: null, drill: null,
+        split: splitWaiting ? { fromCents: cfg.dials.other, investingCents: investBase || 0, otherCents: setDials.other } : null,
       }));
     }
     const carriedOver = carriedOverOf(dials, cfg);
@@ -264,8 +293,9 @@
   /**
    * One plan month from the dials (same keys as an actual month): at each dial's plan amount, or
    * with `atBaseline` at each dial's baseline (the "no changes" plan the chart can draw as a ghost).
-   * out.card / out.bank are worked out from the spending dials; out.total = essentials + flexible +
-   * irregular + debt + business + investments. Also: combinedChange = in − out (moves to and from
+   * out.card / out.bank are worked out from the spending dials; out.other = debt + business (the
+   * other dial), out.invest = the investing dial; out.total = essentials + flexible + irregular +
+   * other + invest. Also: combinedChange = in − out (moves to and from
    * savings stay inside joint cash), toSavings and fromSavings (the savings dial's two sides).
    */
   function planMonth(dials, parts, people, atBaseline) {
@@ -284,21 +314,21 @@
     out.card = sumKnown(['essentials', 'flexible', 'irregular'].map(k => { const d = dial(k); return d ? (atBaseline ? d.baselineCardCents : d.cardCents) : 0; }));
     out.bank = spending === null || out.card === null ? null : spending - out.card;
     const other = v('other');
-    if (other === null) { out.debt = null; out.business = null; out.invest = null; }
+    if (other === null) { out.debt = null; out.business = null; }
     else if (other !== 0) {
-      // Split like the baseline (debt, business, investments); all of it is debt when the baseline has none.
-      const bd = parts.debt || 0, bb = parts.business || 0;
+      // Split like the baseline (debt, business); all of it is debt when the baseline has none.
+      const bd = parts.debt || 0;
       const baseTotal = dial('other') ? dial('other').baselineCents || 0 : 0;
       if (!baseTotal) out.debt = other;
-      else if (other === baseTotal) { out.debt = bd; out.business = bb; out.invest = other - bd - bb; }
+      else if (other === baseTotal) { out.debt = bd; out.business = other - bd; }
       else {
         out.debt = Math.round(other * bd / baseTotal);
-        out.business = Math.round(other * bb / baseTotal);
-        out.invest = other - out.debt - out.business;
+        out.business = other - out.debt;
       }
     }
-    out.other = sumKnown([out.debt, out.business, out.invest]);
-    out.total = sumKnown([spending, out.other]);
+    out.invest = v('investing');
+    out.other = sumKnown([out.debt, out.business]);
+    out.total = sumKnown([spending, out.other, out.invest]);
     const savings = v('savings');
     const net = inn.total === null || out.total === null || savings === null ? null : inn.total - out.total - savings;
     const combinedChange = inn.total === null || out.total === null ? null : inn.total - out.total;

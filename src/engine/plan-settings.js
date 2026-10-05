@@ -15,8 +15,12 @@
 
   /** The two people a plan holds (plan.people ids); each has a money-in dial on the plan screen. */
   const PEOPLE = list(['p1', 'p2']);
-  /** The plan screen's dials: money in per person and other, money out by how adjustable it is. */
-  const DIAL_KEYS = list(PEOPLE.concat(['inOther', 'essentials', 'flexible', 'irregular', 'savings', 'other']));
+  /**
+   * The plan screen's dials: money in per person and other, money out by how adjustable it is,
+   * net to savings, net to investments (investing) and debt & business (other). Before investments
+   * had a dial of their own, `other` held them too (ui.plan.otherDial says which a saved amount is).
+   */
+  const DIAL_KEYS = list(PEOPLE.concat(['inOther', 'essentials', 'flexible', 'irregular', 'savings', 'investing', 'other']));
   /**
    * Card and bank spending were dials before spending was grouped by how adjustable it is; now
    * they are worked out from the spending dials. An amount saved for one waits in
@@ -41,7 +45,8 @@
     { key: 'essentials', name: 'Essentials', group: 'out' },
     { key: 'flexible', name: 'Flexible spending', group: 'out' },
     { key: 'irregular', name: 'Irregular costs', group: 'out' },
-    { key: 'other-out', name: 'Debt, business & investments', group: 'out' },
+    { key: 'other-out', name: 'Debt & business', group: 'out' },
+    { key: 'investing', name: 'Into investments', group: 'out' },
     { key: 'out-total', name: 'All money out', group: 'out' },
     { key: 'to-savings', name: 'Into savings', group: 'savings' },
     { key: 'from-savings', name: 'Out of savings', group: 'savings' },
@@ -51,12 +56,14 @@
   /**
    * The Trends chart's balance series (month-end amounts, not amounts per month), besides one per
    * cash account with a balance line (BALANCE_SERIES_PREFIX + account id, named after the
-   * account): joint cash combined, and the savings accounts together (when there are two or more).
+   * account): joint cash combined, the savings accounts together (when there are two or more) and
+   * the investment accounts together (never part of joint cash).
    */
   const BALANCE_SERIES_PREFIX = 'balance-';
   const BALANCE_SERIES = list([
     { key: 'balance-combined', name: 'Combined cash', group: 'balances' },
     { key: 'balance-savings-total', name: 'Savings total', group: 'balances' },
+    { key: 'balance-investments', name: 'Investments', group: 'balances' },
   ].map(s => Object.freeze(s)));
   /** A balance series key: one of BALANCE_SERIES, or 'balance-' + an account id. */
   const isBalanceSeries = key => typeof key === 'string' && key.length > BALANCE_SERIES_PREFIX.length && key.startsWith(BALANCE_SERIES_PREFIX);

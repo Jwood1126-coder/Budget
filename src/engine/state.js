@@ -294,7 +294,9 @@
   // Planned changes on the plan screen (BudgetEngine.timeline): a dated one-time or monthly amount
   // added to one group from startMonth (monthly: through endMonth when set). cents null = the
   // amount is not known yet (listed, never applied as $0); accepted false = listed only.
-  // personId only for income (null: "other money in").
+  // personId only for income (null: "other money in"). scenario: the what-if it belongs to
+  // (null: none), up to SCENARIO_TAG_MAX characters.
+  const SCENARIO_TAG_MAX = 60;
   const CHANGE_FIELDS = [
     ['label', label('Planned change')],
     ['kind', oneOf(CHANGE_KINDS, 'monthly')],
@@ -305,6 +307,7 @@
     ['cents', SIGNED_CENTS],
     ['accepted', bool(false)],
     ['template', REF],
+    ['scenario', rule('text', { max: SCENARIO_TAG_MAX, nullable: true })],
     ['note', NOTE]
   ];
 
@@ -402,6 +405,12 @@
     { name: 'irregularOff', rule: rule('boolmap', { max: LIMITS.planIrregular, keyMax: LIMITS.txnId, def: {} }),
       doc: '{ [txnId]: true } one-time costs left out of the irregular allowance' },
     { name: 'trends', rule: fieldGroup(TRENDS_FIELDS), doc: 'the Trends chart: which series (TREND_SERIES), a moving average of 0/3/6 months, and a trend line' },
+    { name: 'otherDial', rule: oneOf(['debt', 'withInvesting'], 'debt'),
+      doc: 'what dials.other holds: \'debt\' = debt & business (investments have their own dial, dials.investing); \'withInvesting\' = an amount saved before that, still including investments, which the plan screen splits once (timeline.splitOther)' },
+    { name: 'investReturnPct', rule: num(0, 25, null, { nullable: true }),
+      doc: 'a yearly growth rate (%) the household entered for the investments line, compounded monthly and labelled illustrative; null = none assumed' },
+    { name: 'scenariosCopied', rule: bool(true),
+      doc: 'true once the Forecast scenarios\' events have been copied into plan.changes as what-ifs (absent in budgets saved before that: the copy runs once, V5_UPGRADES)' },
     { name: 'legacyDials', rule: optional(rule('object', { fields: LEGACY_DIAL_FIELDS })),
       doc: '(absent unless needed) { card?, bank? } signed cents set for the earlier card and bank dials, waiting to be carried over to essentials, flexible and irregular (timeline.migrateDials)' },
     { name: 'cardSplit', rule: optional(rule('objmap', { max: SPEND_DIALS.length, keys: SPEND_DIALS, fields: CARD_SPLIT_FIELDS, noun: 'card parts of plan amounts' })),
@@ -1389,7 +1398,91 @@
   //     must never change once released (meta.migrationNotes is matched by text).
   // Upgrades that need the data as well (a built plan) run on the plan screen instead:
   // BudgetEngine.timeline.pendingUpgrade names them.
+
+  /**
+   * The Forecast's scenarios become what-ifs on the plan: every event of a scenario other than
+   * the baseline is copied once into plan.changes as a planned change tagged with the scenario's
+   * name (scenario, ≤ 60 characters), not accepted, with id 'sc-' + the event's id (a change with
+   * that id already there is left as it is). Types: recurring -> monthly (expense: essentials or
+   * flexible by its category; income +, income_loss −), one_time -> oneTime (expense: irregular;
+   * income: income), income_change -> monthly income for the stream's person with the monthly
+   * difference to joint when both amounts and the pay frequency are known (else no amount),
+   * bill_change and target_change -> monthly with no amount and a note saying what they set.
+   * Savings-goal events and events with no (start) month are not copied, and named. The scenarios
+   * stay in the budget as they are. ui.plan.scenariosCopied: true marks it done, so it runs once.
+   * Returns { raw, note } (note null only when every event was copied before).
+   */
+  function copyScenarioChanges(raw) {
+    const ui = isObj(raw.ui) ? Object.assign({}, raw.ui) : {};
+    ui.plan = Object.assign({}, isObj(ui.plan) ? ui.plan : {}, { scenariosCopied: true });
+    const done = { raw: Object.assign({}, raw, { ui }), note: null };
+    if (!isObj(raw.plan) || !Array.isArray(raw.scenarios) || (raw.plan.changes !== undefined && !Array.isArray(raw.plan.changes))) return done;
+    const existing = Array.isArray(raw.plan.changes) ? raw.plan.changes : [];
+    const taken = new Set(existing.filter(isObj).map(c => c.id));
+    const incomes = Array.isArray(raw.plan.incomes) ? raw.plan.incomes.filter(isObj) : [];
+    const bills = Array.isArray(raw.plan.bills) ? raw.plan.bills.filter(isObj) : [];
+    const isAmount = v => Number.isSafeInteger(v) && v >= 0 && v <= E.money.MAX_INPUT_CENTS;
+    const groupOf = category => (typeof category === 'string' && E.categories.isEssential(category) ? 'essentials' : 'flexible');
+    const added = [], skipped = [], perScenario = [];
+    for (const s of raw.scenarios) {
+      if (!isObj(s) || s.id === BASELINE_ID || !Array.isArray(s.events)) continue;
+      const name = (nonEmpty(s.name) ? s.name.trim() : String(s.id || 'Scenario')).slice(0, SCENARIO_TAG_MAX);
+      let count = 0;
+      for (const ev of s.events) {
+        if (!isObj(ev) || !nonEmpty(ev.id)) continue;
+        let id = 'sc-' + ev.id.trim();
+        if (!isValidId(id)) id = 'sc-' + E.util.hash(ev.id);
+        if (taken.has(id)) continue;
+        const label = (nonEmpty(ev.label) ? ev.label.trim() : 'Change').slice(0, LIMITS.label);
+        const start = ev.type === 'one_time' ? ev.month : ev.startMonth;
+        if (ev.type === 'goal' || !['one_time', 'recurring', 'income_change', 'bill_change', 'target_change'].includes(ev.type)) { skipped.push(label + ' (' + (ev.type === 'goal' ? 'a savings goal: add it in Budget' : 'not a dated change') + ')'); continue; }
+        if (!E.months.isMonth(start)) { skipped.push(label + ' (no ' + (ev.type === 'one_time' ? 'month' : 'start month') + ' yet)'); continue; }
+        if (existing.length + added.length >= LIMITS.planChanges) { skipped.push(label + ' (no room for more planned changes)'); continue; }
+        const end = ev.type !== 'one_time' && E.months.isMonth(ev.endMonth) && ev.endMonth >= start ? ev.endMonth : null;
+        const item = { id, label, kind: ev.type === 'one_time' ? 'oneTime' : 'monthly', group: 'flexible', personId: null, startMonth: start, endMonth: end, cents: null, accepted: false, template: null, scenario: name };
+        let what = '';
+        if (ev.type === 'one_time') {
+          item.group = ev.direction === 'income' ? 'income' : 'irregular';
+          item.cents = isAmount(ev.amountCents) ? ev.amountCents : null;
+        } else if (ev.type === 'recurring') {
+          const m = isAmount(ev.monthlyCents) ? ev.monthlyCents : null;
+          if (ev.direction === 'income' || ev.direction === 'income_loss') { item.group = 'income'; item.cents = m === null ? null : ev.direction === 'income' ? m : 0 - m; } else { item.group = groupOf(ev.category); item.cents = m; }
+        } else if (ev.type === 'income_change') {
+          const st = incomes.find(i => i.id === ev.streamId) || null;
+          item.group = 'income';
+          item.personId = st && PEOPLE.includes(st.personId) ? st.personId : null;
+          const perYear = st ? lookup(E.schedule.PER_YEAR, st.frequency) : undefined;
+          if (st && perYear && has(ev, 'jointPerPaycheckCents') && isAmount(ev.jointPerPaycheckCents) && isAmount(st.jointPerPaycheckCents)) item.cents = Math.round((ev.jointPerPaycheckCents - st.jointPerPaycheckCents) * perYear / 12);
+          else what = 'it changes ' + (st && nonEmpty(st.label) ? st.label.trim() : 'an income') + '; enter the monthly change to joint (negative for a drop)';
+        } else if (ev.type === 'bill_change') {
+          const b = bills.find(x => x.id === ev.billId) || null;
+          item.group = 'essentials';
+          what = 'it sets ' + (b && nonEmpty(b.label) ? b.label.trim() : 'a bill') + ' to ' + money(isAmount(ev.monthlyCents) ? ev.monthlyCents : null) + ' a month; enter the monthly difference';
+        } else {
+          item.group = groupOf(ev.category);
+          what = 'it sets the ' + (nonEmpty(ev.category) ? ev.category.trim() : 'category') + ' target to ' + money(isAmount(ev.monthlyCents) ? ev.monthlyCents : null) + ' a month; enter the monthly difference';
+        }
+        item.note = ('Copied from the Forecast scenario “' + name + '”' + (what ? ': ' + what + '.' : '.') + (nonEmpty(ev.note) ? ' ' + ev.note.trim() : '')).slice(0, LIMITS.note);
+        added.push(item);
+        taken.add(id);
+        count += 1;
+      }
+      if (count) perScenario.push('“' + name + '”: ' + count);
+    }
+    if (!added.length && !skipped.length) return done;
+    const plan = Object.assign({}, raw.plan, { changes: existing.concat(added) });
+    const unset = added.filter(c => c.cents === null).length;
+    const note = 'plan.changes: ' + (added.length
+      ? plural(added.length, 'change') + ' from your Forecast scenarios ' + (added.length === 1 ? 'was' : 'were') + ' copied to the plan’s planned changes, not accepted, each tagged with its scenario (' + perScenario.join(', ') + ')'
+        + (unset ? '; ' + unset + ' ' + (unset === 1 ? 'has' : 'have') + ' no amount yet' : '') + '. The scenarios themselves are unchanged.'
+      : 'nothing from your Forecast scenarios could be copied to the plan’s planned changes. The scenarios themselves are unchanged.')
+      + (skipped.length ? ' Not copied: ' + skipped.join(', ') + '.' : '');
+    return { raw: Object.assign({}, done.raw, { plan }), note };
+  }
+
   const withUi = (raw, ui) => Object.assign({}, raw, { ui });
+  /** A raw saved budget whose ui (and ui.plan) is absent or an object: an upgrade may add a field there. */
+  const planUiOpen = raw => isObj(raw) && (raw.ui === undefined || (isObj(raw.ui) && (raw.ui.plan === undefined || isObj(raw.ui.plan))));
   const V5_UPGRADES = Object.freeze([
     Object.freeze({
       id: 'ui.home', // the earlier Home settings become the plan screen's (migrateHome)
@@ -1400,6 +1493,25 @@
       id: 'ui.plan.dials.card-bank', // card and bank amounts wait in ui.plan.legacyDials (migratePlanDials)
       applies: raw => isObj(raw) && isObj(raw.ui) && isObj(raw.ui.plan) && isObj(raw.ui.plan.dials) && RETIRED_DIALS.some(k => has(raw.ui.plan.dials, k)),
       apply: raw => { const r = migratePlanDials(raw.ui); return r ? { raw: withUi(raw, r.ui), note: r.note } : { raw, note: null }; }
+    }),
+    Object.freeze({
+      // An amount saved for other before investments had a dial of their own still includes them:
+      // marked to be split on the plan screen, which knows their baseline (timeline.splitOther,
+      // which leaves the note). Budgets saved since carry otherDial already.
+      id: 'ui.plan.otherDial',
+      applies: raw => isObj(raw) && isObj(raw.ui) && isObj(raw.ui.plan) && !has(raw.ui.plan, 'otherDial') && isObj(raw.ui.plan.dials) && Number.isSafeInteger(raw.ui.plan.dials.other),
+      apply: raw => ({
+        raw: withUi(raw, Object.assign({}, raw.ui, { plan: Object.assign({}, raw.ui.plan, { otherDial: 'withInvesting' }) })),
+        note: 'ui.plan.dials.other: your amount for debt, business and investments (' + money(raw.ui.plan.dials.other) + ') will be split the next time Plan opens, now that investments have a dial of their own.'
+      })
+    }),
+    Object.freeze({
+      // The Forecast scenarios' events become what-ifs on the plan, once (copyScenarioChanges).
+      // Budgets saved since carry scenariosCopied (true by default), so it never runs again.
+      id: 'plan.changes.scenarios',
+      applies: raw => planUiOpen(raw) && !(isObj(raw.ui) && isObj(raw.ui.plan) && has(raw.ui.plan, 'scenariosCopied')) && isObj(raw.plan)
+        && Array.isArray(raw.scenarios) && raw.scenarios.some(sc => isObj(sc) && sc.id !== BASELINE_ID && Array.isArray(sc.events) && sc.events.length > 0),
+      apply: raw => copyScenarioChanges(raw)
     })
   ]);
 
