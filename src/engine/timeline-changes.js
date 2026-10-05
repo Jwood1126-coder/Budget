@@ -220,9 +220,12 @@
    * months with the same difference from the dial make one change ('pay-<person>-<month>'); the
    * last runs to the end of the plan (endMonth null). A month whose Budget pay is not known (a
    * stream joining without an amount) gives a change with no amount: listed, never applied as $0.
-   * Only for a person whose dial has a known Budget amount for the first plan month (set from
-   * Budget, or set directly: the dated change still applies on top); worked out only when some
-   * stream starts or ends inside the plan.
+   * The dial stands on its Budget pay for the first plan month. When none of the person's Budget
+   * pay runs then (it starts later, or ended before the plan): under a dial set directly that is
+   * $0 (later pay adds on top); on the deposit-average fallback, their known Budget pay replaces the
+   * average in the months it runs (other months keep the average). A person with no pay in Budget
+   * keeps the deposit average throughout, and one whose pay running now has no amount gets nothing
+   * worked out. Only when some stream starts or ends inside the plan.
    * @param {{ plan: object, dials: object[], planStart: string, lastMonth: string }} input
    */
   function incomeChanges({ plan, dials, planStart, lastMonth }) {
@@ -238,16 +241,27 @@
     };
     const out = [];
     for (const d of dials) {
-      if (d.group !== 'in' || d.key === 'inOther' || !isCents(d.budgetCents) || d.basisKind === 'average') continue;
+      if (d.group !== 'in' || d.key === 'inOther') continue;
       const pid = d.key;
       const start0 = streamsAt(planStart, pid) || [];
+      // What the dial stands on in the first plan month: its Budget pay; with none of their pay
+      // running then (it starts later, or ended before the plan), $0 under a dial set directly, or
+      // the deposit average the dial falls back to, which their Budget pay replaces while it runs.
+      let ref = d.budgetCents, fallback = false;
+      if (!isCents(ref)) {
+        if (start0.length || !incomes.some(st => st.personId === pid)) continue; // pay running with no amount, or no pay in Budget: nothing to work out
+        if (d.basisKind === 'direct') ref = 0;
+        else if (isCents(d.planCents)) { ref = d.planCents; fallback = true; } else continue;
+      }
       const runs = [];
       const unknown = new Map(); // stream id -> { label, start, end }: a stream running without an amount
       for (let m = E.months.add(planStart, 1); m <= lastMonth; m = E.months.add(m, 1)) {
         const list = streamsAt(m, pid);
         if (list === null) continue;
         // The streams with an amount count; one without is listed on its own, never added as $0.
-        const delta = list.filter(st => isCents(st.monthly.joint)).reduce((sum, st) => sum + st.monthly.joint, 0) - d.budgetCents;
+        const known = list.filter(st => isCents(st.monthly.joint));
+        // On the deposit average, a month with none of their known pay keeps the average.
+        const delta = fallback && !known.length ? 0 : known.reduce((sum, st) => sum + st.monthly.joint, 0) - ref;
         for (const st of list.filter(x => !isCents(x.monthly.joint))) {
           if (!unknown.has(st.id)) unknown.set(st.id, { label: st.label, start: m, end: m });
           else unknown.get(st.id).end = m;
@@ -267,7 +281,7 @@
         out.push(Object.assign({}, common, {
           id: 'pay-' + pid + '-' + r.start, label: d.label + ': ' + what, startMonth: r.start, endMonth: end, cents: r.delta,
           note: 'From Budget: ' + d.label + '’s pay ' + (r.delta > 0 ? 'rises by ' : 'drops by ') + E.money.format(Math.abs(r.delta)) + ' a month from ' + E.months.label(r.start)
-            + (end ? ' through ' + E.months.label(end) : '') + '. Edit the pay dates in Budget.',
+            + (end ? ' through ' + E.months.label(end) : '') + (fallback ? ' (their pay in Budget in place of the deposit average)' : '') + '. Edit the pay dates in Budget.',
         }));
       }
       for (const [id, u] of unknown) {

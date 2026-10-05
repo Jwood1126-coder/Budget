@@ -37,6 +37,8 @@
   //          'fields' a group of fields, merged field by field (the same rule as 'map')
   //          'value'  one value, merged whole
   //   label  how the notes name one unit (key: item id, entry key or field; item: the list item)
+  //   nested  ('fields' only) keys left to rows of their own further down (merged there, kept here)
+  //   quietGone  entries the file leaves out are kept without a note (a file names only some of them)
   // A ui.plan row is used only when this version's ui.plan has that field (E.state.PLAN_UI).
   const MANAGED = [
     { path: 'plan.incomes', kind: 'list' },
@@ -47,7 +49,11 @@
     { path: 'plan.people', kind: 'list', label: (k, item) => (isObj(item) && item.name ? item.name + '’s name' : 'a name') },
     { path: 'plan.targets', kind: 'map', label: k => k + ' target' },
     { path: 'plan.settings', kind: 'fields' },
-    { path: 'plan.balances', kind: 'fields' },
+    // The account balances and their dates are maps of their own (per account), so a setup file
+    // with one account's balance changes that account only; the group row leaves them to them.
+    { path: 'plan.balances', kind: 'fields', nested: ['accounts', 'accountDates'] },
+    { path: 'plan.balances.accounts', kind: 'map', label: k => k + ' balance', quietGone: true },
+    { path: 'plan.balances.accountDates', kind: 'map', label: k => k + ' balance date', quietGone: true },
     { path: 'ui.plan.dials', kind: 'map', label: (k, _, names) => (names[k] ? names[k] + '’s money in' : words(k)) + ' on the plan' },
     { path: 'ui.plan.rows', kind: 'map', label: () => 'a spending row on the plan' },
     { path: 'ui.plan.groups', kind: 'map', label: k => String(k).replace(/^merchant:/, '') + ' grouping' },
@@ -58,7 +64,7 @@
   ];
 
   /** Part of the hash: bump it when the merge itself changes, so every budget is merged once more. */
-  const SYNC_VERSION = 1;
+  const SYNC_VERSION = 2;
   const EPOCH = '1970-01-01T00:00:00.000Z';
 
   /** Words for fields in the notes (any other field: its name split into words). */
@@ -147,7 +153,7 @@
         if (bv === undefined) continue;
         const silent = r[k] === undefined && !Object.keys(r).some(x => x.trim() === k && r[x] !== undefined);
         if (!silent && (known(out[k]) || !known(bv))) continue;
-        if (silent && has(s, k) && !has(out, k)) gone.push(unitLabel(row, k, null, null, names));
+        if (silent && has(s, k) && !has(out, k) && !row.quietGone) gone.push(unitLabel(row, k, null, null, names));
         out[k] = clone(bv);
       }
       return out;
@@ -418,6 +424,17 @@
     const B = first ? {} : checked({ plan: isObj(get(setup.base, 'plan')) ? setup.base.plan : {} }, get(setup.base, 'ui.plan'), rows);
     const prof = profileValues(profile, rows, clean, S, B, names);
     const P = prof.values;
+    // A group row leaves its nested maps to their own rows: merged without them, written back with
+    // them as they are (their rows, later in MANAGED, write their own merged values over them).
+    const nestedSaved = {};
+    const without = (row, v) => { if (!isObj(v)) return v; const o = Object.assign({}, v); for (const k of row.nested) delete o[k]; return o; };
+    for (const row of rows.filter(r => r.nested)) {
+      nestedSaved[row.path] = {};
+      for (const k of row.nested) if (isObj(S[row.path]) && has(S[row.path], k)) nestedSaved[row.path][k] = clone(S[row.path][k]);
+      S[row.path] = without(row, S[row.path]);
+      if (B[row.path] !== undefined) B[row.path] = without(row, B[row.path]);
+      P[row.path] = without(row, P[row.path]);
+    }
     // Parts of the plan the file leaves out entirely are not merged this time (nothing saved there
     // changes, and B keeps what it had); elsewhere the file never erases a value (keepKnown).
     const rawAll = { plan: profile.plan, planUi: profile.planUi };
@@ -482,7 +499,10 @@
     }
 
     const next = clone(state);
-    for (const row of rows) if (!eq(merged[row.path], S[row.path])) set(next, row.path, merged[row.path]);
+    for (const row of rows) {
+      if (eq(merged[row.path], S[row.path])) continue;
+      set(next, row.path, row.nested ? Object.assign({}, merged[row.path], nestedSaved[row.path]) : merged[row.path]);
+    }
     const baseOut = {};
     for (const row of rows) set(baseOut, row.path, newBase[row.path]);
     const appliedAt = now || (setup && typeof setup.appliedAt === 'string' ? setup.appliedAt : null) || (isObj(state.meta) && state.meta.updatedAt) || EPOCH;

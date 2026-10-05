@@ -2160,8 +2160,14 @@ test('pay in Budget that starts or ends later moves that person’s money in fro
   // Nothing dated inside the plan: no changes worked out.
   const flat = ipRun(ds, { plan: ipPlan({ incomes: [stream('Steady', 'p1', { jointPerPaycheckCents: 300000 })] }) });
   assert.equal(flat.changes.list.filter(c => c.source === 'income').length, 0);
-  // Deposit-average dials (no pay in Budget for the first month) are left alone.
+  // No Budget pay running in the first plan month: the dial falls back to the deposit average, and
+  // known Budget pay that starts later replaces the average from its first month.
   const later = ipRun(ds, { plan: ipPlan({ incomes: [stream('Starts later', 'p1', { jointPerPaycheckCents: 300000, startMonth: '2026-11' })] }) });
-  assert.equal(later.dialsByKey.p1.basisKind, 'average');
-  assert.equal(later.changes.list.filter(c => c.source === 'income').length, 0);
+  const avg = later.dialsByKey.p1;
+  assert.equal(avg.basisKind, 'average');
+  assert.deepEqual([monthOf(later, '2026-10').in.p1, monthOf(later, '2026-11').in.p1, monthOf(later, '2027-04').in.p1], [avg.planCents, 300000, 300000]);
+  assert.deepEqual(later.changes.list.filter(c => c.source === 'income').map(c => [c.id, c.startMonth, c.endMonth, c.cents]), [['pay-p1-2026-11', '2026-11', null, 300000 - avg.planCents]]);
+  // No pay in Budget at all: the deposit average stands, nothing worked out.
+  const none = ipRun(ds, { plan: ipPlan({ incomes: [] }) });
+  assert.equal(none.changes.list.filter(c => c.source === 'income').length, 0);
 });

@@ -293,7 +293,8 @@ its new values flow as usual.
 
 - Managed: `plan.incomes`, `bills`, `debts`, `savings`, `changes` (by id, field by field),
   `plan.people` (names), `plan.targets` (per category), `plan.settings` and `plan.balances` (per
-  field), and from `planUi`: `dials`, `rows`, `groups`, `irregularOff` (per key),
+  field; `balances.accounts` and `balances.accountDates` per account, so a file with one
+  account's balance changes that account only), and from `planUi`: `dials`, `rows`, `groups`, `irregularOff` (per key),
   `baselineMonths`, `coverFromSavings`, `investReturnPct`. Not managed: `personalSpending`,
   `scenarios`, references, transaction corrections and other screen settings.
 - The first time a saved budget meets the setup file, nothing it holds changes (every difference

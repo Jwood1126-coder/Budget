@@ -84,7 +84,7 @@ test('a new budget: the first run records the base, keeps the plan and applies p
   assert.deepEqual(r0.notes, []);
   assert.equal(r0.changed, false);
   assert.deepEqual(managed(r0.state), managed(S.defaults(plain, DS, { now: T0 })));
-  assert.ok(/^v1-/.test(r.state.meta.setup.hash));
+  assert.ok(/^v2-/.test(r.state.meta.setup.hash));
   assert.equal(r.state.meta.setup.appliedAt, T0);
   assert.equal(byId(r.state.meta.setup.base.plan.bills, 'rent').monthlyCents, 140000);
   assert.equal(r.state.meta.setup.base.plan.targets['Dining & takeout'], 30000);

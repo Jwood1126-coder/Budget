@@ -412,7 +412,8 @@ nothing and says nothing).
 - Setup-managed (the table `MANAGED` at the top of `setup-sync.js`, `setupSync.MANAGED`):
   `plan.incomes`, `plan.bills`, `plan.debts`, `plan.savings`, `plan.changes`, `plan.people` (lists,
   by id, field by field; people: the name), `plan.targets` (by key), `plan.settings` and
-  `plan.balances` (field by field), and from `profile.planUi` the `ui.plan` fields `dials`, `rows`,
+  `plan.balances` (field by field; its `accounts` and `accountDates` are rows of their own, by
+  account, so a file with one account's balance changes that account only), and from `profile.planUi` the `ui.plan` fields `dials`, `rows`,
   `groups`, `irregularOff` (by key), `baselineMonths`, `coverFromSavings`, `investReturnPct`
   (whole). A `ui.plan` row is used only when this version's `ui.plan` has the field. Not managed:
   `personalSpending`, scenarios, references, ledger corrections and every other setting.
@@ -1519,9 +1520,11 @@ naming what is missing, when a public name has not been added), the parts in bet
     past its `endMonth` leaves, a month with none of their streams is $0). Consecutive months with
     the same difference from the dial make one change `'pay-<person>-<month>'` (the last one
     open-ended); a stream running without an amount is listed on its own as
-    `'pay-<person>-<stream id>'` with no amount (never $0). Only for a person whose dial has a known
-    Budget amount for the first plan month (set from Budget, or set directly: the dated change still
-    applies on top); none for a deposit-average dial.
+    `'pay-<person>-<stream id>'` with no amount (never $0). The dial stands on its Budget pay for
+    the first plan month; when none of the person's Budget pay runs then (it starts later, or ended
+    before the plan): under a dial set directly that is $0 (later pay adds on top); on the
+    deposit-average fallback their known Budget pay replaces the average in the months it runs
+    (other months keep the average). A person with no pay in Budget keeps the average throughout.
     Accepted changes with an amount add to plan months from `startMonth` (one-time: that month only;
     monthly: through `endMonth` when set): income to `in[personId]` (`in.other` without a person),
     spending groups to that group, `out.bank` and `out.total`, savings to `savings`. Totals count

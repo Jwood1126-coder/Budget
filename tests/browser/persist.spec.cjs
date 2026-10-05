@@ -295,6 +295,54 @@ module.exports = [
     },
   },
   {
+    name: 'a setup file with only some account balances changes those accounts only, and saves it; an empty one changes nothing',
+    async run(t) {
+      const { page, assert } = t;
+      const dist = decodeURIComponent(t.url.replace(/^file:\/\//, ''));
+      const html = fs.readFileSync(dist, 'utf8');
+      const open = html.indexOf('>', html.indexOf('<script id="budget-profile"')) + 1;
+      const close = html.indexOf('</script>', open);
+      const base = JSON.parse(html.slice(open, close));
+      // The same page rebuilt with a setup file whose account balances are `balances` (invented figures).
+      const page_ = (name, balances) => {
+        const prof = JSON.parse(JSON.stringify(base));
+        prof.plan.balances = Object.assign({}, prof.plan.balances, balances);
+        const file = path.join(path.dirname(dist), name);
+        fs.writeFileSync(file, html.slice(0, open) + JSON.stringify(prof).replace(/</g, '\\u003c') + html.slice(close));
+        return file;
+      };
+      const both = page_('setup-balances-both.html', { accounts: { 'joint-checking': 7012300, 'joint-savings': 455000 }, accountDates: { 'joint-checking': '2026-09-30', 'joint-savings': '2026-09-30' } });
+      const one = page_('setup-balances-one.html', { accounts: { 'joint-checking': 7055500 }, accountDates: { 'joint-checking': '2026-10-02' } });
+      const none = page_('setup-balances-none.html', { accounts: {}, accountDates: {} });
+      const saved = () => page.evaluate(k => JSON.parse(localStorage.getItem(k)).plan.balances, KEY);
+      const visit = async file => { await page.goto('file://' + file + '#/overview'); await page.waitForSelector('#page-title'); await t.settled(); };
+      try {
+        await visit(both);
+        await page.waitForFunction(() => window.HouseholdBudget.getState().plan.balances.accounts['joint-checking'] === 7012300);
+        // A file with checking only: checking follows; savings keeps its balance and date.
+        await visit(one);
+        await page.waitForFunction(() => window.HouseholdBudget.getState().plan.balances.accounts['joint-checking'] === 7055500);
+        const expect = { accounts: { 'joint-checking': 7055500, 'joint-savings': 455000 }, accountDates: { 'joint-checking': '2026-10-02', 'joint-savings': '2026-09-30' } };
+        let b = await saved();
+        assert.deepEqual([b.accounts, b.accountDates], [expect.accounts, expect.accountDates], 'saved with savings kept');
+        await page.reload();
+        await page.waitForSelector('#page-title');
+        b = await saved();
+        assert.deepEqual([b.accounts, b.accountDates], [expect.accounts, expect.accountDates], 'and still after a reload');
+        // Empty maps in the file: nothing changes.
+        await visit(none);
+        b = await saved();
+        assert.deepEqual([b.accounts, b.accountDates], [expect.accounts, expect.accountDates], 'an empty map erases nothing');
+        await page.reload();
+        await page.waitForSelector('#page-title');
+        b = await page.evaluate(() => window.HouseholdBudget.getState().plan.balances);
+        assert.deepEqual([b.accounts, b.accountDates], [expect.accounts, expect.accountDates]);
+      } finally {
+        for (const f of [both, one, none]) fs.rmSync(f, { force: true });
+      }
+    },
+  },
+  {
     name: 'damaged files loaded in the browser get the could-not-read notice and a Forget option',
     async run(t) {
       const { page, assert } = t;
