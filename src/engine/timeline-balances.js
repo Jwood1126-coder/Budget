@@ -352,31 +352,52 @@
 
   const INVEST_RULE = 'Investments are not joint cash: they are never part of the combined line. Month-end values come from the balances supplied with your data (or entered), worked across the account’s own transactions when it has an export; after the last known balance each month adds that month’s net to investments (the investing dial in plan months).';
 
-  /** The data's joint investment accounts (dataset.accounts type 'investment'). */
-  const investmentAccounts = dataset => (dataset.accounts || []).filter(a => a && a.type === 'investment' && (a.scope || 'joint') === 'joint');
+  /** Every investment account the data declares (dataset.accounts type 'investment'), joint or personal. */
+  const investmentAccounts = dataset => (dataset.accounts || []).filter(a => a && a.type === 'investment');
 
   /**
-   * The investment balance line, or null when the data has no investment account: per account,
-   * known balances as for cash accounts (its supplied or entered balances, worked across its own
-   * transactions where its export covers the days), then projected after the last known day: the
-   * main account (the one with the latest known balance) adds each month's out.invest (the
-   * month's net to investments; pro-rated in the month of that day), the others stay level. With
-   * `cfg.investReturnPct` (% a year, set by the household) every projected month also grows by
-   * that rate compounded monthly — then those points are 'illustrative', never 'projected'.
-   * `points` adds the accounts up (null in a month where any is unknown).
+   * Whose an investment account is: { owner: 'joint'|'p1'|'p2'|null, ownerName, label }. A joint
+   * account (scope 'joint', the default) is the household's; a personal one belongs to its
+   * ownerId (null when the data does not say whose). label: '<name> (joint)', '<name> (Alex)',
+   * or '<name> (personal)' when the owner is not known.
+   */
+  function investmentOwner(a, people) {
+    const name = typeof a.label === 'string' && a.label.trim() ? a.label.trim() : a.id;
+    if ((a.scope || 'joint') === 'joint') return { owner: 'joint', ownerName: null, label: name + ' (joint)' };
+    const owner = a.ownerId === 'p1' || a.ownerId === 'p2' ? a.ownerId : null;
+    const person = owner ? people.find(p => isObj(p) && p.id === owner) : null;
+    const ownerName = owner ? (person && typeof person.name === 'string' && person.name.trim() ? person.name.trim() : owner) : null;
+    return { owner, ownerName, label: name + ' (' + (ownerName || 'personal') + ')' };
+  }
+
+  /**
+   * The investment balance line, or null when the data has no investment account. Every
+   * investment account the data declares is on it, joint or personal (each labelled with whose it
+   * is: investmentOwner); none is ever joint cash. Per account, known balances as for cash
+   * accounts (its supplied or entered balances, worked across its own transactions where its
+   * export covers the days), then projected after the last known day: the main account adds each
+   * month's out.invest (the month's net to investments from the joint accounts; pro-rated in the
+   * month of that day), the others stay level. The main account is the joint one with the latest
+   * known balance; only when the data has no joint investment account at all, the latest known of
+   * the personal ones. With `cfg.investReturnPct` (% a year, set by the household) every projected
+   * month also grows by that rate compounded monthly — then those points are 'illustrative',
+   * never 'projected'. `points` adds the accounts up (null in a month where any is unknown).
    * @returns {null|{ accounts: object[], points: object[], missing: object[], returnPct: number|null,
    *   illustrative: string|null, rule: string, notes: string[] }}
    */
   function investmentsFor({ txns, dataset, plan, months, rowsByMonth, cfg }) {
     const list = investmentAccounts(dataset);
     if (!list.length) return null;
+    const people = plan && Array.isArray(plan.people) ? plan.people : [];
+    const ownerOf = new Map(list.map(a => [a.id, investmentOwner(a, people)]));
+    const anyJoint = list.some(a => ownerOf.get(a.id).owner === 'joint');
     const bal = plan && isObj(plan.balances) ? plan.balances : {};
     const entered = isObj(bal.accounts) ? bal.accounts : {};
     const dates = isObj(bal.accountDates) ? bal.accountDates : {};
     const ids = new Set(list.map(a => a.id));
     // Worked out like cash accounts (E.balances.history reads cash account types only).
     const synth = {
-      accounts: list.map(a => Object.assign({}, a, { type: 'other', coverage: Array.isArray(a.coverage) ? a.coverage : [] })),
+      accounts: list.map(a => Object.assign({}, a, { type: 'other', scope: 'joint', coverage: Array.isArray(a.coverage) ? a.coverage : [] })),
       balances: (Array.isArray(dataset.balances) ? dataset.balances : []).filter(b => b && ids.has(b.accountId)),
       transactions: [],
     };
@@ -389,9 +410,9 @@
     const rate = typeof cfg.investReturnPct === 'number' && Number.isFinite(cfg.investReturnPct) && cfg.investReturnPct !== 0 ? cfg.investReturnPct : null;
     const monthly = rate === null ? 0 : Math.pow(1 + rate / 100, 1 / 12) - 1;
     const known = h.accounts.filter(a => a.anchor && a.last);
-    const missing = h.accounts.filter(a => !a.anchor || !a.last).map(a => ({ id: a.id, name: a.label }));
-    const notes = missing.map(m => m.name + ' has no known balance: it is left out of the investments line, not counted as $0.');
-    const latest = known.slice().sort((x, y) => (x.anchor.date < y.anchor.date ? 1 : x.anchor.date > y.anchor.date ? -1 : x.id < y.id ? -1 : 1))[0] || null;
+    const missing = h.accounts.filter(a => !a.anchor || !a.last).map(a => Object.assign({ id: a.id, name: a.label }, ownerOf.get(a.id)));
+    const notes = missing.map(m => m.label + ' has no known balance: it is left out of the investments line, not counted as $0.');
+    const latest = known.filter(a => !anyJoint || ownerOf.get(a.id).owner === 'joint').sort((x, y) => (x.anchor.date < y.anchor.date ? 1 : x.anchor.date > y.anchor.date ? -1 : x.id < y.id ? -1 : 1))[0] || null;
     const accounts = known.map(a => {
       const lastDay = E.dates.dayNumber(a.last.date);
       const primary = latest && latest.id === a.id;
@@ -412,7 +433,7 @@
         }
         return { month: m, cents: running, status: running === null ? null : rate === null ? 'projected' : 'illustrative', anchor: a.anchor.date.slice(0, 7) === m };
       });
-      return { id: a.id, name: a.label, primary, anchor: Object.assign({}, a.anchor, { label: anchorLabel(a.anchor.source, a.anchor.date) }), known: { from: a.first.date, to: a.last.date }, note: a.note, points };
+      return { id: a.id, name: a.label, ...ownerOf.get(a.id), primary, anchor: Object.assign({}, a.anchor, { label: anchorLabel(a.anchor.source, a.anchor.date) }), known: { from: a.first.date, to: a.last.date }, note: a.note, points };
     });
     const points = months.map((m, i) => {
       const ps = accounts.map(a => a.points[i]);

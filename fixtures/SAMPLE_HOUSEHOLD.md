@@ -13,6 +13,10 @@ Both must stay consistent with this document.
   - `joint-checking` "Joint checking" — `type: 'checking'`
   - `joint-card` "Joint rewards card" — `type: 'credit_card'`, `paidInFull: true`
   - `joint-savings` "Joint savings" — `type: 'savings'`
+  - `joint-brokerage` "Sample brokerage" — `type: 'investment'`, **balance-only**: no export, only three
+    invented statement balances in the import config (`balances`): **$12,480.00** on 2026-03-31,
+    **$13,105.50** on 2026-06-30, **$14,020.25** on 2026-09-30. Never counted as cash; the plan draws it
+    as the investments line.
 - Personal accounts are **not** in the data (their flows are modelled in the plan only).
 
 ## Export files (fixtures/sample-raw/)
@@ -51,6 +55,7 @@ are full. Savings coverage does not affect spending completeness.
 | `SAMPLE STORE CARD PAYMENT` | $55.00 | 9th | debt_payment · store_card (sample rule) |
 | `SAMPLE BANK CARD AUTOPAY` | the card's previous statement net charges | 25th, from 2025-02 | card_payment (paired with card-side credit) |
 | `TRANSFER TO SAVINGS` | $250.00 | 2nd, from 2025-06 | transfer · savings (paired with savings-side `TRANSFER FROM CHECKING`) |
+| `TRANSFER TO SAMPLE BROKERAGE` | $200.00 | 5th, Apr–Sep 2026 | transfer · investment (sample transfer hint; the brokerage side is not exported, so it stays unpaired, as expected) |
 | `ZELLE PAYMENT TO J SMITH` | $80.00 | 2026-04-18 | spend · Uncategorized (purpose unknown, needs review) |
 
 Other checking inflows: `ONLINE TRANSFER FROM CHK 4821` **$500.00** on 2026-05-11 (an **unpaired**

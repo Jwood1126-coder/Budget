@@ -1655,8 +1655,11 @@ test('a carried-over amount stays explained until it is kept or changed: per dia
       ['balance-combined', 'Combined cash', 'balances', 'atMonthEnd'],
       ['balance-joint-checking', 'Joint checking balance', 'balances', 'atMonthEnd'],
       ['balance-joint-savings', 'Joint savings balance', 'balances', 'atMonthEnd'],
-    ], 'one savings account: no savings total');
+      ['balance-investments', 'Investments', 'balances', 'atMonthEnd'],
+    ], 'one savings account: no savings total; the balance-only brokerage account: the investments line');
     assert.deepEqual(bal[0].values, tl.balances.combined.points.map(p => p.cents));
+    assert.deepEqual(bal[3].values, tl.balances.investments.points.map(p => p.cents));
+    assert.ok(!tl.balances.combined.members.includes('joint-brokerage'), 'never joint cash');
     tl.balances.accounts.forEach((a, i) => assert.deepEqual(bal[i + 1].values, a.points.map(p => p.cents), a.id));
     const iPlan = tl.months.findIndex(m => m.month === tl.planStart);
     assert.equal(tl.balances.combined.points[tl.months.length - 1].status, 'projected');
@@ -1849,22 +1852,36 @@ test('savings goals: their monthly amounts are the savings baseline; each goal r
   const sav = r.dialsByKey.savings;
   assert.deepEqual([sav.baselineCents, sav.planCents, sav.source, sav.budgetCents, sav.averageCents, sav.basisKind], [35000, 35000, 'baseline', 35000, 30000, 'budget']);
   assert.equal(sav.basis, 'From Budget: 3 savings goals ($350.00 a month)');
-  // The savings line: 10,000.00 on 30 June, + 350 a month, − 1,000 for the trip in December.
+  // The savings line: 10,000.00 on 30 June, + 350 a month, − 1,000 for the trip in December, then
+  // + 250 a month: the trip is spent, so its 100 a month is no longer saved.
   const line = account(r, 'sav');
-  assert.deepEqual(['2026-07', '2026-09', '2026-11', '2026-12', '2027-01', '2027-04'].map(m => point(line, m).cents), [1035000, 1105000, 1175000, 1110000, 1145000, 1250000]);
+  assert.deepEqual(['2026-07', '2026-09', '2026-11', '2026-12', '2027-01', '2027-04'].map(m => point(line, m).cents), [1035000, 1105000, 1175000, 1110000, 1135000, 1210000]);
   // In list order, cumulatively: the cushion at 11,000; the trip at 11,000 + 1,000; no target, no month.
-  assert.deepEqual(r.goals.map(g => [g.id, g.cumulativeCents, g.reachMonth, g.already]), [['cushion', 1130000, '2026-10', false], ['trip', 1230000, '2027-04', false], ['fund', null, null, false]]);
-  assert.deepEqual(r.goals[1], { id: 'trip', label: 'Trip', targetCents: 100000, savedCents: 0, monthlyCents: 10000, targetMonth: '2026-12', spendAtTarget: true, cumulativeCents: 1230000, reachMonth: '2027-04', already: false });
-  assert.deepEqual(r.markers, [{ kind: 'goal', id: 'cushion', month: '2026-10', label: 'Cushion reached', cents: 1130000 }, { kind: 'goal', id: 'trip', month: '2027-04', label: 'Trip reached', cents: 100000 }]);
+  assert.deepEqual(r.goals.map(g => [g.id, g.cumulativeCents, g.reachMonth, g.already]), [['cushion', 1130000, '2026-10', false], ['trip', 1230000, '2027-05', false], ['fund', null, null, false]]);
+  assert.deepEqual(r.goals[1], { id: 'trip', label: 'Trip', targetCents: 100000, savedCents: 0, monthlyCents: 10000, targetMonth: '2026-12', spendAtTarget: true, cumulativeCents: 1230000, reachMonth: '2027-05', already: false });
+  assert.deepEqual(r.markers, [{ kind: 'goal', id: 'cushion', month: '2026-10', label: 'Cushion reached', cents: 1130000 }, { kind: 'goal', id: 'trip', month: '2027-05', label: 'Trip reached', cents: 100000 }]);
   // The trip is spent in December: out of savings, into irregular spending; checking is untouched.
   const dec = monthOf(r, '2026-12'), nov = monthOf(r, '2026-11');
   const spent = r.changes.list.find(c => c.id === 'goal-trip');
   assert.deepEqual([spent.source, spent.kind, spent.group, spent.fromSavings, spent.cents, spent.status], ['goal', 'oneTime', 'irregular', true, 100000, 'applied']);
   assert.deepEqual([dec.savings, dec.out.irregular - nov.out.irregular, dec.combinedChange - nov.combinedChange, dec.net], [35000 - 100000, 100000, -100000, nov.net]);
   assert.equal(r.changes.totalOneTimeCents, 0, 'no cost to checking');
-  // The dial set directly still wins; a goal already reached at the start says so.
+  // Its monthly saving stops after the target month: net to savings drops by it from January on.
+  const stops = r.changes.list.find(c => c.id === 'goal-trip-stops');
+  assert.deepEqual([stops.label, stops.source, stops.goalId, stops.kind, stops.group, stops.startMonth, stops.endMonth, stops.cents, stops.dial, stops.readOnly, stops.accepted, stops.status],
+    ['Trip: monthly saving stops', 'goal', 'trip', 'monthly', 'savings', '2027-01', null, -10000, 'savings', true, true, 'applied']);
+  assert.match(stops.note, /^From Budget: the goal is spent in Dec 2026, so its \$100\.00 a month stops going to savings from Jan 2027/);
+  assert.deepEqual([nov.savings, monthOf(r, '2027-01').savings, monthOf(r, '2027-06').savings], [35000, 25000, 25000]);
+  assert.deepEqual([r.changed, r.changes.derived], [false, 2], 'part of the plan as it stands');
+  // The dial set directly still wins (the stop is not applied: the amount is the household’s); a goal already reached at the start says so.
   const direct = ipRun(ds, { plan: ipPlan({ savings }), settings: { dials: { savings: 0 } } });
   assert.deepEqual([direct.dialsByKey.savings.planCents, direct.dialsByKey.savings.basisKind, direct.dialsByKey.savings.baselineCents], [0, 'direct', 35000]);
+  assert.deepEqual([monthOf(direct, '2027-01').savings, direct.changes.list.find(c => c.id === 'goal-trip-stops').status], [0, 'overridden']);
+  assert.equal(monthOf(direct, '2027-01').baseline.savings, 25000, 'the plan at baseline (the ghost) still has it');
+  // A target month before the plan start: it applies from the plan start; no monthly amount, no stop.
+  const past = ipRun(ds, { plan: ipPlan({ savings: [goal('old', { targetCents: 50000, targetMonth: '2026-01', monthlyCents: 4000, spendAtTarget: true }), goal('free', { targetMonth: '2026-12', spendAtTarget: true })] }) });
+  assert.deepEqual(past.changes.list.filter(c => c.source === 'goal').map(c => [c.id, c.startMonth]), [['goal-old', '2026-01'], ['goal-old-stops', past.planStart]]);
+  assert.equal(past.plan.savings - 4000, monthOf(past, past.planStart).savings);
   const small1 = ipRun(ds, { plan: ipPlan({ savings: [goal('a', { targetCents: 500000 })] }) });
   assert.deepEqual([small1.goals[0].reachMonth, small1.goals[0].already], ['2026-06', true]);
   // No goal with a monthly amount: the average, as before.
@@ -1945,6 +1962,43 @@ test('investments: rows on an investment account itself are not joint money; its
   assert.equal(r.dialsByKey.investing.baselineCents, 20000);
   // Worked across its own export: 2,000,000 on 30 June, so 31 May was 2,000,000 − 20,000 − 1,500.
   assert.equal(r.balances.investments.points.find(p => p.month === '2026-05').cents, 2000000 - 21500);
+});
+
+test('investments: every investment account the data declares is on the line, joint or personal, each labelled with whose it is; the dial counts joint cash flows only', () => {
+  const personal = [
+    { id: 'ira', label: 'Retirement', type: 'investment', scope: 'personal', ownerId: 'p2' },
+    { id: 'old401k', label: 'Old plan', type: 'investment', scope: 'personal', ownerId: null },
+  ];
+  const base = integrated({ investAccount: true, extraAccounts: personal });
+  const ds = H.dataset({ datasetId: 'integrated-test', accounts: base.accounts, transactions: base.transactions,
+    balances: base.balances.concat([{ accountId: 'ira', date: '2026-05-31', cents: 900000, source: 'statement' }, { accountId: 'old401k', date: '2026-06-30', cents: 300000, source: 'statement' }]) });
+  const r = ipRun(ds);
+  const line = r.balances.investments;
+  assert.deepEqual(line.accounts.map(a => [a.id, a.owner, a.ownerName, a.label, a.primary]), [
+    ['inv', 'joint', null, 'Index fund (joint)', true],
+    ['ira', 'p2', 'Ellis', 'Retirement (Ellis)', false],
+    ['old401k', null, null, 'Old plan (personal)', false],
+  ]);
+  // The joint account takes the month's investing (200); personal ones stay level (no growth set).
+  assert.deepEqual(['2026-07', '2026-08'].map(m => line.points.find(p => p.month === m).cents), [2020000 + 900000 + 300000, 2040000 + 900000 + 300000]);
+  assert.equal(r.dialsByKey.investing.baselineCents, 20000, 'the dial is the joint transfers only');
+  assert.deepEqual(r.balances.combined.members, ['chk', 'sav'], 'never cash');
+  const rows = parseCSV(T.toCSV(r));
+  assert.deepEqual(['inv', 'ira', 'old401k'].map(id => rows.find(x => x[0] === 'investment.' + id + '.owner')[1]), ['joint', 'Ellis', 'personal']);
+  // With growth, personal accounts grow too (illustrative).
+  const g = ipRun(ds, { settings: { investReturnPct: 6 } });
+  assert.ok(g.balances.investments.accounts.find(a => a.id === 'ira').points.find(p => p.month === '2026-08').cents > 900000);
+  // Only personal accounts: the latest known one takes the joint investing (there is nowhere else for it).
+  const only = H.dataset({ datasetId: 'integrated-test', accounts: base.accounts.filter(a => a.id !== 'inv'), transactions: base.transactions,
+    balances: [{ accountId: 'ira', date: '2026-05-31', cents: 900000, source: 'statement' }, { accountId: 'old401k', date: '2026-06-30', cents: 300000, source: 'statement' }] });
+  const o = ipRun(only);
+  assert.deepEqual(o.balances.investments.accounts.map(a => [a.id, a.primary]), [['ira', false], ['old401k', true]]);
+  assert.equal(o.dialsByKey.investing.baselineCents, 20000);
+  // A personal account with no known balance is named, never counted as $0.
+  const unknown = H.dataset({ datasetId: 'integrated-test', accounts: base.accounts, transactions: base.transactions, balances: base.balances });
+  const u = ipRun(unknown).balances.investments;
+  assert.deepEqual(u.missing.map(m => [m.id, m.label]), [['ira', 'Retirement (Ellis)'], ['old401k', 'Old plan (personal)']]);
+  assert.match(u.notes[0], /^Retirement \(Ellis\) has no known balance/);
 });
 
 test('dials.other saved before investments had their own dial: marked on loading, read as debt & business plus investments, split once on the plan screen', () => {

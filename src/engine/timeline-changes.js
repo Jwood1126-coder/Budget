@@ -64,19 +64,21 @@
 
   /**
    * What the planned changes did: each change with its status ('unset': no amount yet, never
-   * applied; 'notAccepted': listed only; 'applied'; 'outside': no plan month in its dates),
-   * monthsApplied and appliedCents (the ones worked out from Budget too, source 'bill'|'goal').
+   * applied; 'notAccepted': listed only; 'applied'; 'overridden': worked out from Budget for a
+   * dial's baseline while the household set that dial directly (`overridden(c)` says so), so not
+   * applied; 'outside': no plan month in its dates), monthsApplied and appliedCents (the ones
+   * worked out from Budget too, source 'bill'|'goal').
    * applied, unset and the totals are over the household's own changes (source 'plan'); derived
    * counts the others. Totals count money out of checking as positive (spending and savings +,
    * income −): totalOneTimeCents over the applied one-time changes, monthlyNowCents over the
    * monthly changes applied in the first plan month.
    */
-  function summarizeChanges(changes, monthRows, planStart) {
+  function summarizeChanges(changes, monthRows, planStart, overridden) {
     const applied = new Map();
     for (const r of monthRows) for (const a of r.changesApplied) applied.set(a.id, (applied.get(a.id) || 0) + 1);
     const list = changes.map(c => {
       const monthsApplied = applied.get(c.id) || 0;
-      const status = c.cents === null ? 'unset' : !c.accepted ? 'notAccepted' : monthsApplied ? 'applied' : 'outside';
+      const status = c.cents === null ? 'unset' : !c.accepted ? 'notAccepted' : monthsApplied ? 'applied' : overridden && overridden(c) ? 'overridden' : 'outside';
       return Object.assign({}, c, { status, monthsApplied, appliedCents: monthsApplied ? monthsApplied * c.cents : 0 });
     });
     const cost = c => (c.group === 'income' ? 0 - c.cents : c.cents);
@@ -168,23 +170,43 @@
   }
 
   /**
-   * A savings goal spent at its target (spendAtTarget, with targetCents and targetMonth): in the
-   * target month the amount leaves savings and is spent (irregular), as one read-only change
-   * { …a planned change, kind 'oneTime', group 'irregular', source: 'goal', goalId,
-   * fromSavings: true, readOnly: true, accepted: true }.
+   * Savings goals spent at their target (spendAtTarget, with a targetMonth), as read-only changes
+   * { …a planned change, source: 'goal', goalId, readOnly: true, accepted: true }:
+   *   - 'goal-<id>' (with targetCents): in the target month the amount leaves savings and is
+   *     spent (kind 'oneTime', group 'irregular', fromSavings: true);
+   *   - 'goal-<id>-stops' (with monthlyCents above $0): the goals' monthly amounts make up the
+   *     savings dial's baseline, and a goal that is spent is no longer saved for: from the month
+   *     after its target month (or planStart, when later) net to savings drops by its monthly
+   *     amount (kind 'monthly', group 'savings', cents −monthlyCents, open-ended). It carries
+   *     `dial: 'savings'`: it belongs to the dial's baseline, so while the household sets net to
+   *     savings directly it is not applied (status 'overridden'); the plan at baseline (the
+   *     ghost) always has it.
+   * @param {object} plan state.plan
+   * @param {string} [planStart] the first plan month
    */
-  function goalChanges(plan) {
+  function goalChanges(plan, planStart) {
     const out = [];
     for (const g of Array.isArray(plan.savings) ? plan.savings : []) {
-      if (!isObj(g) || typeof g.id !== 'string' || !g.id || g.spendAtTarget !== true) continue;
-      if (!isCents(g.targetCents) || g.targetCents <= 0 || !E.months.isMonth(g.targetMonth)) continue;
+      if (!isObj(g) || typeof g.id !== 'string' || !g.id || g.spendAtTarget !== true || !E.months.isMonth(g.targetMonth)) continue;
       const label = typeof g.label === 'string' && g.label.trim() ? g.label.trim() : g.id;
-      out.push({
-        id: 'goal-' + g.id, label: label + ': spent from savings', kind: 'oneTime', group: 'irregular', personId: null,
-        startMonth: g.targetMonth, endMonth: null, cents: g.targetCents, accepted: true, template: null, scenario: null,
-        source: 'goal', goalId: g.id, readOnly: true, fromSavings: true,
-        note: 'From Budget: the savings goal is spent in ' + E.months.label(g.targetMonth) + ', so ' + E.money.format(g.targetCents) + ' leaves savings and is spent that month. Edit the goal in Budget.',
-      });
+      const common = { personId: null, endMonth: null, accepted: true, template: null, scenario: null, source: 'goal', goalId: g.id, readOnly: true };
+      if (isCents(g.targetCents) && g.targetCents > 0) {
+        out.push(Object.assign({}, common, {
+          id: 'goal-' + g.id, label: label + ': spent from savings', kind: 'oneTime', group: 'irregular',
+          startMonth: g.targetMonth, cents: g.targetCents, fromSavings: true,
+          note: 'From Budget: the savings goal is spent in ' + E.months.label(g.targetMonth) + ', so ' + E.money.format(g.targetCents) + ' leaves savings and is spent that month. Edit the goal in Budget.',
+        }));
+      }
+      if (isCents(g.monthlyCents) && g.monthlyCents > 0) {
+        const after = E.months.add(g.targetMonth, 1);
+        const start = E.months.isMonth(planStart) && planStart > after ? planStart : after;
+        out.push(Object.assign({}, common, {
+          id: 'goal-' + g.id + '-stops', label: label + ': monthly saving stops', kind: 'monthly', group: 'savings',
+          startMonth: start, cents: 0 - g.monthlyCents, dial: 'savings',
+          note: 'From Budget: the goal is spent in ' + E.months.label(g.targetMonth) + ', so its ' + E.money.format(g.monthlyCents) + ' a month stops going to savings from '
+            + E.months.label(start) + ' (net to savings starts from the goals’ monthly amounts). Not applied while you set net to savings yourself. Edit the goal in Budget.',
+        }));
+      }
     }
     return out;
   }

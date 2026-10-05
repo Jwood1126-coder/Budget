@@ -407,6 +407,27 @@ test('transfers: the other side is expected when its export does not cover the d
   assert.match(u.reason, /credit card account export does not cover Jan 5, 2026/);
 });
 
+test('transfers: money to investments looks for an investment account; a balance-only one (no export) never has the other side', () => {
+  const cover = [{ start: '2026-01-01', end: '2026-09-30' }];
+  const cash = [
+    { id: 'chk', label: 'Joint checking', type: 'checking', scope: 'joint', coverage: cover },
+    { id: 'sav', label: 'Joint savings', type: 'savings', scope: 'joint', coverage: cover },
+  ];
+  const inv = tx('2026-06-05', -20000, { id: 'iv', accountId: 'chk', kind: 'transfer', subtype: 'investment' });
+  // A savings account covering the day is not where an investment transfer goes.
+  let [u] = R.queues(build([inv], cash), L.applyEdits(build([inv], cash), {}), {}).transfers.unpaired;
+  assert.deepEqual([u.expected, u.reason], [true, 'No investment account is in the data, so the other side is not expected.']);
+  const balanceOnly = cash.concat([{ id: 'brk', label: 'Brokerage', type: 'investment', scope: 'joint', coverage: [] }]);
+  const ds = build([inv], balanceOnly);
+  [u] = R.queues(ds, L.applyEdits(ds, {}), {}).transfers.unpaired;
+  assert.deepEqual([u.expected, u.reason], [true, 'The investment account has no export of its own (only its balances are in the data), so the other side is not expected.']);
+  // An investment account with an export covering the day: its side should be there.
+  const covered = cash.concat([{ id: 'brk', label: 'Brokerage', type: 'investment', scope: 'joint', coverage: cover }]);
+  const ds2 = build([inv], covered);
+  [u] = R.queues(ds2, L.applyEdits(ds2, {}), {}).transfers.unpaired;
+  assert.equal(u.expected, false);
+});
+
 test('transfers: a pairId pointing outside the data is unpaired and not expected', () => {
   const ds = build([tx('2026-06-02', -25000, { id: 'sv', accountId: 'chk', kind: 'transfer', subtype: 'savings', pairId: 'missing' })]);
   const [u] = R.queues(ds, L.applyEdits(ds, {}), {}).transfers.unpaired;

@@ -69,7 +69,7 @@ describe('raw exports', () => {
     assert.deepEqual(b, a);
   });
   test('every description comes from the fictional spec', () => {
-    const allowed = /^(SAMPLE [A-Z ]+|ONLINE TRANSFER FROM (SAM PERSONAL CHK|CHK 4821)|TRANSFER (TO SAVINGS|FROM CHECKING)|ZELLE PAYMENT TO J SMITH|MOBILE DEPOSIT|INTEREST PAID|KROGER #0412|ALDI 77|AMAZON MKTPL\*[A-Z0-9]{6}|COSTCO (WHSE|GAS) #0123|TARGET 00012345|SHELL OIL 57441|CHIPOTLE 1834|PANERA BREAD #602|NETFLIX\.COM|SPOTIFY USA|CHEWY\.COM|THE HOME DEPOT #3812|LOWES #01944|CVS\/PHARMACY #4410|BRIGHT SMILE DENTAL|ANNUAL MEMBERSHIP FEE|AUTOMATIC PAYMENT - THANK YOU)$/;
+    const allowed = /^(SAMPLE [A-Z ]+|ONLINE TRANSFER FROM (SAM PERSONAL CHK|CHK 4821)|TRANSFER (TO SAVINGS|FROM CHECKING|TO SAMPLE BROKERAGE)|ZELLE PAYMENT TO J SMITH|MOBILE DEPOSIT|INTEREST PAID|KROGER #0412|ALDI 77|AMAZON MKTPL\*[A-Z0-9]{6}|COSTCO (WHSE|GAS) #0123|TARGET 00012345|SHELL OIL 57441|CHIPOTLE 1834|PANERA BREAD #602|NETFLIX\.COM|SPOTIFY USA|CHEWY\.COM|THE HOME DEPOT #3812|LOWES #01944|CVS\/PHARMACY #4410|BRIGHT SMILE DENTAL|ANNUAL MEMBERSHIP FEE|AUTOMATIC PAYMENT - THANK YOU)$/;
     for (const t of T) assert.match(t.description, allowed);
   });
 });
@@ -84,7 +84,20 @@ describe('sample dataset', () => {
     assert.equal(report.isSynthetic, true);
     assert.equal(JSON.parse(read(FILES.config)).isSynthetic, true);
     assert.deepEqual(dataset.accounts.map(a => [a.id, a.type, a.scope, a.paidInFull]), [
-      ['joint-checking', 'checking', 'joint', false], ['joint-card', 'credit_card', 'joint', true], ['joint-savings', 'savings', 'joint', false]]);
+      ['joint-checking', 'checking', 'joint', false], ['joint-card', 'credit_card', 'joint', true], ['joint-savings', 'savings', 'joint', false],
+      ['joint-brokerage', 'investment', 'joint', false]]);
+  });
+
+  test('a balance-only brokerage account: invented statement balances, a few joint transfers into it, never cash', () => {
+    const brokerage = dataset.accounts.find(a => a.id === 'joint-brokerage');
+    assert.deepEqual(brokerage.coverage, [], 'no export');
+    assert.ok(!T.some(t => t.accountId === 'joint-brokerage'));
+    assert.deepEqual(dataset.balances.filter(b => b.accountId === 'joint-brokerage').map(b => [b.date, b.cents, b.source]),
+      [['2026-03-31', 1248000, 'statement'], ['2026-06-30', 1310550, 'statement'], ['2026-09-30', 1402025, 'statement']]);
+    const transfers = T.filter(t => t.description === 'TRANSFER TO SAMPLE BROKERAGE');
+    assert.deepEqual(transfers.map(t => [t.accountId, t.date, t.amountCents, t.kind, t.subtype]), ['04', '05', '06', '07', '08', '09']
+      .map(m => ['joint-checking', '2026-' + m + '-05', -20000, 'transfer', 'investment']));
+    assert.ok(!E.balances.cashAccounts(dataset).some(a => a.id === 'joint-brokerage'), 'never cash');
   });
 
   test('every transaction has the contract shape', () => {
@@ -343,7 +356,8 @@ describe('sample matches SAMPLE_HOUSEHOLD.md', () => {
   test('sample rules hold only fictional, sample-specific names', () => {
     const rules = JSON.parse(read(FILES.rules));
     assert.ok(rules.merchantRules.some(r => r.flags && r.flags.includes('business_candidate') && r.reason === 'Possible business purchase — confirm'));
-    assert.deepEqual(rules.transferHints, [{ match: 'ONLINE TRANSFER FROM SAM PERSONAL', subtype: 'contribution', personId: 'p2', reason: 'Transfer hint: Sam\'s contribution from a personal account outside the data' }]);
+    assert.deepEqual(rules.transferHints, [{ match: 'ONLINE TRANSFER FROM SAM PERSONAL', subtype: 'contribution', personId: 'p2', reason: 'Transfer hint: Sam\'s contribution from a personal account outside the data' },
+      { match: 'TRANSFER TO SAMPLE BROKERAGE', sign: 'out', subtype: 'investment', reason: 'Transfer hint: joint contribution to the sample brokerage account (balance-only, no export)' }]);
     for (const r of rules.merchantRules) assert.match(r.match, /SAMPLE|HOME DEPOT|LOWE/);
   });
 });

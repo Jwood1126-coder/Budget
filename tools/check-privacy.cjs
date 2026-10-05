@@ -93,9 +93,11 @@ const PRIVATE_MARKERS = [
   { re: /"kind"\s*:\s*"private"/, why: 'a private build of the app' },
   { re: /"profilePrivate"\s*:\s*true/, why: 'a build that embeds a private household profile' },
   { re: /<!-- household-budget: PRIVATE import report/, why: 'a private import report' },
+  { re: /<!-- household-budget: PRIVATE plan report/, why: 'a private plan report' },
+  { re: /"privateReport"\s*:\s*true/, why: 'a private plan report (JSON)' },
 ];
 // The files that define these markers (they hold the marker text as code, not data).
-const MARKER_DEFINITIONS = new Set(['tools/check-privacy.cjs', 'tools/import.cjs']);
+const MARKER_DEFINITIONS = new Set(['tools/check-privacy.cjs', 'tools/import.cjs', 'tools/plan-report.cjs']);
 
 function scan({ staged = false, root = REPO_ROOT } = {}) {
   const ROOT = root;

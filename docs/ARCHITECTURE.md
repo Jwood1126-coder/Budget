@@ -12,7 +12,7 @@ fictional households ("Alex" and "Sam", "Partner A"/"Partner B") and invented am
 `--staged`, which scans the staged content the commit would publish). Besides the denylist it
 flags the markers private outputs carry: datasets and profiles whose `isSynthetic` is false,
 exported workbooks, private builds (build info `kind` private, or `profilePrivate` true) and the
-import report's private comment (the patterns are in `tools/check-privacy.cjs`). `tools/import.cjs` and `tools/build.cjs` refuse private outputs inside the
+import report's and plan report's private markers (the patterns are in `tools/check-privacy.cjs`). `tools/import.cjs`, `tools/build.cjs` and `tools/plan-report.cjs` refuse private outputs inside the
 repository outside `private/` (and `dist/` for builds).
 
 **Conventions used everywhere:** money is integer cents and `null` means *unknown*, never $0;
@@ -84,6 +84,8 @@ tools/
   import.cjs             CLI importer: private/raw/*.csv -> private/budget-data.json + report
   build-sample.cjs       regenerate fixtures/sample-data.json from fixtures/sample-raw/*.csv
   check-privacy.cjs      scan tracked/staged files for private patterns before committing
+  plan-report.cjs        the plan as the household's assistant reads it: private/plan-report.md + .json
+                         (docs/SETUP.md; --sample prints the sample's)
 fixtures/                synthetic sample (committed): raw CSVs, rules, profile, normalized data
 private/                 (ignored) real exports, rules, household profile, builds
 tests/unit/*.test.cjs    node:test suites for the engine and tools
@@ -91,7 +93,21 @@ tests/helpers/ledger.cjs shared synthetic fixture builders for the unit tests
 tests/browser/*.spec.cjs Playwright end-to-end checks against the sample build in dist/test/index.html
 tests/browser/run.cjs    the browser test runner; helpers.cjs: helpers the specs share
 eslint.config.js         `npm run lint`: no-undef and no-unused-vars only (ESLint 9 through npx)
+docs/SETUP.md            the setup file (household profile) for the household's assistant, and the tune loop
 ```
+
+`tools/plan-report.cjs` (`npm run report`, `npm run report:sample`): loads the engine in Node, the
+dataset and profile (`private/` by default; `--sample` the fixtures; `--data`/`--profile` other
+files), optionally a workbook the household exported (`--workbook`, through
+`setupSync.importWorkbook`, so their in-browser edits count; without one the budget is
+`state.defaults` + `setupSync.apply`), builds `timeline.build` (horizon at least 12 months, more
+for `--months N`) and one `build({ compare })` per what-if, and writes `private/plan-report.md` and
+`.json` (`buildReport` → JSON, `toMarkdown`): headline, this month's plan (`tl.summary`), To
+check, dials, month by month (money; balances with status), planned changes (derived ones too, with
+status), what-ifs with their compare result, goals, investments, bills, setup-sync notes. A private
+report carries a private-report comment (Markdown) and a true `privateReport` field (JSON), both
+flagged by the privacy check (`tools/check-privacy.cjs` holds the patterns), and is refused anywhere in the
+repository but `private/` (`checkReportOut`, symlinks resolved); `--sample` prints to stdout unless `--out` is given.
 
 `tools/import.cjs` refuses to write inside `fixtures/` unless `--sample` is given, and `--sample`
 refuses unless the config is `"isSynthetic": true` **and** every input file lives inside
@@ -679,7 +695,8 @@ difference to joint ((new − old joint per paycheck) × paychecks a year ÷ 12)
 the frequency are known, else no amount, bill_change and target_change → monthly with no amount
 and a note saying what they set; savings-goal events and events with no (start) month are not
 copied and are named in the note; up to the planned-change limit. The scenarios stay as they are.
-`scenariosCopied` is true by default, so new budgets never copy). Upgrades that need the data run
+`scenariosCopied` is true by default, so the upgrade never runs on a new budget: `state.defaults` makes
+the same copy itself when it creates one, so new and saved budgets hold the same what-ifs). Upgrades that need the data run
 on the plan screen instead, under the same rules: `timeline.pendingUpgrade(tl)` names them
 (`migrateRows`, `migrateDials`, `splitOther`).
 
@@ -887,7 +904,9 @@ rounded up to the limit.
   - `transfers.paired`: `{ ids, txns, kind, cents, amountsMatch, daysApart }`, outflow first.
     `transfers.unpaired`: rows plus `expected` and `reason`. Expected (nothing to fix) when the row
     is a confirmed reimbursement, a `contribution`, or when no counterpart account of the right type
-    exists or none covers the date; not expected when its `pairId` points outside the data or a
+    exists (for an `investment` transfer from cash: an investment account; to cash from one: a
+    checking, savings or other account), none covers the date, or every one has no export (a
+    balance-only account: "…has no export of its own (only its balances are in the data)…"); not expected when its `pairId` points outside the data or a
     covering account has no match.
   - `business` items carry `status` (default `'pending'`).
   - `spikes` leaves out annual bills; they are listed in `annualSpikes` (`annual: true`) and not counted.
@@ -1475,12 +1494,18 @@ naming what is missing, when a public name has not been added), the parts in bet
     valid `plan.changes` entry (`source: 'plan'`, `readOnly: false`, `scenario`), then the changes
     worked out from Budget (`source: 'bill'` with `billId`, or `'goal'` with `goalId`; `readOnly:
     true`, `accepted: true`: edited in Budget, never by `setChange`/`acceptChanges`), each with
-    `status: 'unset'|'notAccepted'|'applied'|'outside'`, `monthsApplied`, `appliedCents`;
+    `status: 'unset'|'notAccepted'|'applied'|'overridden'|'outside'`, `monthsApplied`, `appliedCents`;
     `applied`: how many of the household's own applied; `derived`: how many are worked out from
     Budget; `unset`: ids with no amount (never applied as $0). A savings goal spent at its target
     (`spendAtTarget`, `targetCents`, `targetMonth`): change `'goal-<id>'`, one-time, irregular, with
     `fromSavings: true`: in that month the amount is spent (`out.irregular`, `out.bank`,
-    `out.total`) and leaves savings (`savings` − amount), so checking is unchanged.
+    `out.total`) and leaves savings (`savings` − amount), so checking is unchanged. The same goal with
+    a `monthlyCents` above $0 also stops being saved for: change `'goal-<id>-stops'` (label
+    "<label>: monthly saving stops"), monthly, group `savings`, −`monthlyCents` from the month after
+    `targetMonth` (or `planStart` when later), open-ended, with `dial: 'savings'` — it belongs to the
+    savings dial's baseline (the goals' monthly amounts), so while net to savings is set directly it is
+    not applied (status `'overridden'`); the plan at baseline (the ghost) always has it. (A goal spent
+    at its target with no `targetCents` gets only the stop.)
     Accepted changes with an amount add to plan months from `startMonth` (one-time: that month only;
     monthly: through `endMonth` when set): income to `in[personId]` (`in.other` without a person),
     spending groups to that group, `out.bank` and `out.total`, savings to `savings`. Totals count
@@ -1544,9 +1569,15 @@ naming what is missing, when a public name has not been added), the parts in bet
     (there is no baseline yet to scale it by); adjust it from here."
   - `balances`: `{ mode: 'accounts'|'simple'|'none', simple, label, rule, accounts, missing,
     combined, policy, runsOut, lowest, notes, assumed, illustrative, investments }`.
-    `investments` (`investmentsFor`): null without a joint investment account, else `{ accounts:
-    [{ id, name, primary, anchor, known, note, points }], points, missing, returnPct, illustrative,
-    rule, notes }` — never part of `combined` or `accounts`. Known balances as for cash accounts
+    `investments` (`investmentsFor`): null without an investment account, else `{ accounts:
+    [{ id, name, owner, ownerName, label, primary, anchor, known, note, points }], points, missing,
+    returnPct, illustrative, rule, notes }` — never part of `combined` or `accounts`. Every account the
+    data types `investment` is on it, joint or personal: `owner` 'joint' (scope joint), else the
+    account's `ownerId` ('p1'|'p2', null when the data does not say), `ownerName` the person's name,
+    `label` "<name> (joint)" / "<name> (Alex)" / "<name> (personal)" (`missing` entries carry the
+    same three, and the notes use the label). The investing dial still counts only joint cash
+    flows; the main account that takes them is the joint one with the latest known balance (only
+    when the data has no joint investment account, the latest known personal one). Known balances as for cash accounts
     (supplied with the data or entered, worked across the account's own transactions where its
     export covers the days; a balance-only account is known on its balance dates), then after the
     last known day each month adds `out.invest` to the main account (the latest known balance;
@@ -1599,7 +1630,7 @@ naming what is missing, when a public name has not been added), the parts in bet
   horizon, cover from savings, `invest_return_pct`, `dial.<key>.label|baseline|plan|source|card|bank`, `group.<key>`,
   `row.<id>.label|included|amount`, `one_time.<txnId>.label|date|amount|state` ('in the irregular
   allowance' | 'left out by you' | 'counted as regular spending'), `balance.<accountId>.name|date|
-  amount|source` (simple mode: `balance.joint_cash.*`), `investment.<accountId>.name|date|amount|
+  amount|source` (simple mode: `balance.joint_cash.*`), `investment.<accountId>.name|owner|date|amount|
   source`, `change.<id>.label|kind|group|person|start|end|amount|accepted|status|source|scenario`
   (the changes worked out from Budget too), `goal.<id>.label|target|reach`), a blank line, then
   block "Months": `month,status,in_<personId>…,
@@ -1671,6 +1702,12 @@ naming what is missing, when a public name has not been added), the parts in bet
   `SAVED_FORECAST_NAME`, `ENERGY_TARGET`, `OTHER_EXPENSES_TARGET`.
 - `defaults(profile, dataset, { now }?) -> State` — the profile's plan, the baseline followed by
   the profile's scenarios, `compareIds` = baseline + first other scenario; `references` start empty.
+  The scenarios' events are also copied into `plan.changes` as not-accepted what-ifs, exactly as
+  the `plan.changes.scenarios` upgrade copies them for a saved budget (ids `'sc-' + eventId`, an id
+  the profile's own `plan.changes` already has is left alone; no note). `sanitize` checks a saved
+  budget against the same defaults without that copy, so a saved budget never gains them as a
+  fallback. Setup sync manages only the profile's own `plan.changes` (its `defaults` call has no
+  scenarios), so the copies are the budget's own items there: never updated or removed by it.
 - `sanitize(raw, profile, dataset, opts?) -> { state, notes }` — keeps every valid field and resets
   or drops invalid ones with a note naming the path. Also accepts JSON text, unwraps a workbook
   envelope, and passes earlier-version shapes and `{ copyId, state }` wrappers to `migrate`.

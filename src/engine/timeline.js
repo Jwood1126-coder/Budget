@@ -59,7 +59,8 @@
  * joint bills with a known amount that the baseline months do not hold are added from their start,
  * and ones the history holds that end are taken out after their end month (read-only changes,
  * source 'bill'; "seen" is defined at billChanges); a savings goal spent at its target leaves
- * savings that month (source 'goal'); the goals' monthly amounts are the savings dial's baseline
+ * savings that month and its monthly amount stops after it (source 'goal'; not while net to
+ * savings is set directly); the goals' monthly amounts are the savings dial's baseline
  * and the projected savings balance gives each goal a reach month (tl.goals, cumulative in list
  * order). These are the plan as it stands: in the ghost too, never a "change".
  *
@@ -299,7 +300,11 @@
     // Worked out from Budget: bills that start or end, savings goals spent at their target. Part
     // of the plan as it stands (the ghost has them too), read-only on the screen.
     const fromBills = billChanges({ plan, base, byId, planStart, targets });
-    const derived = fromBills.changes.concat(goalChanges(plan));
+    const derived = fromBills.changes.concat(goalChanges(plan, planStart));
+    // A change worked out for a dial's baseline (a spent goal's monthly saving that stops) is not
+    // applied while the household set that dial directly; the plan at baseline (the ghost) has it.
+    const setDirectly = new Set(dials.filter(d => d.source === 'direct').map(d => d.key));
+    const overridden = ch => !!ch.dial && setDirectly.has(ch.dial);
 
     // Months: from the first month with data, or earlier when a balance is known before it.
     const anc = anchors(plan, dataset, txns);
@@ -344,13 +349,13 @@
         oneOffs: [], oneOffCents: 0, actualSoFar, changesApplied: [], baseline: null,
       };
       for (const ch of changes.concat(derived)) {
-        if (!ch.accepted || ch.cents === null || !changeActiveIn(ch, m)) continue;
+        if (!ch.accepted || ch.cents === null || !changeActiveIn(ch, m) || overridden(ch)) continue;
         applyChange(row, ch, people);
         row.changesApplied.push({ id: ch.id, label: ch.label, group: ch.group, cents: ch.cents, source: ch.source });
       }
       return row;
     });
-    const changeSummary = summarizeChanges(changes.concat(derived), monthRows, planStart);
+    const changeSummary = summarizeChanges(changes.concat(derived), monthRows, planStart, overridden);
     const changedBy = { dials: dials.some(d => d.source !== 'baseline'), changes: changeSummary.applied > 0 };
     const changed = changedBy.dials || changedBy.changes;
     // The plan with no changes (every dial at its baseline, no planned changes; what Budget gives,

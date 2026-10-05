@@ -154,18 +154,19 @@ module.exports = [
       assert.equal(await page.getAttribute('#plan-chart', 'data-mode'), 'balance');
       assert.deepEqual(await page.$$eval('input[name="plan-mode"]', xs => xs.map(x => x.value)), ['balance', 'flows', 'trends']);
       const chips = await page.$$eval('#plan-chart .cc-chip', bs => bs.map(b => [b.textContent.trim(), b.getAttribute('aria-pressed')]));
-      assert.deepEqual(chips, [['Combined cash', 'true'], ['Joint checking', 'false'], ['Joint savings', 'true']], 'no baseline line while nothing changed');
+      assert.deepEqual(chips, [['Combined cash', 'true'], ['Joint checking', 'false'], ['Joint savings', 'true'], ['Investments', 'true']], 'no baseline line while nothing changed; the brokerage account has its investments line');
       assert.equal(await page.$$eval('#plan-chart .cc-ghost-line', x => x.length), 0);
       // The account lines (off by default, one tap away) are illustrative: the caption says so once.
       assert.match(await page.textContent('#plan-chart .cc-caption'), /^Combined cash = Joint checking \+ Joint savings\. Solid: your data through Sep 2026\. Dashed: this plan from Oct 2026\. Account lines are illustrative: card spending is taken from checking in the month it happens, not when the card is paid; the combined line is not affected\.$/);
       // Dials: money in by person, money out by how adjustable it is, in this order.
-      assert.deepEqual(await page.$$eval('#plan-dials .dial', ds => ds.map(d => d.dataset.dial)), ['p1', 'p2', 'inOther', 'essentials', 'flexible', 'irregular', 'savings', 'other']);
+      assert.deepEqual(await page.$$eval('#plan-dials .dial', ds => ds.map(d => d.dataset.dial)), ['p1', 'p2', 'inOther', 'essentials', 'flexible', 'irregular', 'savings', 'investing', 'other']);
       assert.equal((await page.textContent('#plan-dial-essentials-sub')).trim(), 'The part that doesn’t move much');
       assert.equal((await page.textContent('#plan-dial-flexible-sub')).trim(), 'Where the budget can realistically move');
       assert.equal((await page.textContent('#plan-dial-irregular-sub')).trim(), 'One-time things that still happen every year, spread per month');
       assert.ok(!(await page.$('#plan-dial-card, #plan-dial-bank')), 'card and bank are no longer dials');
       assert.equal(await page.$eval('#plan-changes', d => d.open), false, 'planned changes start closed');
-      assert.equal((await page.textContent('#plan-changes > summary')).trim(), 'Planned changes');
+      // The sample profile’s two scenarios arrive as what-ifs: listed, not accepted.
+      assert.equal((await page.textContent('#plan-changes > summary')).trim(), 'Planned changes · 0 of 8 applied · 7 without an amount');
       assert.ok(await noHorizontalScroll(page));
       await t.shot('plan');
     },
@@ -179,7 +180,8 @@ module.exports = [
         const exp = await timeline(page);
         const v = k => dialOf(exp, k).planCents;
         const inn = v('p1') + v('p2') + v('inOther');
-        const out = v('essentials') + v('flexible') + v('irregular') + v('other');
+        // The sample invests (a balance-only brokerage account): investing is a dial of its own.
+        const out = v('essentials') + v('flexible') + v('irregular') + v('investing') + v('other');
         assert.equal(exp.plan.combinedChange, inn - out, 'the engine agrees: in − out');
         assert.equal(await headline(page), `Your money, all accounts: ${signedAmt(inn - out)} a month on this plan`);
         const sav = v('savings');
@@ -187,7 +189,7 @@ module.exports = [
         assert.equal(exp.plan.net, inn - out - sav);
         assert.equal(checking, `Checking: ${signedAmt(exp.plan.net)}` + (sav > 0 ? ` after ${amt(sav)} moved to savings` : sav < 0 ? ` after ${amt(-sav)} moved from savings` : ', with nothing moved to or from savings'));
         const addup = (await page.textContent('#plan-addup')).trim();
-        assert.equal(addup, `${amt(inn)} in − ${amt(v('essentials'))} essentials − ${amt(v('flexible'))} flexible − ${amt(v('irregular'))} irregular − ${amt(v('other'))} other = ${signedAmt(inn - out)}`);
+        assert.equal(addup, `${amt(inn)} in − ${amt(v('essentials'))} essentials − ${amt(v('flexible'))} flexible − ${amt(v('irregular'))} irregular − ${amt(v('investing'))} investing − ${amt(v('other'))} other = ${signedAmt(inn - out)}`);
         return exp;
       };
       await check();
@@ -1201,7 +1203,7 @@ module.exports = [
       assert.equal((await state(page)).ui.plan.hidden, null, 'nothing chosen yet');
       const pressed = () => page.$$eval('#plan-chart .cc-chip', bs => bs.map(b => [b.dataset.ccKey, b.getAttribute('aria-pressed')]));
       const drawn = key => page.isVisible(`#plan-chart g.cc-series[data-cc-series="${key}"] path.line`);
-      assert.deepEqual(await pressed(), [['combined', 'true'], ['acct-joint-checking', 'false'], ['acct-joint-savings', 'true']]);
+      assert.deepEqual(await pressed(), [['combined', 'true'], ['acct-joint-checking', 'false'], ['acct-joint-savings', 'true'], ['balance-investments', 'true']]);
       assert.ok(await drawn('combined'));
       assert.ok(await drawn('acct-joint-savings'), 'the savings line is drawn');
       assert.ok(!(await drawn('acct-joint-checking')), 'the checking line is not');
@@ -1212,7 +1214,7 @@ module.exports = [
       assert.ok(!(await drawn('acct-joint-savings')));
       await page.reload();
       await page.waitForSelector('#plan-chart[data-mode="balance"]');
-      assert.deepEqual(await pressed(), [['combined', 'true'], ['acct-joint-checking', 'false'], ['acct-joint-savings', 'false']]);
+      assert.deepEqual(await pressed(), [['combined', 'true'], ['acct-joint-checking', 'false'], ['acct-joint-savings', 'false'], ['balance-investments', 'true']]);
       assert.ok(!(await drawn('acct-joint-savings')), 'still off after a reload');
       assert.ok(await noHorizontalScroll(page));
     },
@@ -1222,6 +1224,10 @@ module.exports = [
     async run(t) {
       const { page, assert } = t;
       await t.open('#/overview');
+      // The sample's what-ifs (copied from its profile's scenarios) are set aside: this test starts
+      // from a plan with no planned changes of its own.
+      await page.evaluate(() => { const s = window.HouseholdBudget.getState(); s.plan.changes = []; window.HouseholdBudget.setState(s); });
+      await t.settled();
       // Two years ahead, so every item of the template falls inside the plan.
       await page.click('label[for^="plan-horizon-24"]');
       await page.waitForFunction(() => window.HouseholdBudget.getState().ui.plan.horizon === 24);
@@ -1332,8 +1338,10 @@ module.exports = [
       assert.ok(at > 2 && lines[at - 1] === '', 'a blank line, then the months');
       const head = lines[at + 1].split(',');
       assert.deepEqual(head.slice(0, 17), ['month', 'status', 'in_p1', 'in_p2', 'in_other', 'in_total', 'essentials', 'flexible', 'irregular', 'other_out', 'out_total', 'to_savings', 'from_savings', 'combined_change', 'net_checking', 'combined_balance', 'combined_status']);
-      // Net to investments comes last (the sample has no investment account, so no investments line).
-      assert.deepEqual(head.slice(17), ['joint-checking_balance', 'joint-checking_status', 'joint-savings_balance', 'joint-savings_status', 'investing']);
+      // Net to investments comes last, then the investments line (the sample’s balance-only brokerage account).
+      assert.deepEqual(head.slice(17), ['joint-checking_balance', 'joint-checking_status', 'joint-savings_balance', 'joint-savings_status', 'investing', 'investments_balance', 'investments_status']);
+      assert.ok(lines.includes('investment.joint-brokerage.owner,joint'));
+      assert.ok(lines.includes('investment.joint-brokerage.source,statement'));
       const body = lines.slice(at + 2).filter(Boolean);
       assert.equal(body.length, shown.length, 'one row per month shown');
       const monthsLabel = await page.evaluate(list => list.map(m => window.HouseholdBudget.engine.months.label(m)), body.map(l => l.split(',')[0]));

@@ -529,6 +529,8 @@
 
   function coverageText(a) {
     const ranges = a.coverage || [];
+    // An investment account with no export is balance-only: its statement balances are all the data knows of it.
+    if (!ranges.length && a.type === 'investment') return 'Balances only (no export)<small>Its statement balances draw the investments line; never counted as cash.</small>';
     if (!ranges.length) return '<span class="tone-warn">No export covers it</span><small>Its months count as incomplete until one does.</small>';
     return ranges.map(r => rangeHtml(r.start, r.end)).join('<br>') + (ranges.length > 1 ? `<small>Gap between exports: those days count as incomplete.</small>` : '');
   }

@@ -15,6 +15,7 @@
     {"match":"SAMPLE ENDODONTICS","category":"Dental","merchant":"Sample Endodontics","reason":"Household rule: endodontist (dental specialist)"}
   ],
   "transferHints": [
-    {"match":"ONLINE TRANSFER FROM SAM PERSONAL","subtype":"contribution","personId":"p2","reason":"Transfer hint: Sam's contribution from a personal account outside the data"}
+    {"match":"ONLINE TRANSFER FROM SAM PERSONAL","subtype":"contribution","personId":"p2","reason":"Transfer hint: Sam's contribution from a personal account outside the data"},
+    {"match":"TRANSFER TO SAMPLE BROKERAGE","sign":"out","subtype":"investment","reason":"Transfer hint: joint contribution to the sample brokerage account (balance-only, no export)"}
   ]
 }

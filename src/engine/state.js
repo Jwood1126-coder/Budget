@@ -1202,15 +1202,33 @@
    * @returns {object} State
    */
   function defaults(profile, dataset, opts) {
+    return startingState(profile, dataset, opts, true);
+  }
+
+  /**
+   * defaults(), and the fallbacks a saved budget is checked against (sanitize): the same State,
+   * except that `copyScenarios` false leaves the profile's scenarios out of plan.changes, so a
+   * saved budget never gains them as a fallback (its own copy is the V5_UPGRADES entry's).
+   * With `copyScenarios`, a new budget copies the profile's scenarios' events into plan.changes
+   * as not-accepted what-ifs exactly as the plan.changes.scenarios upgrade does for a saved one
+   * (copyScenarioChanges: ids 'sc-' + event id, scenario = its name; an id the profile's own
+   * plan.changes already has is left alone), so new and existing budgets hold the same what-ifs.
+   * The copy leaves no note: nothing the household saved changed.
+   */
+  function startingState(profile, dataset, opts, copyScenarios) {
     const now = stampOf(opts && opts.now, EPOCH);
     const prof = isObj(profile) ? profile : {};
     const people = profilePeople(prof);
     const quiet = makeCtx({ dropUnknown: true }); // problems in the profile are not the household's saved data
-    const plan = cleanPlan(isObj(prof.plan) ? Object.assign({}, prof.plan, { people }) : undefined, emptyPlan(people), quiet, 'profile.plan');
+    let plan = cleanPlan(isObj(prof.plan) ? Object.assign({}, prof.plan, { people }) : undefined, emptyPlan(people), quiet, 'profile.plan');
     const meta = { createdAt: now, updatedAt: now, migratedFrom: null, migrationNotes: [], legacySnapshot: null };
     const baseline = makeBaseline(plan, meta);
     const templates = Array.isArray(prof.scenarios) ? prof.scenarios : [];
     const scenarios = cleanScenarios([baseline].concat(templates), [baseline], plan, meta, quiet);
+    if (copyScenarios && scenarios.some(s => s.id !== BASELINE_ID && s.events.length)) {
+      const copied = copyScenarioChanges({ plan, scenarios }).raw.plan;
+      if (copied.changes !== plan.changes) plan = cleanPlan(copied, plan, quiet, 'profile.plan');
+    }
     return {
       version: VERSION,
       datasetId: datasetIdOf(dataset) || NO_DATA_ID,
@@ -1561,11 +1579,13 @@
     }
     if (isWorkbook(data) && isObj(data.state)) data = data.state;
     if (isLegacyWrapper(data) || legacyVersionOf(data) !== null) return migrate(data, profile, dataset, opts);
-    const base = defaults(profile, dataset, opts);
     if (!isObj(data)) {
       ctx.note('The saved budget was empty or not readable (' + preview(data) + '); started from the household profile.');
-      return { state: base, notes: ctx.notes };
+      return { state: defaults(profile, dataset, opts), notes: ctx.notes };
     }
+    // The fallbacks for what the saved budget lacks: the profile's, without its scenarios copied
+    // into plan.changes (a saved budget copies its own scenarios once, V5_UPGRADES).
+    const base = startingState(profile, dataset, opts, false);
     if (data.version !== VERSION) {
       if (typeof data.version === 'number' && data.version > VERSION) ctx.note('This budget was saved by a newer version of the app (version ' + data.version + '); settings this version does not know were dropped.');
       else ctx.note('version: ' + preview(data.version) + ' is not a known saved-budget version; read as version ' + VERSION + '.');
@@ -2340,7 +2360,7 @@
 
       // Final pass through the v5 validator guarantees a valid State; it should find nothing.
       const check2 = makeCtx();
-      const clean = sanitizeState(state, defaults(profile, dataset, opts), check2, datasetIdOf(dataset));
+      const clean = sanitizeState(state, startingState(profile, dataset, opts, false), check2, datasetIdOf(dataset));
       check2.notes.forEach(n => ctx.note('Adjusted after carrying over: ' + n));
       clean.meta.migrationNotes = ctx.notes.slice(0, LIMITS.migrationNotes).map(n => n.slice(0, LIMITS.note));
       return { state: clean, notes: ctx.notes };

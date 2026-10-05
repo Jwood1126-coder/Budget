@@ -16,7 +16,7 @@
   const CHANGE_GROUP_LABEL = { income: 'Income', essentials: 'Essentials', flexible: 'Flexible', irregular: 'Irregular', savings: 'Savings' };
   /** Groups only the changes worked out from Budget use (read-only rows). */
   const DERIVED_GROUP_LABEL = { debt: 'Debt & business' };
-  const STATUS_BADGE = { applied: ['Applied', 'good'], notAccepted: ['Not accepted', 'neutral'], unset: ['Amount not set', 'warn'], outside: ['Outside horizon', 'neutral'] };
+  const STATUS_BADGE = { applied: ['Applied', 'good'], notAccepted: ['Not accepted', 'neutral'], unset: ['Amount not set', 'warn'], outside: ['Outside horizon', 'neutral'], overridden: ['Savings set by you', 'neutral'] };
 
   // ------------------------------------------------------------------ 4. planned changes
   /** Cost of a change to checking: spending and savings count up, income counts down. */

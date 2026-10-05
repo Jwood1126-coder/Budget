@@ -25,6 +25,8 @@ function deepFreeze(o) {
 }
 
 const base = () => S.defaults(profile(), DS);
+/** A budget saved before new budgets copied the profile's scenarios into plan.changes (none of its 'sc-' changes yet). */
+const savedBefore = () => { const s = base(); s.plan.changes = s.plan.changes.filter(c => !/^sc-/.test(c.id)); return s; };
 const byId = (list, id) => list.find(x => x.id === id);
 const hasNote = (notes, re) => notes.some(n => re.test(n));
 const isValidationError = re => err => err instanceof E.ValidationError && (!re || re.test(err.message));
@@ -628,7 +630,7 @@ test('sanitize: is idempotent on messy input', () => {
 });
 
 test('sanitize: references, checklist, ui and meta are validated', () => {
-  const raw = JSON.parse(JSON.stringify(base()));
+  const raw = JSON.parse(JSON.stringify(savedBefore()));
   raw.references = [
     { id: 'q3', label: 'Earlier quarter', start: '2026-07-01', end: '2026-09-30', spendingCents: 1234567, source: 'Earlier app' },
     { id: 'bad', label: 'Backwards', start: '2026-09-30', end: '2026-07-01', spendingCents: 1 },
@@ -2234,7 +2236,7 @@ test('plan.changes: absent in older budgets becomes [] quietly; entries are vali
   assert.equal(m.state.plan.changes.length, S.LIMITS.planChanges);
   assert.ok(hasNote(m.notes, /plan\.changes: only 100 entries can be kept; 3 more were dropped/));
   // Through paths and list operations, strictly.
-  let st = S.addItem(base(), 'changes', { label: 'Crib', kind: 'oneTime', group: 'irregular', startMonth: '2027-07', cents: 35000 });
+  let st = S.addItem(savedBefore(), 'changes', { label: 'Crib', kind: 'oneTime', group: 'irregular', startMonth: '2027-07', cents: 35000 });
   const id = st.plan.changes[0].id;
   st = S.setPath(st, 'plan.changes[id=' + id + '].accepted', true);
   assert.equal(st.plan.changes[0].accepted, true);
@@ -2394,7 +2396,7 @@ test('ui.plan paths: every field accepts and refuses the same values through set
 
 /** A saved budget from before both upgrades: the earlier Home settings, and a card dial in ui.plan. */
 function beforeUpgrades() {
-  const raw = JSON.parse(JSON.stringify(base()));
+  const raw = JSON.parse(JSON.stringify(savedBefore()));
   raw.ui.home = { p1InCents: 300000, savedCents: 2500, cardCents: 88000, bankCents: null, outCents: 450000, baselineMonths: 6, horizon: 24 };
   raw.ui.plan.dials = { bank: -1500 };
   // Saved before the integrated plan: no markers yet (the profile's scenarios have events to copy).
@@ -2528,7 +2530,7 @@ test('forward compatibility: a key that cannot be kept ("__proto__") is dropped 
 
 /** A budget saved before the integrated plan, with invented scenarios of every event type. */
 function beforeWhatIfs() {
-  const raw = JSON.parse(JSON.stringify(base()));
+  const raw = JSON.parse(JSON.stringify(savedBefore()));
   delete raw.ui.plan.scenariosCopied;
   raw.plan.incomes = [{ id: 'pay-b', label: 'Partner B pay', personId: 'p2', kind: 'paycheck', netPerPaycheckCents: 210000, jointPerPaycheckCents: 150000, frequency: 'biweekly', frequencyStatus: 'confirmed', status: 'confirmed' }];
   raw.plan.changes = [{ id: 'mine', label: 'Mine', kind: 'monthly', group: 'flexible', personId: null, startMonth: '2026-11', endMonth: null, cents: 100, accepted: true, template: null, note: '' }];
@@ -2595,9 +2597,38 @@ test('scenarios to what-ifs: every dated event is copied once into plan.changes,
   pre.plan.changes.push({ id: 'sc-rent', label: 'Rent (mine)', kind: 'monthly', group: 'essentials', startMonth: '2027-04', cents: 5 });
   const kept = S.sanitize(pre, profile(), DS).state.plan.changes;
   assert.deepEqual([kept.filter(c => c.id === 'sc-rent').length, byId(kept, 'sc-rent').label], [1, 'Rent (mine)']);
-  // New budgets are marked already: their scenarios are not copied.
+  // New budgets copy the profile's scenarios when they are made (below) and are marked done.
   assert.equal(base().ui.plan.scenariosCopied, true);
-  assert.deepEqual(S.sanitize(JSON.parse(JSON.stringify(base())), profile(), DS).state.plan.changes, []);
+});
+
+test('scenarios to what-ifs: a new budget copies the profile’s scenarios into plan.changes the same way; no duplicates, no churn', () => {
+  const fresh = base();
+  const ids = ['sc-baby-supplies', 'sc-birth-costs', 'sc-p2-leave', 'sc-p2-leave-pay', 'sc-childcare', 'sc-attic-insulation', 'sc-window-replacement', 'sc-electrical-panel'];
+  assert.deepEqual(fresh.plan.changes.map(c => c.id), ids);
+  assert.ok(fresh.plan.changes.every(c => c.accepted === false && c.scenario && c.note.startsWith('Copied from the Forecast scenario')));
+  assert.deepEqual(fresh.meta.migrationNotes, [], 'nothing saved changed, so no note');
+  // Exactly what the upgrade gives a budget saved before (same ids, fields and notes).
+  const raw = savedBefore();
+  delete raw.ui.plan.scenariosCopied;
+  assert.deepEqual(S.sanitize(raw, profile(), DS).state.plan.changes, fresh.plan.changes);
+  // Loading it again changes nothing, and the scenarios stay as they are.
+  const again = S.sanitize(JSON.parse(JSON.stringify(fresh)), profile(), DS);
+  assert.deepEqual([again.state, again.notes], [fresh, []]);
+  assert.equal(fresh.scenarios.length, 3);
+  // A profile whose own plan.changes already holds an id is not copied over (no duplicates).
+  const p = profile();
+  p.plan.changes = [{ id: 'sc-childcare', label: 'Childcare (set up)', kind: 'monthly', group: 'essentials', startMonth: '2027-09', cents: 110000, scenario: 'Baby arrives (May 2027)' }];
+  const own = S.defaults(p, DS).plan.changes;
+  assert.deepEqual([own.filter(c => c.id === 'sc-childcare').length, byId(own, 'sc-childcare').label, own.length], [1, 'Childcare (set up)', 8]);
+  // Setup sync manages the profile's plan.changes only: the copies are the budget's own, so the
+  // first sync and every later one leave them alone (no notes, no churn).
+  const first = E.setupSync.apply(fresh, profile(), { now: NOW });
+  assert.deepEqual([first.changed, first.notes, first.state.plan.changes], [false, [], fresh.plan.changes]);
+  const p2 = profile();
+  p2.plan.changes = [{ id: 'trip', label: 'Trip', kind: 'oneTime', group: 'irregular', startMonth: '2027-04', cents: 90000 }];
+  const later = E.setupSync.apply(first.state, p2, { now: NOW });
+  assert.deepEqual(later.state.plan.changes.map(c => c.id), ids.concat(['trip']));
+  assert.deepEqual(E.setupSync.apply(later.state, p2, { now: NOW }).state, later.state);
 });
 
 test('scenarios to what-ifs: bounded by the planned-change limit; long scenario names are shortened to 60 characters', () => {

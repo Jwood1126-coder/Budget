@@ -608,7 +608,7 @@ module.exports = [
       const firstMonth = async month => (await monthAttr(page, month, 'balance-cents')) - (await monthAttr(page, month, 'cumulative-cents'));
       // The sample: checking's running balance plus the savings balance entered on the Plan page.
       let p = await plan();
-      assert.equal(p.cents, 7396580);
+      assert.equal(p.cents, 7276580);
       assert.equal(p.asOf, '2026-09-30');
       assert.equal(p.start, '2026-10', 'the forecast starts the month after the balance date');
       await page.waitForSelector(`#fc-m-${p.start}[data-balance-cents]`);
@@ -620,10 +620,10 @@ module.exports = [
         st.plan.balances = { ...st.plan.balances, jointCashCents: null, asOf: null, accounts: {}, accountDates: {} };
         window.HouseholdBudget.setState(st);
       });
-      await page.waitForFunction(() => window.HouseholdBudget.context().cashPlan().balances.jointCashCents === 6990114);
-      await page.waitForFunction(m => document.querySelector(`#fc-m-${m}`)?.dataset.balanceCents === String(6990114 + Number(document.querySelector(`#fc-m-${m}`).dataset.cumulativeCents)), p.start);
+      await page.waitForFunction(() => window.HouseholdBudget.context().cashPlan().balances.jointCashCents === 6870114);
+      await page.waitForFunction(m => document.querySelector(`#fc-m-${m}`)?.dataset.balanceCents === String(6870114 + Number(document.querySelector(`#fc-m-${m}`).dataset.cumulativeCents)), p.start);
       p = await plan();
-      assert.equal(p.cents, 6990114);
+      assert.equal(p.cents, 6870114);
       assert.equal(await firstMonth(p.start), p.cents);
       assert.equal(p.budget, p.cents);
       assert.ok((await page.textContent('#fc-chart figcaption')).includes('projected joint cash'), 'the chart shows balances, not only the change in cash');

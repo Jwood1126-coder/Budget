@@ -12,6 +12,8 @@
     "build:sample": "node tools/build.cjs --sample",
     "sample": "node tools/build-sample.cjs",
     "import": "node tools/import.cjs",
+    "report": "node tools/plan-report.cjs",
+    "report:sample": "node tools/plan-report.cjs --sample",
     "test": "node --test \"tests/unit/*.test.cjs\"",
     "test:browser": "node tools/build.cjs --sample --out dist/test/index.html && node tests/browser/run.cjs",
     "lint": "npx --yes eslint@9 src tools tests",

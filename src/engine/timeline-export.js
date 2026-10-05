@@ -110,6 +110,7 @@
     for (const a of inv ? inv.accounts : []) {
       const k = 'investment.' + a.id;
       kv(k + '.name', csvText(a.name));
+      kv(k + '.owner', a.owner === 'joint' ? 'joint' : csvText(a.ownerName || 'personal'));
       kv(k + '.date', a.anchor ? a.anchor.date : '');
       kv(k + '.amount', money(a.anchor ? a.anchor.cents : null));
       kv(k + '.source', a.anchor ? a.anchor.source : '');

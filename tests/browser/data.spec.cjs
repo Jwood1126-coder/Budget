@@ -166,7 +166,7 @@ module.exports = [
       t.assert.ok(using.includes('Built-in sample'), 'names the data source');
       t.assert.ok(using.includes('Fictional'), 'says the data is fictional');
       t.assert.ok(using.includes('sample'), 'shows the data set name');
-      t.assert.ok(/959 transactions in 3 accounts/.test(using), 'record counts');
+      t.assert.ok(/965 transactions in 4 accounts/.test(using), 'record counts');
       t.assert.ok(using.includes('Alex & Sam (sample)'), 'profile name');
       t.assert.ok(using.includes('Saved in this browser'), 'budget storage status');
       const recordLinks = await t.page.$$eval('#dp-using table a', as => as.map(a => a.getAttribute('href')));
@@ -201,10 +201,10 @@ module.exports = [
       // Nothing has changed yet.
       t.assert.equal(await datasetId(page), 'sample', 'the report does not apply anything');
       const metrics = await page.$$eval('.dp-metrics .metric', els => els.map(e => [e.querySelector('.metric-label').textContent, e.querySelector('.metric-value').textContent]));
-      t.assert.deepEqual(Object.fromEntries(metrics), { 'Transactions imported': '959', 'Rows read': '982', 'Duplicates removed': '23', 'Rows skipped': '0' });
+      t.assert.deepEqual(Object.fromEntries(metrics), { 'Transactions imported': '965', 'Rows read': '988', 'Duplicates removed': '23', 'Rows skipped': '0' });
       const rows = await page.$$eval('#dp-report-files tbody tr', trs => trs.map(tr => [...tr.children].map(td => td.firstChild ? td.firstChild.textContent.trim() : '')));
       const second = rows.find(r => r[0] === 'checking-2025-11-to-2026-09.csv');
-      t.assert.deepEqual(second.slice(1, 5), ['139', '116', '23', '0'], 'the second checking export loses its 23 overlapping rows');
+      t.assert.deepEqual(second.slice(1, 5), ['145', '122', '23', '0'], 'the second checking export loses its 23 overlapping rows');
       t.assert.ok((await text(page, '#dp-report-coverage')).includes('Oct 1, 2024 – Sep 30, 2026'), 'checking coverage spans both exports');
       await page.click('#dp-report-dupes > summary');
       t.assert.ok((await text(page, '#dp-report-dupes')).includes('Kept: checking-2024-10-to-2025-12.csv'), 'each removed row names the row that was kept');
@@ -220,7 +220,7 @@ module.exports = [
       await Promise.all([page.waitForNavigation({ waitUntil: 'load' }), page.click('#dp-csv-use')]);
       await page.waitForSelector('#page-title');
       t.assert.equal(await datasetId(page), 'alex-sam-test', 'the imported data is in use after the reload');
-      t.assert.equal(await page.evaluate(() => window.HouseholdBudget.getDataset().transactions.length), 959);
+      t.assert.equal(await page.evaluate(() => window.HouseholdBudget.getDataset().transactions.length), 965);
       t.assert.equal(await page.evaluate(() => window.HouseholdBudget.getDataset().isSynthetic), false);
       t.assert.equal(await text(page, '#dataBadge'), 'Private data loaded in this browser');
       t.assert.ok((await text(page, '#view')).includes('Your data is loaded.'));
@@ -450,7 +450,7 @@ module.exports = [
       for (const col of ['Date', 'Account', 'Description', 'Merchant', 'Amount (money out negative)', 'Kind', 'Category', 'Original bank category', 'Category reason', 'Flags', 'Excluded', 'Edit reasons']) {
         t.assert.ok(head.includes(col), 'column ' + col);
       }
-      t.assert.equal(rows.length - 1, 959, 'one line per transaction');
+      t.assert.equal(rows.length - 1, 965, 'one line per transaction');
       const row = Object.fromEntries(head.map((h, i) => [h, rows.find(r => r[r.length - 1] === edited.id)[i]]));
       t.assert.equal(row.Category, 'Dining & takeout');
       t.assert.equal(row['Original bank category'], edited.source);
@@ -521,9 +521,9 @@ module.exports = [
       await t.open('#/data');
       await excludeOne(page);
       const records = await text(page, '#dp-using');
-      t.assert.ok(records.includes('959 transactions in 3 accounts'), 'the count is still every row in the data');
+      t.assert.ok(records.includes('965 transactions in 4 accounts'), 'the count is still every row in the data');
       t.assert.ok(records.includes('1 of them is not counted in totals'), 'the excluded row is called out next to the count');
-      t.assert.ok((await text(page, '#dp-using table')).includes('293 transactions'), 'the account count includes it too');
+      t.assert.ok((await text(page, '#dp-using table')).includes('299 transactions'), 'the account count includes it too');
       const hrefs = await page.$$eval('#dp-using a[href^="#/spending"]', as => as.map(a => a.getAttribute('href')));
       t.assert.ok(hrefs.length === 4 && hrefs.every(h => h.endsWith('&show=excluded')), 'every count opens a list that includes rows not counted');
     },
@@ -870,14 +870,14 @@ module.exports = [
       t.assert.ok(balances.includes('Oct 31, 2026') && balances.includes(money(newer.endCents)) && balances.includes('running balance'), 'the export’s closing balance is added');
       await page.click('#dp-merge-present > summary');
       t.assert.equal(await page.$$eval('#dp-merge-present tbody tr', trs => trs.length), newer.overlap, 'every row already in the data is listed');
-      t.assert.equal(await page.evaluate(() => window.HouseholdBudget.getDataset().transactions.length), 959, 'nothing changes before Add');
+      t.assert.equal(await page.evaluate(() => window.HouseholdBudget.getDataset().transactions.length), 965, 'nothing changes before Add');
       await t.shot('data-merge-summary');
 
       await Promise.all([page.waitForNavigation({ waitUntil: 'load' }), page.click('#dp-merge-apply')]);
       await page.waitForSelector('#dp-using');
       t.assert.equal(await text(page, '#dp-merged-line'), line, 'the confirmation repeats what was added');
       const after = await page.evaluate(() => window.HouseholdBudget.getDataset());
-      t.assert.equal(after.transactions.length, 959 + newer.added, 'only the new rows are added');
+      t.assert.equal(after.transactions.length, 965 + newer.added, 'only the new rows are added');
       t.assert.equal(after.datasetId, 'sample', 'the data set keeps its name, so the saved budget stays');
       t.assert.deepEqual(after.balances.filter(b => b.date === '2026-10-31'), [{ accountId: 'joint-checking', date: '2026-10-31', cents: newer.endCents, source: 'bank', note: after.balances.find(b => b.date === '2026-10-31').note }]);
       t.assert.ok(after.transactions.some(x => x.id === edited), 'the corrected row keeps its id');
@@ -888,7 +888,7 @@ module.exports = [
 
       await page.reload();
       await page.waitForSelector('#dp-using');
-      t.assert.equal(await page.evaluate(() => window.HouseholdBudget.getDataset().transactions.length), 959 + newer.added, 'the added rows are kept after a reload');
+      t.assert.equal(await page.evaluate(() => window.HouseholdBudget.getDataset().transactions.length), 965 + newer.added, 'the added rows are kept after a reload');
       t.assert.equal(await page.evaluate(id => window.HouseholdBudget.context().txns.find(x => x.id === id).excluded, edited), 'duplicate');
 
       // Loading the same export again adds nothing.
@@ -925,13 +925,13 @@ module.exports = [
       await page.waitForSelector('#dialog[open]');
       await Promise.all([page.waitForNavigation({ waitUntil: 'load' }), page.click('#dialog button[value="ok"]')]);
       await page.waitForSelector('#dp-using');
-      t.assert.equal(await page.evaluate(() => window.HouseholdBudget.getDataset().transactions.length), 959);
+      t.assert.equal(await page.evaluate(() => window.HouseholdBudget.getDataset().transactions.length), 965);
 
       // The data file brings back the same rows, ids and balances, and the corrections find them.
       await page.setInputFiles('#dp-pick-dataset', textFile(dataDl.suggestedFilename(), dataText));
       await page.waitForSelector('#dp-dataset-use');
-      t.assert.ok((await text(page, '#dp-dataset-file')).includes(`${959 + newer.added} transactions`));
-      t.assert.ok((await text(page, '#dp-dataset-file')).includes('2 balances'), 'the data file carries its balances');
+      t.assert.ok((await text(page, '#dp-dataset-file')).includes(`${965 + newer.added} transactions`));
+      t.assert.ok((await text(page, '#dp-dataset-file')).includes('5 balances'), 'the data file carries its balances (the sample brokerage statements too)');
       await Promise.all([page.waitForNavigation({ waitUntil: 'load' }), page.click('#dp-dataset-use')]);
       await page.waitForSelector('#dp-using');
       const back = await page.evaluate(() => window.HouseholdBudget.getDataset());
@@ -960,10 +960,10 @@ module.exports = [
       await page.click('#dp-merge-replace');
       await page.waitForSelector('#dialog[open]');
       const body = await text(page, '#dialog');
-      t.assert.ok(body.includes(`only the ${newer.added + newer.overlap} transactions in these files`) && body.includes('959 transactions it uses now'), 'the confirmation gives both counts');
+      t.assert.ok(body.includes(`only the ${newer.added + newer.overlap} transactions in these files`) && body.includes('965 transactions it uses now'), 'the confirmation gives both counts');
       await page.click('#dialog button[value="cancel"]');
       await page.waitForFunction(() => !document.querySelector('#dialog[open]'));
-      t.assert.equal(await page.evaluate(() => window.HouseholdBudget.getDataset().transactions.length), 959, 'Cancel changes nothing');
+      t.assert.equal(await page.evaluate(() => window.HouseholdBudget.getDataset().transactions.length), 965, 'Cancel changes nothing');
       t.assert.ok(await page.isVisible('#dp-merge-apply'), 'the summary stays');
 
       await page.click('#dp-merge-replace');
@@ -1005,15 +1005,18 @@ module.exports = [
       await Promise.all([page.waitForNavigation({ waitUntil: 'load' }), page.click('#dp-merge-apply')]);
       await page.waitForSelector('#dp-using');
       const ds = await page.evaluate(() => window.HouseholdBudget.getDataset());
-      t.assert.equal(ds.transactions.length, 959);
+      t.assert.equal(ds.transactions.length, 965);
+      // The sample brokerage account’s own statement balances come first (sorted by account).
+      const brokerage = { accountId: 'joint-brokerage', source: 'statement', note: 'Sample brokerage statement (invented)' };
       t.assert.deepEqual(ds.balances.filter(b => b.source === 'statement'), [
+        Object.assign({ date: '2026-03-31', cents: 1248000 }, brokerage), Object.assign({ date: '2026-06-30', cents: 1310550 }, brokerage), Object.assign({ date: '2026-09-30', cents: 1402025 }, brokerage),
         { accountId: 'joint-checking', date: '2026-10-15', cents: 7012345, source: 'statement', note: 'October statement' },
         { accountId: 'joint-savings', date: '2026-09-30', cents: 1200000, source: 'statement' },
       ]);
       const fact = await text(page, '#dp-balances-fact');
       t.assert.ok(fact.includes('Joint checking: $70,123.45 at the end of Oct 15, 2026 (statement)') && fact.includes('Joint savings: $12,000.00'), 'the latest balance per account is shown');
       await page.click('#dp-balances > summary');
-      t.assert.equal(await page.$$eval('#dp-balances tbody tr', trs => trs.length), 3, 'statement balances and the export’s own');
+      t.assert.equal(await page.$$eval('#dp-balances tbody tr', trs => trs.length), 6, 'statement balances and the export’s own');
       await assertStructure(t, 'the hub with balances');
       await t.shot('data-balances');
     },

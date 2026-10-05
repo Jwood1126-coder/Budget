@@ -154,13 +154,23 @@
         candidates = others.filter(a => a.type === 'credit_card');
         what = 'credit card account';
       }
-    } else if (t.subtype === 'savings' || t.subtype === 'investment') {
+    } else if (t.subtype === 'investment') {
+      // Money to or from investments: the other side is an investment account (often balance-only,
+      // with no export, so its side is never in the data) or, from one, a cash account.
+      if (t.accountType === 'investment') {
+        candidates = others.filter(a => a.type !== 'investment' && a.type !== 'credit_card' && a.type !== 'loan');
+        what = 'cash account';
+      } else {
+        candidates = others.filter(a => a.type === 'investment');
+        what = 'investment account';
+      }
+    } else if (t.subtype === 'savings') {
       if (t.accountType === 'savings') {
         candidates = others.filter(a => a.type !== 'savings');
         what = 'cash account';
       } else {
         candidates = others.filter(a => a.type === 'savings');
-        what = t.subtype === 'investment' ? 'investment or savings account' : 'savings account';
+        what = 'savings account';
       }
     } else {
       candidates = others;
@@ -168,6 +178,9 @@
     }
     if (!candidates.length) return { expected: true, reason: 'No ' + what + ' is in the data, so the other side is not expected.' };
     const covering = candidates.filter(a => coversDate(a, t.date));
+    if (!covering.length && candidates.every(a => !(a.coverage || []).length)) {
+      return { expected: true, reason: 'The ' + what + ' has no export of its own (only its balances are in the data), so the other side is not expected.' };
+    }
     if (!covering.length) {
       return { expected: true, reason: 'The ' + what + ' export does not cover ' + E.dates.label(t.date) + ', so the other side is not expected.' };
     }
