@@ -299,8 +299,25 @@
   let pendingFocusId = null;
   let renderSeq = 0;
 
+  /**
+   * A retired view's address (#/forecast…): rewritten in place to the view that replaced it. A
+   * Forecast scenario (?scenario=id or a name) becomes the Plan chart's Compare (?compare=name);
+   * nothing else carries over. Returns the route to render.
+   */
+  function redirected(route) {
+    if (!route.redirectFrom) return route;
+    const params = {};
+    const asked = route.params.scenario || (route.params.compare || '').split(',')[0] || '';
+    if (asked) {
+      const sc = (app.state.scenarios || []).find(s => s && (s.id === asked || s.name === asked));
+      if (sc && sc.id !== 'baseline') params.compare = sc.name; else if (!sc) params.compare = asked;
+    }
+    try { root.history.replaceState(null, '', UI.router.href(route.view, params)); } catch { /* the view still renders */ }
+    return { view: route.view, params, known: true, redirectFrom: null };
+  }
+
   function render({ focusHeading = false, fromHash = false } = {}) {
-    const route = UI.router.current();
+    const route = redirected(UI.router.current());
     const view = views[route.view] || views.overview;
     const ctx = makeContext(route);
     const container = $('#view');

@@ -59,6 +59,20 @@
     return `Last deposit ${whole(h.lastCents)} on ${shortDate(h.lastDate)}` + (isCents(h.perMonthCents) && h.cadence ? `, ≈ ${whole(h.perMonthCents)}/mo (${h.cadence})` : '') + '.';
   }
 
+  /**
+   * The basis in a few words (the whole sentence is behind the dial's ⓘ): "6-month average",
+   * "From Budget", "Set here", "Deposit average", "3 one-time costs, spread".
+   */
+  function shortBasis(tl, d) {
+    const text = String(d.basis || '');
+    if (d.basisKind === 'budget' || /^From Budget/.test(text)) return d.key === 'savings' ? 'From your savings goals' : 'From Budget';
+    if (d.basisKind === 'average' && d.group === 'in') return 'Deposit average';
+    if (/^Set here/.test(text)) return 'Set here';
+    if (d.key === 'irregular' && d.drill && d.drill.count) return plural(d.drill.count, 'one-time cost') + ', spread';
+    if (/^Average of/.test(text) && tl.baseline.count) return tl.baseline.count + '-month average';
+    return text.split(/;| \(| — /)[0];
+  }
+
   function dialHtml(ctx, tl, d) {
     const id = 'plan-dial-' + d.key;
     const label = dialLabel(d);
@@ -73,33 +87,35 @@
     // A person's money in: from the pay saved in Budget, else the deposit average (not confirmed).
     const person = d.group === 'in' && typeof d.basisKind === 'string';
     const budgetLink = text => `<a class="dial-budget-link" id="${esc(id)}-budget" href="${esc(ctx.href('budget', { section: 'income' }))}">${esc(text)}</a>`;
-    let basis = esc(d.basis);
+    // One short line under the dial; the whole basis is behind ⓘ.
+    let basis = esc(shortBasis(tl, d));
+    let why = esc(d.basis);
     // An amount carried over from the earlier card/bank dials says so until it is kept or changed.
     if (d.carriedOver) basis = esc(d.carriedOver.note) + ' ' + c.button('Keep', { action: 'plan:keep-carried', variant: 'ghost', data: { dial: d.key }, cls: 'btn-small dial-keep', id: id + '-keep', ariaLabel: 'Keep ' + label + ' at ' + amt(d.planCents) + ' and remove this note' });
-    if (person && d.basisKind === 'budget') basis += ' · ' + budgetLink('Change in Budget');
+    if (person && d.basisKind === 'budget') basis += ' · ' + budgetLink('Change');
     if (person && d.needsConfirm) {
       const unknown = d.budget && Array.isArray(d.budget.unknown) ? d.budget.unknown : [];
-      basis += (/[.!?]$/.test(d.basis) ? '' : '.') + (unknown.length ? ' ' + esc('Budget has no amount for: ' + unknown.join(', ') + '.') : '') + ' Enter the current amount here, or ' + budgetLink('save pay in Budget') + '.';
+      basis += ' · ' + budgetLink('Set pay in Budget');
+      why += (/[.!?]$/.test(d.basis) ? '' : '.') + (unknown.length ? ' ' + esc('Budget has no amount for: ' + unknown.join(', ') + '.') : '') + ' Enter the current amount here, or save pay in Budget.';
     }
     const unconfirmed = person && d.needsConfirm ? badgeWithId(id + '-unconfirmed', 'Not confirmed', 'warn') : '';
     const average = person && d.basisKind === 'budget' && isCents(d.averageCents) && isCents(d.budgetCents) && d.averageCents !== d.budgetCents
       ? `<button type="button" class="btn btn-ghost btn-small dial-average" id="${esc(id)}-average" data-action="plan:use-average" data-dial="${esc(d.key)}" title="${esc(tl.baseline.label)}">${esc(`Use the ${tl.baseline.count}-month average (${amt(d.averageCents)})`)}</button>`
       : '';
-    const described = [sub ? id + '-sub' : '', id + '-base', id + '-basis', id + '-error'].filter(Boolean).join(' ');
+    const info = `<details class="dial-info" id="${esc(id)}-info"><summary title="About ${esc(label)}"><span class="dial-info-i" aria-hidden="true">i</span><span class="sr-only">About ${esc(label)}</span></summary>
+        <div class="dial-info-body">${sub ? `<p class="dial-sub" id="${esc(id)}-sub">${esc(sub)}</p>` : ''}<p class="dial-why" id="${esc(id)}-why">${why}</p>${hint ? `<p class="dial-hint" id="${esc(id)}-hint">${esc(hint)}</p>` : ''}</div></details>`;
+    const described = [id + '-base', id + '-basis', id + '-error'].join(' ');
     return `<div class="dial" data-dial="${esc(d.key)}" data-cents="${value === null ? '' : value}">
         <div class="dial-head">
-          <span class="dial-title"><label class="dial-label" for="${esc(id)}"><span class="key key-swatch ${esc(DIAL_CLS[d.key] || 'series-muted')}" aria-hidden="true"></span>${esc(label)}</label>${unconfirmed}</span>
+          <div class="dial-title"><label class="dial-label" for="${esc(id)}"><span class="key key-swatch ${esc(DIAL_CLS[d.key] || 'series-muted')}" aria-hidden="true"></span>${esc(label)}</label>${info}${unconfirmed}</div>
           <span class="input-money plan-amount dial-amount"><span aria-hidden="true">$</span><input id="${esc(id)}" type="text" inputmode="${signedDial(d) ? 'text' : 'decimal'}" autocomplete="off" spellcheck="false" value="${esc(inputText(value))}" placeholder="Unknown" data-action="plan:dial" data-commit="1" data-dial="${esc(d.key)}" aria-label="${esc(label)}, dollars a month" aria-describedby="${esc(described)}"></span>
         </div>
-        ${sub ? `<p class="dial-sub" id="${esc(id)}-sub">${esc(sub)}</p>` : ''}
         <div class="dial-track"${frac === null ? '' : ` style="--f:${frac.toFixed(4)}"`}>
           ${frac === null ? '' : '<span class="dial-tick" aria-hidden="true"></span>'}
           <input class="dial-range" id="${esc(id)}-range" type="range" min="${lo / 100}" max="${hi / 100}" step="${STEP_CENTS / 100}" value="${(value || 0) / 100}" data-action="plan:dial-range" data-dial="${esc(d.key)}" aria-label="${esc(label)}, dollars a month" aria-valuetext="${esc(amt(value || 0))} a month" aria-describedby="${esc(id)}-base">
         </div>
         <p class="field-error" id="${esc(id)}-error" role="alert" hidden></p>
-        <div class="dial-foot"><span class="dial-base" id="${esc(id)}-base">baseline ${esc(base === null ? 'unknown' : amt(base))}${esc(set)}</span><span class="dial-actions">${average}${reset}</span></div>
-        <p class="dial-basis" id="${esc(id)}-basis">${basis}</p>
-        ${hint ? `<p class="dial-hint" id="${esc(id)}-hint">${esc(hint)}</p>` : ''}
+        <div class="dial-foot"><span class="dial-line"><span class="dial-base" id="${esc(id)}-base">baseline ${esc(base === null ? 'unknown' : amt(base))}${esc(set)}</span><span class="dial-basis" id="${esc(id)}-basis">${basis}</span></span><span class="dial-actions">${average}${reset}</span></div>
         ${d.drill && d.drill.kind === 'categories' ? categoriesDrill(ctx, tl, d) : ''}
         ${d.drill && d.drill.kind === 'items' ? irregularDrill(ctx, tl, d) : ''}
       </div>`;

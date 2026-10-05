@@ -1,21 +1,24 @@
 'use strict';
 /*
- * Plan (route #/overview): one chart that does most of the work, the balances it starts from,
- * the dials underneath and the planned changes. Everything comes from BudgetEngine.timeline.build,
- * worked out once per render (ctx.memo).
- *   1. Chart     balance lines, money in and out each month, or chosen monthly series and balances
- *                (Trends), on one timeline; past and ahead; Export CSV               plan/chart.js
- *   2. Balances  the known balance of each joint cash account: the bank's figure when the data has
+ * Plan (route #/overview; #/forecast redirects here): the numbers that matter, one chart that does
+ * most of the work, what is coming up, the dials and the balances the chart starts from.
+ * Everything comes from BudgetEngine.timeline.build, worked out once per render (ctx.memo).
+ *   0. Tiles     monthly on this plan, cash in 12 months, savings and investments now → then, the
+ *                lowest point when the plan goes below $0                          plan/tiles.js
+ *   1. Chart     balance lines (and investments), money in and out each month, or chosen monthly
+ *                series and balances (Trends), on one timeline; markers for changes and goals;
+ *                Compare a what-if; past and ahead; Export CSV                      plan/chart.js
+ *   2. Coming up the planned changes, packs, bills and goals on a strip across the plan's
+ *                months, the list to edit them, packs and a change to add          plan/changes.js
+ *   3. Dials     money in by person; money out by how adjustable it is: essentials, flexible,
+ *                irregular (one-time costs spread per month), net to savings, investing, other.
+ *                Essentials and flexible open into categories and places (each can move to the
+ *                other group), the irregular dial into its one-time costs; each place, "everything
+ *                else" row and item into its transactions, whose categories can be changed there.
+ *                The headline adds the dials up.                                   plan/dials.js
+ *   4. Balances  the known balance of each joint cash account: the bank's figure when the data has
  *                one (a different one can be entered), else an amount and date the household
  *                enters                                                              plan/balances.js
- *   3. Dials     money in by person; money out by how adjustable it is: essentials, flexible,
- *                irregular (one-time costs spread per month), net to savings, other. Essentials and
- *                flexible open into categories and places (each can move to the other group), the
- *                irregular dial into its one-time costs; each place, "everything else" row and item
- *                into its transactions, whose categories can be changed there. The headline adds
- *                the dials up.                                                       plan/dials.js
- *   4. Planned changes   dated one-time or monthly changes (and templates), applied once accepted
- *                                                                                    plan/changes.js
  *   5. More      baseline window, cover-from-savings, links to the detail views     this file
  * The plan:* actions are in plan/actions.js; what the parts share (the model, formatting) is in
  * plan/common.js, on the private BudgetUI._plan namespace. This file composes the page, wires it
@@ -30,7 +33,7 @@
   const fmt = UI.fmt;
   const c = UI.c;
   const P = UI._plan;
-  const { amt, inputText, model, showError, chartCard, balancesCard, dialsCard, sumOf, valuesOf, changesHtml, actions, takeNext, fillTxns, keyedCategory } = P;
+  const { amt, inputText, model, showError, tilesHtml, updateMonthTile, chartCard, balancesCard, dialsCard, sumOf, valuesOf, changesHtml, actions, takeNext, fillTxns, keyedCategory } = P;
 
   const BASELINES = [{ value: 3, label: 'Last 3' }, { value: 6, label: 'Last 6' }, { value: 12, label: 'Last 12' }, { value: 'all', label: 'All' }];
 
@@ -40,9 +43,9 @@
   // ------------------------------------------------------------------ 5. more options
   function moreHtml(ctx, tl) {
     const body = `${c.segmented({ label: 'Baseline: complete months to average', name: 'plan-baseline', options: BASELINES, value: tl.baseline.setting, action: 'plan:baseline' })}
-      <p class="fine" id="plan-baseline-label">${esc(tl.baseline.label)}. One-time costs go into the irregular dial, spread per month; yearly bills are spread over 12 months.</p>
-      <label class="check plan-cover" for="plan-cover"><input type="checkbox" id="plan-cover" data-action="plan:cover"${tl.settings.coverFromSavings ? ' checked' : ''}><span>When checking would go below $0 in a plan month, move the shortfall from savings (only the account lines; the combined line is never changed)</span></label>
-      <p class="plan-links"><a href="${esc(ctx.href('budget'))}">Pay and bills in detail → Budget</a><a href="${esc(ctx.href('review'))}">Fix a transaction → Transactions</a></p>`;
+      <p class="fine" id="plan-baseline-label">${esc(tl.baseline.label)}.</p>
+      <label class="check plan-cover" for="plan-cover"><input type="checkbox" id="plan-cover" data-action="plan:cover"${tl.settings.coverFromSavings ? ' checked' : ''}><span>Cover a checking shortfall from savings (account lines only)</span></label>
+      <p class="plan-links"><a href="${esc(ctx.href('budget'))}">Pay and bills → Budget</a><a href="${esc(ctx.href('review'))}">Fix a transaction → Transactions</a></p>`;
     return c.disclosure('More options', body, { id: 'plan-more', cls: 'plan-more' });
   }
 
@@ -58,12 +61,13 @@
       return header() + c.card(c.empty('Load your bank exports to see your plan. Nothing leaves this device.', c.linkButton('Load data', ctx.href('data'), { variant: 'primary' })), { title: 'No data yet' });
     }
     const tl = model(ctx);
-    const sample = ctx.dataset.isSynthetic ? '<p class="fine plan-sample" id="plan-sample">This is a fictional sample household. Load your own bank exports in Data &amp; privacy; they stay on this device.</p>' : '';
+    const sample = ctx.dataset.isSynthetic ? '<p class="fine plan-sample" id="plan-sample">A fictional sample household. Load your own exports in Data &amp; privacy; they stay on this device.</p>' : '';
     return `<div class="plan-page">${header(tl)}<div class="plan" id="plan-root">
+        ${tilesHtml(ctx, tl)}
         ${chartCard(ctx, tl)}
-        ${balancesCard(ctx, tl)}
-        ${dialsCard(ctx, tl)}
         ${changesHtml(ctx, tl)}
+        ${dialsCard(ctx, tl)}
+        ${balancesCard(ctx, tl)}
         ${moreHtml(ctx, tl)}
         <p class="sr-only" id="plan-live" aria-live="polite"></p>
         ${sample}
@@ -103,6 +107,7 @@
       for (const x of rootEl.querySelectorAll('.dial[data-dirty]')) overrides[x.dataset.dial] = Number(x.dataset.cents);
       const sum = rootEl.querySelector('#plan-sum');
       if (sum) sum.innerHTML = sumOf(tl, valuesOf(tl, overrides)).html;
+      updateMonthTile(rootEl, tl, valuesOf(tl, overrides));
     });
     // Enter commits a typed amount (the same as leaving the box).
     rootEl.addEventListener('keydown', ev => {

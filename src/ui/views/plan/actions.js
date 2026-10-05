@@ -1,15 +1,16 @@
 'use strict';
 /*
  * Plan (#/overview): the plan:* actions. Text boxes and sliders commit on change through
- * app.update (undoable); view choices (mode, Past, Ahead, Trends) are saved without undo. An action
- * can ask the next render to focus a control and to announce the new headline (takeNext).
+ * app.update (undoable); view choices (mode, Past, Ahead, Trends) are saved without undo; Compare
+ * is the route's ?compare= (replaced in place, never saved). An action can ask the next render to
+ * focus a control and to announce the new headline (takeNext).
  */
 (function (root) {
   const UI = root.BudgetUI;
   const E = root.BudgetEngine;
   const fmt = UI.fmt;
   const P = UI._plan;
-  const { isCents, exact, amt, plural, inputText, todayIso, model, showError } = P;
+  const { isCents, exact, amt, plural, inputText, todayIso, model, showError, PACKS } = P;
   const { pickedOf, shownTimeline, dataAnchorsOf, GROUP_NAME, dialLabel, signedDial, depositsOf, KIND_LABEL, CHANGE_GROUP_LABEL } = P;
   const { txnMap, placeTxns, placeOf, fillTxns, TXN_REASON } = P;
 
@@ -140,6 +141,11 @@
     'plan:mode': (ctx, el) => setView(ctx, 'mode', ['flows', 'trends'].includes(el.dataset.value) ? el.dataset.value : 'balance'),
     'plan:past': (ctx, el) => setView(ctx, 'past', choice(el.dataset.value)),
     'plan:horizon': (ctx, el) => setView(ctx, 'horizon', choice(el.dataset.value)),
+    /** Compare: a what-if drawn beside the plan. A view choice kept in the address, not saved. */
+    'plan:compare': (ctx, el) => {
+      const params = Object.assign({}, ctx.route.params, { compare: el.value || undefined });
+      ctx.app.navigate('overview', params, { replace: true, keepFocus: true });
+    },
     'plan:trend-series': (ctx, el) => {
       const tl = model(ctx);
       const picked = pickedOf(tl);
@@ -439,7 +445,11 @@
     'plan:change-remove': (ctx, el) => {
       const ch = changeOf(ctx, el.dataset.change);
       if (!ch) return;
-      focusNext = root => root.querySelector('#plan-changes > summary');
+      // The next change in the list takes focus (or the one before; else adding a change).
+      const item = el.closest('.plan-ch-item');
+      const near = x => (x && x.querySelector('.plan-ch-remove') ? x.querySelector('.plan-ch-remove').id : null);
+      const ids = [near(item && item.nextElementSibling), near(item && item.previousElementSibling)];
+      focusNext = rootEl => ids.map(id => id && document.getElementById(id)).find(Boolean) || rootEl.querySelector('#plan-add-custom > summary');
       change(ctx, st => E.timeline.removeChange(st, ch.id), `Removed “${ch.label}”.`);
     },
     'plan:add-change': (ctx, form) => {
@@ -471,14 +481,48 @@
       }
       return undefined;
     },
-    'plan:template-baby': ctx => {
-      const input = document.getElementById('plan-tpl-baby-date');
-      const date = input ? input.value : '';
-      if (!E.dates.isDate(date)) { showError(input, 'Enter the due date first.'); if (input) input.focus(); return; }
-      showError(input, null);
-      const items = E.timeline.templates.baby(date);
+    /**
+     * A pack (New baby, Childcare, Kid costs): its items are listed, never accepted for the
+     * household, and tagged with the pack's name as a what-if, so Compare can draw them first.
+     */
+    'plan:add-pack': (ctx, form) => {
+      const key = form.dataset.pack;
+      const stem = form.dataset.stem;
+      const pack = PACKS[key];
+      const make = E.timeline.templates[key];
+      if (!pack || typeof make !== 'function') return;
+      const err = document.getElementById('plan-pack-' + stem + '-date-error');
+      const first = form.querySelector('input');
+      const fail = message => {
+        if (err) { err.textContent = message; err.hidden = false; }
+        if (first) { first.setAttribute('aria-invalid', 'true'); first.focus(); }
+      };
+      if (err) { err.textContent = ''; err.hidden = true; }
+      for (const x of form.querySelectorAll('input')) x.removeAttribute('aria-invalid');
+      const data = new FormData(form);
+      let items;
+      try {
+        if (key === 'childcare') {
+          const start = String(data.get('start') || '');
+          if (!E.months.isMonth(start)) return fail('Choose the month childcare starts.');
+          const raw = typed(data.get('amount'));
+          const cents = raw === '' ? null : E.money.inputToCents(raw, { field: 'monthlyCents' });
+          items = make(start, cents, { scenario: pack.name });
+        } else {
+          const due = String(data.get('due') || '');
+          if (!E.dates.isDate(due)) return fail('Enter the due date first.');
+          items = make(due, { scenario: pack.name });
+        }
+      } catch (e) {
+        if (e && e.name === 'ValidationError') return fail(e.message);
+        throw e;
+      }
+      const box = document.getElementById('plan-add-' + stem);
+      if (box) box.open = false; // closed before the render, so it comes back closed
       focusNext = '#plan-ch-accept-all';
-      change(ctx, st => E.timeline.addChange(st, items), `Added ${items.length} baby items — review the amounts, then accept them.`);
+      change(ctx, st => E.timeline.addChange(st, items),
+        `${pack.name}: ${plural(items.length, 'item')} added, not in the plan yet. Check the amounts, then accept them.`);
+      return undefined;
     },
   };
 

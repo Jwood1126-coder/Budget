@@ -171,7 +171,7 @@
     return E.state.setPath(state, 'ui.plan.irregularOff.' + id.trim(), included === false ? true : undefined);
   }
 
-  /** Add one planned change, or a list of them (e.g. templates.baby(dueDate)); each gets an id. */
+  /** Add one planned change, or a list of them (e.g. templates.babyFirstYear(dueDate)); each gets an id. */
   function addChange(state, item) {
     const list = Array.isArray(item) ? item : [item];
     return list.reduce((st, x) => E.state.addItem(st, 'changes', x), state);

@@ -79,8 +79,8 @@ module.exports = [
       // Moving around in the other tab does not bring its old copy back.
       await b.click('.mainnav a[data-nav="overview"]');
       await b.waitForFunction(() => location.hash.startsWith('#/overview'));
-      await t.nav('forecast', b);
-      await b.waitForFunction(() => location.hash.startsWith('#/forecast'));
+      await t.nav('spending', b);
+      await b.waitForFunction(() => location.hash.startsWith('#/spending'));
       assert.equal(await storedTarget(a, 'Groceries'), 81200, 'navigating in tab 2 keeps tab 1’s change');
       await a.reload();
       await a.waitForSelector(GROCERIES);
@@ -191,7 +191,7 @@ module.exports = [
         Storage.prototype.setItem = function () { throw new DOMException('Blocked for this test', 'SecurityError'); };
       });
       await t.open('#/overview');
-      for (const view of ['overview', 'spending', 'forecast']) {
+      for (const view of ['overview', 'spending', 'review']) {
         await page.goto(t.url + '#/' + view);
         await page.waitForSelector('#page-title');
         assert.ok(await page.isVisible('#appAlerts'), 'warning visible on ' + view);
@@ -322,7 +322,7 @@ module.exports = [
     viewport: 'both',
     async run(t) {
       const { page, assert } = t;
-      for (const route of ['#/overview', '#/budget', '#/forecast', '#/spending']) {
+      for (const route of ['#/overview', '#/budget', '#/spending']) {
         await t.open(route);
         await page.focus('#page-title');
         const hidden = [];
@@ -378,7 +378,7 @@ module.exports = [
     async run(t) {
       const { page, assert } = t;
       const small = [];
-      for (const route of ['#/forecast', '#/budget?section=bills', '#/review?queue=uncertain', '#/overview']) {
+      for (const route of ['#/budget?section=bills', '#/review?queue=uncertain', '#/overview']) {
         await t.open(route);
         small.push(...await page.$$eval('#view .btn, #view .segmented label, #view .bud-plan-input input, #view input[type="range"], #view .plan-amount input', els => els
           .filter(el => el.getBoundingClientRect().width > 0)

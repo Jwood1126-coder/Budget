@@ -509,41 +509,101 @@ const MARKERS = [
   { month: '2031-01', label: 'Out of range', kind: 'oneTime' },
 ];
 
-test('change markers: a triangle for one-time, a tick and a faint band for monthly, one glyph with a count per month', () => {
+test('markers: a lane above the plot with a dot, a short label and a rule to the axis; one per month; a faint band for monthly', () => {
   const html = cashChart({ ...base, mode: 'balance', markers: MARKERS });
+  const plain = cashChart({ ...base, mode: 'balance' });
   const svg = svgOf(html);
   const model = modelOf(html);
   const x = m => model.months[MONTHS.indexOf(m)].x;
   const bottom = Number(html.match(/<line class="crosshair cc-crosshair"[^>]*y2="([\d.]+)"/)[1]);
-  // Two one-time changes in November: one triangle on the bottom axis line, count 2.
-  const nov = svg.match(/<g class="cc-change is-once" data-cc-change="2026-11">([\s\S]*?)<\/g>/);
-  assert.ok(nov, 'november carries one glyph');
-  const tri = pointsOf(nov[1].match(/d="([^"]*)"/)[1].replace(/L/g, ' L').replace(/z$/, ''));
-  assert.equal(tri.length, 3);
-  assert.equal(tri[1][0], x('2026-11'), 'apex at the month');
-  assert.ok(tri[1][1] < bottom && tri[0][1] === bottom && tri[2][1] === bottom, 'points up from the bottom line');
-  assert.match(nov[1], /<text class="cc-change-count"[^>]*>2<\/text>/);
+  const top = Number(html.match(/<line class="crosshair cc-crosshair"[^>]*y1="([\d.]+)"/)[1]);
+  // The plot moves down by the lane's height; the plot itself keeps its height.
+  const plainTop = Number(plain.match(/<line class="crosshair cc-crosshair"[^>]*y1="([\d.]+)"/)[1]);
+  const plainBottom = Number(plain.match(/<line class="crosshair cc-crosshair"[^>]*y2="([\d.]+)"/)[1]);
+  assert.ok(top > plainTop, 'room for the lane above the plot');
+  assert.ok(Math.abs((bottom - top) - (plainBottom - plainTop)) < 0.2, 'the plot keeps its height');
+  assert.equal(model.padT, modelOf(plain).padT + (top - plainTop));
+  // Two one-time changes in November: one dot, the first label and "+1".
+  const nov = svg.match(/<g class="cc-ann cc-change is-oneTime" data-cc-change="2026-11">([\s\S]*?)<\/g>/);
+  assert.ok(nov, 'november carries one marker');
+  assert.match(nov[1], new RegExp(`<circle class="cc-ann-glyph" cx="${x('2026-11').toFixed(1)}"`));
+  assert.match(nov[1], /<text class="cc-ann-label"[^>]*>Car seat \+1<\/text>/);
+  const rule = nov[1].match(/<line class="cc-ann-rule" x1="([\d.]+)" x2="[\d.]+" y1="([\d.]+)" y2="([\d.]+)"/);
+  assert.equal(Number(rule[1]), Number(x('2026-11').toFixed(1)));
+  assert.ok(Number(rule[2]) < top && Number(rule[3]) === bottom, 'the rule runs from the lane to the axis');
   assert.equal((svg.match(/data-cc-change="2026-11"/g) || []).length, 1);
-  // Monthly starts: a tick each, no count when alone, and one band from the first start to the right edge.
+  // Monthly starts: a rounded square each, and one band from the first start to the right edge.
   for (const m of ['2026-12', '2027-01']) {
-    const g = svg.match(new RegExp(`<g class="cc-change is-monthly" data-cc-change="${m}">([\\s\\S]*?)</g>`));
+    const g = svg.match(new RegExp(`<g class="cc-ann cc-change is-monthly" data-cc-change="${m}">([\\s\\S]*?)</g>`));
     assert.ok(g, m);
-    assert.match(g[1], new RegExp(`<line class="cc-change-monthly" x1="${x(m).toFixed(1)}" x2="${x(m).toFixed(1)}"`));
-    assert.doesNotMatch(g[1], /cc-change-count/);
+    assert.match(g[1], /<rect class="cc-ann-glyph"/);
   }
   const bands = [...svg.matchAll(/<rect class="cc-change-band" x="([\d.]+)" y="[\d.]+" width="([\d.]+)"/g)];
   assert.equal(bands.length, 1);
   assert.equal(Number(bands[0][1]), x('2026-12'));
   assert.ok(Math.abs(Number(bands[0][1]) + Number(bands[0][2]) - (model.W - model.padR)) < 0.2, 'band runs to the right edge');
-  // Out-of-range markers are ignored; the legend explains both glyphs.
+  // Out-of-range markers are ignored; the legend explains the glyphs.
   assert.doesNotMatch(html, /Out of range/);
-  assert.match(html, /<span class="key cc-key-once" aria-hidden="true"><\/span>One-time change/);
-  assert.match(html, /<span class="key cc-key-monthly" aria-hidden="true"><\/span>Monthly change/);
+  assert.match(html, /<span class="key cc-key-once" aria-hidden="true"><\/span>One-time/);
+  assert.match(html, /<span class="key cc-key-monthly" aria-hidden="true"><\/span>Monthly from/);
   // Presentation only: scale and series model unchanged; without markers nothing is drawn.
-  const plain = cashChart({ ...base, mode: 'balance' });
   assert.deepEqual(yTicks(html), yTicks(plain));
   assert.deepEqual(modelOf(html).months.map(m => m.rows), modelOf(plain).months.map(m => m.rows));
-  assert.doesNotMatch(plain, /cc-change|Planned changes|One-time change/);
+  assert.doesNotMatch(plain, /cc-ann|cc-change|Planned changes|One-time/);
+});
+
+test('markers: labels never overlap (a second row, else left out with the dot kept); a shared pack names the month; goals get a diamond', () => {
+  const crowd = MONTHS.slice(0, 5).map(m => ({ month: m, label: 'A long change name number ' + m, title: 'Full ' + m, kind: 'oneTime', cents: -1000 }));
+  const html = cashChart({ ...base, mode: 'balance', markers: crowd.concat([
+    { month: MONTHS[9], label: 'Diapers', pack: 'New baby', kind: 'monthly', cents: 8000 },
+    { month: MONTHS[9], label: 'Formula', pack: 'New baby', kind: 'monthly', cents: 15000 },
+    { month: MONTHS[10], label: 'Emergency cushion', title: 'Emergency cushion', kind: 'goal', cents: 1500000 },
+  ]) });
+  const svg = svgOf(html);
+  const labels = [...svg.matchAll(/<text class="cc-ann-label" x="([\d.]+)" y="([\d.]+)" text-anchor="(start|end)">([^<]*)<\/text>/g)]
+    .map(m => ({ x: Number(m[1]), y: Number(m[2]), anchor: m[3], text: m[4] }));
+  const span = l => { const w = l.text.length * 5.9; return l.anchor === 'start' ? [l.x, l.x + w] : [l.x - w, l.x]; };
+  for (const a of labels) for (const b of labels) {
+    if (a === b || a.y !== b.y) continue;
+    const [a0, a1] = span(a), [b0, b1] = span(b);
+    assert.ok(a1 <= b0 || b1 <= a0, `“${a.text}” and “${b.text}” overlap`);
+  }
+  assert.ok(new Set(labels.map(l => l.y)).size <= 2, 'two rows at most');
+  const W = modelOf(html).W;
+  assert.ok(labels.every(l => span(l)[0] >= 0 && span(l)[1] <= W), 'every label inside the drawing');
+  assert.equal((svg.match(/<g class="cc-ann /g) || []).length, 7, 'every month keeps its marker');
+  assert.ok(labels.length < 7, 'what does not fit is left out');
+  assert.ok(labels.some(l => l.text === 'New baby'), 'a month whose markers share a pack is named after it');
+  const goal = svg.match(new RegExp(`<g class="cc-ann is-goal" data-cc-change="${MONTHS[10]}">([\\s\\S]*?)</g>`));
+  assert.ok(goal && /<path class="cc-ann-glyph" d="M[\d.]+ [\d.]+L/.test(goal[1]), 'a goal is a diamond, not a change');
+  const model = modelOf(html);
+  assert.deepEqual(model.months[10].pc, ['Goal reached: Emergency cushion ($15,000)']);
+  assert.deepEqual(model.months[0].pc, ['Planned: Full ' + MONTHS[0] + ' −$10 (one-time)'], 'the readout uses the full title');
+  assert.match(html, /1 savings goal is reached in these months\./);
+  assert.match(html, /<span class="key cc-key-goal" aria-hidden="true"><\/span>Goal reached/);
+});
+
+test('compare: a what-if line in its own colour and legend chip, in the readout and the table, never the low point or the summary line', () => {
+  const months = MONTHS.slice(0, 8);
+  const real = [120000, 90000, 80000, 70000, 60000, 50000, 40000, 30000];
+  const what = [null, null, null, 70000, 40000, 10000, -20000, -50000];
+  const html = cashChart({
+    id: 'cmp', title: 'Compare', mode: 'balance', months, todayMonth: months[2], planStart: months[3],
+    lines: [
+      { key: 'combined', name: 'Combined cash', role: 'combined', points: months.map((m, i) => ({ month: m, cents: real[i], status: i >= 3 ? 'projected' : 'recorded' })) },
+      { key: 'compare', name: 'New baby', role: 'compare', points: months.map((m, i) => ({ month: m, cents: what[i], status: what[i] === null ? null : 'projected' })) },
+    ],
+  });
+  assert.match(html, /<g class="cc-series series-compare cc-compare" data-cc-series="compare">/);
+  assert.ok(pathsWith(html, 'cc-compare-line').length >= 1);
+  assert.match(html, /<button type="button" class="cc-chip"[^>]*data-cc-key="compare"[^>]*><span class="key key-line series-compare"/);
+  assert.doesNotMatch(html, /is-emph|cc-low-label/, 'only the real lines decide the zero emphasis and the low point');
+  const model = modelOf(html);
+  assert.deepEqual(model.months[5].rows.map(r => [r.n, r.g || '', r.v]), [['Combined cash', '', '$500'], ['New baby', 'compare', '$100']]);
+  assert.equal(model.months[1].rows.length, 1, 'no what-if row before the plan');
+  assert.match(html, /<th scope="col"[^>]*>New baby<\/th>/);
+  assert.match(html, /New baby, for comparison: −\$500 in [A-Z][a-z]+ \d{4}\./);
+  assert.ok(yTicks(html).some(t => t.startsWith('−$')), 'the scale reaches the what-if');
 });
 
 test('change markers: readout lines, a Planned changes table column and a count in the summary, in every mode', () => {

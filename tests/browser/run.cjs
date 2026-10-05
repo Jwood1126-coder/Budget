@@ -13,7 +13,7 @@
  * overrides the detection, to try the other path.
  * open() loads the page at a hash, from empty storage unless { clear: false } (the first load of a
  * context's only page already starts from empty storage, so it loads only once).
- * nav() clicks the navigation link for a view: on phones Spending, Budget and Forecast sit in the
+ * nav() clicks the navigation link for a view: on phones Spending and Budget sit in the
  * "More" menu of the tab bar, so it opens that first.
  * settled() resolves once the app is idle: no render scheduled (BudgetUI.app.renderPending) and
  * <html data-render-seq> unchanged for two animation frames. Use it after an action whose
@@ -113,7 +113,7 @@ async function main() {
           },
           async shot(name) { await page.screenshot({ path: path.join(OUT, `${name}-${vp}.png`), fullPage: true }); },
           async nav(view, pg = page) {
-            const secondary = ['spending', 'budget', 'forecast'].includes(view);
+            const secondary = ['spending', 'budget'].includes(view);
             if (!secondary) return pg.click(`.mainnav a[data-nav="${view}"]`);
             if (vp === 'phone') {
               // A render in flight can close the menu between the two taps; open it again if so.

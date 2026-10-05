@@ -159,10 +159,10 @@
     let proj;
     try { proj = ctx.project(state.scenarios[0].id, { months: 12 }); } catch { return items; }
     if (proj.summary.negativeMonths.length) {
-      items.push({ id: 'negative', severity: 'decision', title: `More goes out than comes in during ${proj.summary.negativeMonths.length} of the next 12 months`, detail: 'See which months and why in Forecast. Savings or a lower target may cover them.', route: '#/forecast', cta: 'Open forecast' });
+      items.push({ id: 'negative', severity: 'decision', title: `More goes out than comes in during ${proj.summary.negativeMonths.length} of the next 12 months`, detail: 'See which months on the Plan chart. Savings or a lower target may cover them.', route: '#/overview', cta: 'Open plan' });
     }
     if (proj.summary.contributionShortfallMonths.length) {
-      items.push({ id: 'contrib-short', severity: 'decision', title: 'Planned savings exceed what is left over in some months', detail: `${proj.summary.contributionShortfallMonths.length} month${proj.summary.contributionShortfallMonths.length === 1 ? '' : 's'} cannot fully fund the savings plan from that month's income.`, route: '#/forecast', cta: 'Open forecast' });
+      items.push({ id: 'contrib-short', severity: 'decision', title: 'Planned savings exceed what is left over in some months', detail: `${proj.summary.contributionShortfallMonths.length} month${proj.summary.contributionShortfallMonths.length === 1 ? '' : 's'} cannot fully fund the savings plan from that month's income.`, route: '#/overview', cta: 'Open plan' });
     }
     for (const g of proj.goals || []) {
       if (g.status === 'short') items.push({ id: 'goal-short-' + g.id, severity: 'decision', title: `${g.label} is projected to be short by ${money(g.shortfallCents)}`, detail: g.targetMonth ? `Target ${E.months.label(g.targetMonth)}.` : '', route: '#/budget?section=savings', cta: 'Adjust' });
@@ -172,7 +172,7 @@
       try { p = ctx.project(sc.id, { months: 36 }); } catch { continue; }
       // Event amounts not entered include income changes (e.g. pay during leave), not only costs.
       const missing = p.missing.filter(m => m.source === 'event');
-      if (missing.length) items.push({ id: 'scn-missing-' + sc.id, severity: 'info', title: `“${sc.name}” has ${missing.length} amount${missing.length === 1 ? '' : 's'} not entered`, detail: missing.slice(0, 3).map(m => m.label).join('; ') + (missing.length > 3 ? '…' : ''), route: '#/forecast?scenario=' + encodeURIComponent(sc.id), cta: 'Fill in' });
+      if (missing.length) items.push({ id: 'scn-missing-' + sc.id, severity: 'info', title: `“${sc.name}” has ${missing.length} amount${missing.length === 1 ? '' : 's'} not entered`, detail: missing.slice(0, 3).map(m => m.label).join('; ') + (missing.length > 3 ? '…' : ''), route: '#/overview?compare=' + encodeURIComponent(sc.name), cta: 'Fill in' });
     }
     return items;
   }

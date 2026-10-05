@@ -1056,51 +1056,26 @@ test('planned changes through state: add, edit, accept and remove; switching kin
   assert.deepEqual(st.plan.changes, []);
 });
 
-test('the earlier baby template (kept as it was while the screen offers it): dated from the due month, every amount present except the leave income, nothing accepted', () => {
-  // The packs replaced it in the list; templates.baby still gives exactly what it gave.
+test('the earlier Baby template is gone; changes saved from it are ordinary changes: listed, accepted and applied as saved', () => {
   assert.deepEqual(T.templates.list().map(t => t.key), ['babyFirstYear', 'childcare', 'kidCosts']);
-  const items = T.templates.baby('2028-05-14');
-  const by = label => items.find(i => i.label === label);
-  assert.deepEqual(items.map(i => [i.label, i.kind, i.group, i.startMonth, i.endMonth, i.cents]), [
-    ['Car seat', 'oneTime', 'irregular', '2028-03', null, 25000],
-    ['Nursery setup (paint, dresser, glider)', 'oneTime', 'irregular', '2028-03', null, 90000],
-    ['Starter clothes and basics', 'oneTime', 'irregular', '2028-04', null, 25000],
-    ['Feeding gear (bottles, pump accessories)', 'oneTime', 'irregular', '2028-04', null, 20000],
-    ['Baby monitor', 'oneTime', 'irregular', '2028-04', null, 10000],
-    ['Crib and mattress (after the bassinet)', 'oneTime', 'irregular', '2028-09', null, 35000],
-    ['Delivery out-of-pocket (insurance deductible/out-of-pocket max)', 'oneTime', 'irregular', '2028-06', null, 350000],
-    ['Diapers and wipes', 'monthly', 'essentials', '2028-05', null, 8500],
-    ['Formula / feeding', 'monthly', 'essentials', '2028-05', null, 12000],
-    ['Baby food', 'monthly', 'essentials', '2028-11', null, 7500],
-    ['Clothes as they grow', 'monthly', 'flexible', '2028-05', null, 4500],
-    ['Health copays and medicines', 'monthly', 'essentials', '2028-05', null, 4000],
-    ['Childcare', 'monthly', 'essentials', '2028-08', null, 120000],
-    ['Parental leave: income change', 'monthly', 'income', '2028-05', '2028-07', null],
-  ]);
-  assert.ok(items.every(i => i.accepted === false && i.template === 'baby' && i.personId === null));
-  assert.ok(items.every(i => /estimate/i.test(i.note) && /adjust/.test(i.note)), 'every note says it is an estimate to adjust');
-  assert.match(by('Formula / feeding').note, /about \$0 if breastfeeding/i);
-  assert.match(by('Childcare').note, /typical infant daycare; set to \$0 for family care/i);
-  assert.match(by('Parental leave: income change').note, /monthly reduction in take-home while on leave/);
-  // A due date in late December crosses the year both ways.
-  const dec = T.templates.baby('2026-12-30');
-  assert.deepEqual([dec[0].startMonth, dec[5].startMonth, dec[13].endMonth], ['2026-10', '2027-04', '2027-02']);
-  assert.throws(() => T.templates.baby('2027-02-30'), err => err instanceof E.ValidationError && err.field === 'dueDate');
-  // Into a plan: listed, nothing applied until accepted; the leave item is reported as unset.
+  assert.equal(T.templates.baby, undefined, 'the screen offers the three packs only');
   const ds = small();
-  let st = T.addChange(E.state.defaults(null, ds), T.templates.baby('2026-09-20'));
-  assert.equal(st.plan.changes.length, 14);
-  assert.equal(new Set(st.plan.changes.map(c => c.id)).size, 14, 'each gets its own id');
+  const saved = [
+    { label: 'Car seat', kind: 'oneTime', group: 'irregular', startMonth: '2026-07', endMonth: null, cents: 25000, accepted: false, template: 'baby', note: 'A generic estimate: adjust it to your own quotes and plans.' },
+    { label: 'Diapers and wipes', kind: 'monthly', group: 'essentials', startMonth: '2026-09', endMonth: null, cents: 8500, accepted: false, template: 'baby', note: '' },
+    { label: 'Parental leave: income change', kind: 'monthly', group: 'income', startMonth: '2026-09', endMonth: '2026-11', cents: null, accepted: false, template: 'baby', note: '' },
+  ];
+  let st = T.addChange(E.state.defaults(null, ds), saved);
+  assert.ok(st.plan.changes.every(c => c.template === 'baby'), 'kept exactly as saved');
   const build = s => T.build({ txns: L.applyEdits(ds, s.ledgerEdits), dataset: ds, plan: Object.assign({}, s.plan, { people: PEOPLE }), settings: s.ui.plan, today: '2026-06-12' });
   const before = build(st);
   assert.equal(before.changes.applied, 0);
-  assert.deepEqual(before.changes.unset, [st.plan.changes[13].id]);
+  assert.deepEqual(before.changes.unset, [st.plan.changes[2].id]);
   st = T.acceptChanges(st, st.plan.changes.map(c => c.id), true);
   const after = build(st);
-  assert.equal(after.changes.applied, 13, 'every change with an amount and a month in the plan');
-  assert.equal(after.months.find(m => m.month === '2026-07').out.irregular, after.plan.out.irregular + 25000 + 90000, 'car seat and nursery two months before');
-  assert.equal(after.changes.totalOneTimeCents, 25000 + 90000 + 25000 + 20000 + 10000 + 35000 + 350000);
-  assert.equal(after.changes.monthlyNowCents, 0, 'nothing monthly yet in June');
+  assert.equal(after.changes.applied, 2, 'every change with an amount and a month in the plan');
+  assert.equal(after.months.find(m => m.month === '2026-07').out.irregular, after.plan.out.irregular + 25000);
+  assert.equal(after.months.find(m => m.month === '2026-10').out.essentials, after.plan.out.essentials + 8500);
 });
 
 // ------------------------------------------------------------------ balances supplied with the data

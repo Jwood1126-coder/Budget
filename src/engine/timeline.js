@@ -13,7 +13,7 @@
  *                     the earlier card/bank dials still among the dials moved to legacyDials)
  *   toCSV(tl, opts)   the plan as a spreadsheet: its settings, then one row per month
  *   templates         ready-made packs of planned changes (babyFirstYear(due), childcare(start,
- *                     cents?), kidCosts(due); the earlier baby(due) kept), never accepted for you
+ *                     cents?), kidCosts(due)), never accepted for you
  *   setDial / setRow / setTarget / resetDial / resetPlan / setGroup / setIrregular / addChange /
  *   setChange / removeChange / acceptChanges / migrateRows / migrateDials / splitOther
  *                     validated state writes for the screen (setRow on a category, and setTarget,

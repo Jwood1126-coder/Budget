@@ -10,8 +10,11 @@
  *                 (actual solid, plan dashed), with an optional trailing moving average and a
  *                 least-squares trend line (stats helpers below).
  *
- * Presentation-only extras: a ghost "Baseline plan" line in balance mode, and change markers on the
- * bottom axis (one-time triangles, monthly ticks with a faint band to the right edge).
+ * Presentation-only extras: a ghost "Baseline plan" line and a "compare" what-if line in balance
+ * mode, and markers (planned changes, goals reached) in a lane above the plot: a dot, a short label
+ * placed so labels never overlap (two rows at most; what does not fit keeps its dot and is in the
+ * readout and the table), and a faint rule down to the axis; monthly changes also get a faint band
+ * on the bottom edge from the first one to the right edge.
  *
  * Both modes share the same margins and x positions, so switching modes never shifts the
  * timeline. cashChart() returns an HTML string (escaped like every component); attach(root) wires
@@ -37,6 +40,9 @@
   // Trends lines follow the categorical order.
   const TREND_CLS = ['series-1', 'series-2', 'series-3', 'series-4', 'series-5', 'series-6'];
   const GHOST_CLS = 'series-ghost';
+  const COMPARE_CLS = 'series-compare';
+  /** Lines drawn for comparison only: never the summary's line, its low point or a series colour. */
+  const isAside = role => role === 'ghost' || role === 'compare';
   const known = v => typeof v === 'number' && Number.isFinite(v);
   const f1 = v => (Math.round(v * 10) / 10).toFixed(1);
   const isOther = s => String(s.key).toLowerCase() === 'other' || /^other\b/i.test(String(s.name || ''));
@@ -128,7 +134,7 @@
 
   // ------------------------------------------------------------------ data preparation
   function prepareLines(lines, months, isPlan) {
-    const used = new Set((lines || []).filter(l => l && l.role !== 'ghost').map(l => l.cls).filter(Boolean));
+    const used = new Set((lines || []).filter(l => l && !isAside(l.role)).map(l => l.cls).filter(Boolean));
     const free = ACCOUNT_CLS.filter(c => !used.has(c));
     let combinedSeen = false;
     return (lines || []).map((l, li) => {
@@ -139,15 +145,16 @@
         const status = STATUS[p.status] ? p.status : (isPlan(m) ? 'projected' : 'recorded');
         return { cents: known(p.cents) ? Math.round(p.cents) : null, status, note: p.note ? String(p.note) : '', illustrative: p.illustrative === true };
       });
-      // 'ghost': the baseline plan, drawn muted behind everything; it takes no series colour.
-      const role = l.role === 'combined' ? 'combined' : l.role === 'ghost' ? 'ghost' : 'account';
-      let cls = role === 'ghost' ? GHOST_CLS : l.cls;
+      // 'ghost': the baseline plan, drawn muted behind everything; 'compare': a what-if, drawn
+      // dash-dot in its own colour. Neither takes a series colour.
+      const role = l.role === 'combined' ? 'combined' : isAside(l.role) ? l.role : 'account';
+      let cls = role === 'ghost' ? GHOST_CLS : role === 'compare' ? l.cls || COMPARE_CLS : l.cls;
       if (!cls) {
         if (role === 'combined' && !combinedSeen && !used.has('series-1')) cls = 'series-1';
         else cls = free.shift() || 'series-muted';
       }
       if (role === 'combined') combinedSeen = true;
-      const name = String(l.name ?? '') || (role === 'ghost' ? 'Baseline plan' : '');
+      const name = String(l.name ?? '') || (role === 'ghost' ? 'Baseline plan' : role === 'compare' ? 'What-if' : '');
       return { key: String(l.key ?? 'line-' + li), name, role, cls, pts };
     });
   }
@@ -176,7 +183,11 @@
     }));
   }
 
-  /** Markers inside the months shown, grouped by month index: Map(i -> [{ label, cents, kind }]). */
+  const MARKER_KINDS = ['oneTime', 'monthly', 'goal'];
+  /**
+   * Markers inside the months shown, grouped by month index: Map(i -> [{ label, title, cents, kind, pack }]).
+   * label: the short text drawn; title: the full name the readout and the table use.
+   */
   function prepareMarkers(list, months) {
     const at = new Map(months.map((m, i) => [m, i]));
     const byIndex = new Map();
@@ -184,9 +195,67 @@
       if (!mk || !at.has(String(mk.month))) continue;
       const i = at.get(String(mk.month));
       if (!byIndex.has(i)) byIndex.set(i, []);
-      byIndex.get(i).push({ label: String(mk.label ?? ''), cents: known(mk.cents) ? Math.round(mk.cents) : null, kind: mk.kind === 'monthly' ? 'monthly' : 'oneTime' });
+      const label = String(mk.label ?? '');
+      byIndex.get(i).push({
+        label, title: String(mk.title ?? '') || label, cents: known(mk.cents) ? Math.round(mk.cents) : null,
+        kind: MARKER_KINDS.includes(mk.kind) ? mk.kind : 'oneTime', pack: mk.pack ? String(mk.pack) : '',
+      });
     }
     return new Map([...byIndex].sort((a, b) => a[0] - b[0]));
+  }
+
+  const LANE_ROW = 15;
+  const laneWidth = s => String(s).length * 5.9; // 10.5px semibold
+  /**
+   * The marker lane above the plot: one label per month with markers (its first name, a pack's
+   * name for a pack's items, and "+N" for the other names; a pack is named at its first month
+   * only), placed left to right in the first row with room
+   * (right of its dot, or left of it near the right edge); a label too long for any row is cut to
+   * 12 characters, then left out (its dot stays: in a row where it touches no label, else on the
+   * plot's top edge; row null). { items: [{ i, x, text, anchor, row, kind }], h } where h is the
+   * lane's height (0 without markers).
+   */
+  function layoutLane(mks, xc, W, rowsMax) {
+    const ends = Array.from({ length: rowsMax }, () => -Infinity);
+    const items = [];
+    const named = new Set(); // a pack is named once, at its first month
+    for (const [i, list] of mks) {
+      const kind = list.every(mk => mk.kind === 'goal') ? 'goal' : list.some(mk => mk.kind === 'oneTime') ? 'oneTime' : list.find(mk => mk.kind !== 'goal').kind;
+      const names = [...new Set(list.map(mk => mk.pack || mk.label))];
+      const fresh = names.filter(nm => !named.has(nm));
+      const x = xc(i);
+      if (!fresh.length) {
+        const row = ends.findIndex(e => e + 3 <= x - 5);
+        if (row >= 0) ends[row] = Math.max(ends[row], x + 5);
+        items.push({ i, x, text: '', anchor: 'start', row: row >= 0 ? row : null, kind });
+        continue;
+      }
+      const base = fresh[0];
+      const more = names.length > 1 ? ' +' + (names.length - 1) : '';
+      const fit = text => {
+        const w = laneWidth(text);
+        const right = x + 7 + w <= W - 2;
+        const span = right ? [x - 5, x + 7 + w] : [x - 7 - w, x + 5];
+        if (span[0] < 0) return null;
+        const row = ends.findIndex(e => e + 6 <= span[0]);
+        return row < 0 ? null : { row, span, anchor: right ? 'start' : 'end' };
+      };
+      let text = base + more;
+      let at = fit(text);
+      if (!at && base.length > 13) { text = base.slice(0, 12).trimEnd() + '…' + more; at = fit(text); }
+      if (at) {
+        ends[at.row] = at.span[1];
+        for (const nm of list.map(mk => mk.pack).filter(Boolean)) named.add(nm);
+        items.push({ i, x, text, anchor: at.anchor, row: at.row, kind });
+        continue;
+      }
+      // No room for a label: the dot alone, in a row where it touches no label, else on the plot's top edge.
+      const row = ends.findIndex(e => e + 3 <= x - 5);
+      if (row >= 0) ends[row] = Math.max(ends[row], x + 5);
+      items.push({ i, x, text: '', anchor: 'start', row: row >= 0 ? row : null, kind });
+    }
+    const used = items.reduce((m, it) => Math.max(m, it.row === null ? 1 : it.row + 1), 0);
+    return { items, h: items.length ? used * LANE_ROW + 4 : 0 };
   }
 
   const sumKnown = vals => (vals.some(known) ? vals.reduce((a, v) => a + (known(v) ? v : 0), 0) : null);
@@ -195,23 +264,28 @@
   /**
    * cashChart(spec) -> HTML string:
    *   id, title, mode 'balance'|'flows'|'trends', months ['YYYY-MM'], todayMonth, planStart,
-   *   lines [{ key, name, role 'combined'|'account'|'ghost', cls?, points: [{ month, cents|null, status, note? }] }]
+   *   lines [{ key, name, role 'combined'|'account'|'ghost'|'compare', cls?, points: [{ month, cents|null, status, note? }] }]
    *     (role 'ghost': the baseline plan, muted and dashed behind the other lines; name defaults to
-   *     'Baseline plan'; null points draw nothing; never the summary's line or its low point),
+   *     'Baseline plan'; role 'compare': a what-if, dash-dot in its own colour (series-compare) with
+   *     its end value; neither is the summary's line or has its low point; null points draw nothing),
    *   columns { in: [{ key, name, cls?, values }], out: [...] (positive = money leaving), status?: [], notes?: [] },
    *   net { key, name, values } | null,
    *   trends { series: [{ key, name, cls?, unit?: 'perMonth'|'atMonthEnd', values: [cents|null per month] }], ma: 0|3|6, trend: bool }
    *     (unit 'atMonthEnd': a month-end level such as a balance; the summary says where it ended
    *     instead of what it averaged; anything else is a monthly amount),
-   *   markers [{ month, label, cents?, kind 'oneTime'|'monthly' }] (presentation only, any mode),
+   *   markers [{ month, label, title?, cents?, kind 'oneTime'|'monthly'|'goal', pack? }] (presentation
+   *     only, any mode; label: the short text drawn; title: the full name for the readout and table;
+   *     pack: a shared name used as the label when every marker in a month has it),
    *   hidden [keys], format, caption, tableCaption, axisTitle (the y-axis title, when not the mode's own),
-   *   controls (trusted HTML placed on the title row, e.g. the mode switch), titleHidden.
+   *   controls (trusted HTML placed on the title row, e.g. the mode switch), titleHidden,
+   *   captionFold (when set, the caption is folded away under a summary with this text).
    */
   function cashChart(spec = {}) {
     const {
       id, title = '', mode: modeIn = 'balance', months: monthsIn = [], todayMonth = null, planStart = null,
       lines = [], columns: columnsIn, net = null, hidden = [], format: formatIn, caption = '', tableCaption,
       controls = '', titleHidden = false, trends: trendsIn = null, markers: markersIn = [], axisTitle: axisTitleIn = '',
+      captionFold = '',
     } = spec || {};
     const columns = columnsIn || {};
     const mode = modeIn === 'flows' ? 'flows' : modeIn === 'trends' ? 'trends' : 'balance';
@@ -235,24 +309,31 @@
     if (!n) return emptyFigure('No months to show yet.');
 
     const g = geometry();
-    const plotW = g.W - g.padL - g.padR, plotH = g.H - g.padT - g.padB;
+    const plotW = g.W - g.padL - g.padR;
     const band = plotW / n;
     const xc = i => g.padL + band * (i + 0.5);
+    // Markers: their lane sits above the plot, so the plot moves down by its height.
+    const mks = prepareMarkers(markersIn, months);
+    const lane = layoutLane(mks, xc, g.W, 2);
+    g.padT += lane.h;
+    g.H += lane.h;
+    const plotH = g.H - g.padT - g.padB;
     const plot0 = g.padT, plot1 = g.H - g.padB;
 
     // ---- series and the value domain (hidden series included: hiding never rescales)
-    let ls = [], real = [], ghosts = [], cin = [], cout = [], netVals = null, monthStatus = [], inTot = [], outTot = [];
+    let ls = [], real = [], ghosts = [], compares = [], cin = [], cout = [], netVals = null, monthStatus = [], inTot = [], outTot = [];
     let ts = [], maN = 0;
     let lo = 0, hi = 0, anyKnown = false, negReal = false;
     let primary = null, low = null;
     const widen = v => { if (known(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } };
     if (mode === 'balance') {
       ls = prepareLines(lines, months, isPlan);
-      real = ls.filter(s => s.role !== 'ghost');
+      real = ls.filter(s => !isAside(s.role));
       ghosts = ls.filter(s => s.role === 'ghost');
-      // The baseline (ghost) widens the scale to its own values only: the zero line's emphasis, the
-      // low point and the summary all follow the real lines.
-      for (const s of ls) for (const p of s.pts) if (known(p.cents)) { anyKnown = true; widen(p.cents); if (s.role !== 'ghost' && p.cents < 0) negReal = true; }
+      compares = ls.filter(s => s.role === 'compare');
+      // The baseline (ghost) and a what-if widen the scale to their own values only: the zero line's
+      // emphasis, the low point and the summary all follow the real lines.
+      for (const s of ls) for (const p of s.pts) if (known(p.cents)) { anyKnown = true; widen(p.cents); if (!isAside(s.role) && p.cents < 0) negReal = true; }
       primary = ls.find(s => s.role === 'combined') || real[0] || null;
       if (primary) {
         primary.pts.forEach((p, i) => { if (known(p.cents) && (!low || p.cents < low.cents)) low = { i, cents: p.cents }; });
@@ -326,8 +407,8 @@
 
     // ---- background: plan band, grid, zero line, month labels
     const planIdx = planStart ? months.findIndex(m => m >= planStart) : -1;
-    const mks = prepareMarkers(markersIn, months);
-    const markerText = mk => mk.label + (mk.cents !== null ? ' ' + signed(mk.cents) : '') + (mk.kind === 'monthly' ? ' (monthly)' : ' (one-time)');
+    const markerText = mk => (mk.kind === 'goal' ? 'Goal reached: ' + mk.title + (mk.cents !== null ? ' (' + money(mk.cents) + ')' : '')
+      : mk.title + (mk.cents !== null ? ' ' + signed(mk.cents) : '') + (mk.kind === 'monthly' ? ' (monthly)' : ' (one-time)'));
     // Slope of a trend in whole dollars a month: '+$42/mo'.
     const slopeText = v => signed(Math.round(v / 100) * 100 || 0) + '/mo';
     const planX = planIdx >= 0 ? g.padL + band * planIdx : null;
@@ -390,6 +471,15 @@
           // Thin, muted and dashed; no dots, no end label, and nothing where the baseline has no value.
           return { s, html: runsOf(s.pts.map(p => p.cents), () => 'ghost').map(r => `<path class="line cc-ghost-line ${esc(s.cls)}" d="${pathD(r.idx, i => s.pts[i].cents)}"/>`).join('') };
         }
+        if (s.role === 'compare') {
+          // A what-if: dash-dot in its own colour, with its end value and a hover dot.
+          const html = runsOf(s.pts.map(p => p.cents), () => 'compare').map(r => `<path class="line cc-compare-line ${esc(s.cls)}" d="${pathD(r.idx, i => s.pts[i].cents)}"/>`).join('');
+          const lastIdx = s.pts.map((p, i) => (known(p.cents) ? i : -1)).filter(i => i >= 0).pop();
+          if (lastIdx !== undefined) ends.push({ s, i: lastIdx, v: s.pts[lastIdx].cents, ly: y(s.pts[lastIdx].cents) });
+          dots[s.key] = s.pts.map(p => (known(p.cents) ? Math.round(y(p.cents) * 10) / 10 : null));
+          hoverDots += hoverDot(s);
+          return { s, html };
+        }
         const segs = [];
         let prev = -1;
         s.pts.forEach((p, i) => {
@@ -433,10 +523,11 @@
         return { s, html: paths + lonely + lowMark };
       });
       const endHtml = endLabels(ends);
-      // The baseline is drawn first (behind everything) and the combined line last, on top.
-      const rank = s => (s.role === 'ghost' ? 0 : s === primary ? 2 : 1);
+      // The baseline is drawn first (behind everything), a what-if over the accounts and the combined line last, on top.
+      const rank = s => (s.role === 'ghost' ? 0 : s === primary ? 3 : s.role === 'compare' ? 2 : 1);
       const order = body.slice().sort((a, b) => rank(a.s) - rank(b.s));
-      marks = order.map(b => groupOpen(b.s, b.s.role === 'ghost' ? ' cc-ghost' : ' cc-line-series') + b.html + (endHtml.get(b.s) || '') + '</g>').join('');
+      const extra = s => (s.role === 'ghost' ? ' cc-ghost' : s.role === 'compare' ? ' cc-compare' : ' cc-line-series');
+      marks = order.map(b => groupOpen(b.s, extra(b.s)) + b.html + (endHtml.get(b.s) || '') + '</g>').join('');
     } else if (mode === 'trends') {
       const ends = [];
       const kindOf = (a, b) => (monthStatus[a] === 'projected' || monthStatus[b] === 'projected' ? 'projected' : 'actual');
@@ -507,9 +598,9 @@
       }
     }
 
-    // ---- planned changes on the bottom axis line (presentation only): a triangle for one-time, a
-    // tick for a monthly change with one faint band from the first monthly start to the right edge.
-    // Several in one month share one glyph with a count above it.
+    // ---- markers (presentation only): a dot and a short label in the lane above the plot, a faint
+    // rule down to the axis; monthly changes also get one faint band on the bottom edge from the
+    // first one to the right edge. Several in one month share one dot (the label says how many).
     let changeSvg = '';
     if (mks.size) {
       const firstMonthly = [...mks].find(([, list]) => list.some(mk => mk.kind === 'monthly'));
@@ -517,14 +608,21 @@
         const bx = xc(firstMonthly[0]);
         changeSvg += `<rect class="cc-change-band" x="${f1(bx)}" y="${f1(plot1 - 5)}" width="${f1(g.W - g.padR - bx)}" height="5"/>`;
       }
-      for (const [i, list] of mks) {
-        const x = xc(i);
-        const once = list.some(mk => mk.kind === 'oneTime');
-        const glyph = once
-          ? `<path class="cc-change-once" d="M${f1(x - 4.5)} ${f1(plot1)}L${f1(x)} ${f1(plot1 - 7)}L${f1(x + 4.5)} ${f1(plot1)}z"/>`
-          : `<line class="cc-change-monthly" x1="${f1(x)}" x2="${f1(x)}" y1="${f1(plot1)}" y2="${f1(plot1 - 10)}"/>`;
-        const count = list.length > 1 ? `<text class="cc-change-count" x="${f1(x)}" y="${f1(plot1 - (once ? 10 : 13))}" text-anchor="middle">${list.length}</text>` : '';
-        changeSvg += `<g class="cc-change ${once ? 'is-once' : 'is-monthly'}" data-cc-change="${esc(months[i])}">${glyph}${count}</g>`;
+      for (const it of lane.items) {
+        const list = mks.get(it.i);
+        const ly = 4 + (it.row === null ? 0 : it.row) * LANE_ROW + 10; // the label's baseline
+        const gy = it.row === null ? plot0 : ly - 4; // the dot's centre (on the plot's top edge when its lane is full)
+        const x = it.x;
+        const glyph = it.kind === 'goal'
+          ? `<path class="cc-ann-glyph" d="M${f1(x)} ${f1(gy - 5)}L${f1(x + 5)} ${f1(gy)}L${f1(x)} ${f1(gy + 5)}L${f1(x - 5)} ${f1(gy)}z"/>`
+          : it.kind === 'monthly'
+            ? `<rect class="cc-ann-glyph" x="${f1(x - 4)}" y="${f1(gy - 4)}" width="8" height="8" rx="2"/>`
+            : `<circle class="cc-ann-glyph" cx="${f1(x)}" cy="${f1(gy)}" r="4"/>`;
+        const rule = `<line class="cc-ann-rule" x1="${f1(x)}" x2="${f1(x)}" y1="${f1(gy + 5)}" y2="${f1(plot1)}"/>`;
+        const text = it.text ? `<text class="cc-ann-label" x="${f1(it.anchor === 'start' ? x + 7 : x - 7)}" y="${f1(ly)}" text-anchor="${it.anchor}">${esc(it.text)}</text>` : '';
+        const isChange = list.some(mk => mk.kind !== 'goal');
+        const cls = 'cc-ann ' + (isChange ? 'cc-change ' : '') + 'is-' + it.kind;
+        changeSvg += `<g class="${cls}" data-cc-change="${esc(months[it.i])}">${rule}${glyph}${text}</g>`;
       }
     }
 
@@ -544,12 +642,15 @@
       const plan = monthStatus[i] === 'projected' || isPlan(m);
       if (mode === 'balance') {
         for (const s of ls) {
-          if (s.role === 'ghost') { groups[s.key] = 'ghost'; continue; }
+          if (isAside(s.role)) { groups[s.key] = s.role; continue; }
           groups[s.key] = 'line';
           const p = s.pts[i];
           rows.push({ k: s.key, n: s.name, v: p.status === 'gap' && !known(p.cents) ? 'No data' : money(p.cents), c: 'key-line ' + s.cls, s: statusText(p.status) + (p.illustrative ? ' (illustrative)' : ''), note: p.note });
-          // The baseline plan sits right under the combined row, in plan months only.
-          if (s === primary && plan) for (const gs of ghosts) if (known(gs.pts[i].cents)) rows.push({ k: gs.key, g: 'ghost', n: gs.name, v: money(gs.pts[i].cents), c: 'key-line ' + gs.cls });
+          // The baseline plan and the what-if sit right under the combined row, in plan months only.
+          if (s === primary && plan) {
+            for (const gs of ghosts) if (known(gs.pts[i].cents)) rows.push({ k: gs.key, g: 'ghost', n: gs.name, v: money(gs.pts[i].cents), c: 'key-line ' + gs.cls });
+            for (const cs of compares) if (known(cs.pts[i].cents)) rows.push({ k: cs.key, g: 'compare', n: cs.name, v: money(cs.pts[i].cents), c: 'key-line ' + cs.cls });
+          }
         }
       } else if (mode === 'trends') {
         for (const s of ts) {
@@ -574,7 +675,7 @@
         const note = Array.isArray(columns.notes) ? columns.notes[i] : null;
         if (note) notes.push(String(note));
       }
-      const planned = (mks.get(i) || []).map(mk => 'Planned: ' + markerText(mk));
+      const planned = (mks.get(i) || []).map(mk => (mk.kind === 'goal' ? '' : 'Planned: ') + markerText(mk));
       return {
         x: Math.round(xc(i) * 10) / 10,
         t: fmt.monthLong(m),
@@ -602,6 +703,10 @@
         if (gaps) summary += ` ${gaps} month${gaps === 1 ? '' : 's'} with a gap in the data.`;
         const assumed = primary.pts.filter(p => p.status === 'assumed').length;
         if (assumed) summary += ` ${assumed} month${assumed === 1 ? ' is' : 's are'} assumed: worked out across days your data does not cover (dotted).`;
+        for (const cs of compares) {
+          const last = cs.pts.map((p, i) => (known(p.cents) ? i : -1)).filter(i => i >= 0).pop();
+          if (last !== undefined) summary += ` ${cs.name}, for comparison: ${money(cs.pts[last].cents)} in ${fmt.month(months[last])}.`;
+        }
       }
     } else if (mode === 'flows') {
       const avg = (vals, pick) => {
@@ -631,8 +736,10 @@
       }).filter(Boolean);
       summary = parts.length ? 'In actual months, ' + parts.join('; ') + '.' : '';
     }
-    const markerCount = [...mks.values()].reduce((a, list) => a + list.length, 0);
+    const markerCount = [...mks.values()].reduce((a, list) => a + list.filter(mk => mk.kind !== 'goal').length, 0);
+    const goalCount = [...mks.values()].reduce((a, list) => a + list.filter(mk => mk.kind === 'goal').length, 0);
     if (markerCount) summary += ` ${markerCount} planned change${markerCount === 1 ? ' is' : 's are'} marked on the timeline.`;
+    if (goalCount) summary += ` ${goalCount} savings goal${goalCount === 1 ? ' is' : 's are'} reached in these months.`;
     const range = `${fmt.month(months[0])} to ${fmt.month(months[n - 1])}`;
     const ariaLabel = `${title ? title + '. ' : ''}${axisTitle}, ${range}.${planX !== null ? ' Months from ' + fmt.month(months[planIdx]) + ' are the plan.' : ''} ${summary} Use the left and right arrow keys to read each month. A table follows.`;
 
@@ -641,8 +748,8 @@
     const planKeys = '<span class="cc-key-item"><span class="key key-line cc-key-solid" aria-hidden="true"></span>Actual</span><span class="cc-key-item"><span class="key key-line key-dashed" aria-hidden="true"></span>Plan (projected)</span>';
     let chips = '', keys = [];
     if (mode === 'balance') {
-      // The baseline's chip comes after the real lines.
-      chips = [...real, ...ghosts].map(s => chip(s.key, s.name, 'key-line ' + esc(s.cls))).join('');
+      // The baseline's and the what-if's chips come after the real lines.
+      chips = [...real, ...ghosts, ...compares].map(s => chip(s.key, s.name, 'key-line ' + esc(s.cls))).join('');
       const has = st => real.some(s => s.pts.some(p => p.status === st));
       if (has('projected')) keys.push(planKeys);
       if (has('assumed')) keys.push('<span class="cc-key-item"><span class="key key-line cc-key-dotted" aria-hidden="true"></span>Assumed (days without data)</span>');
@@ -661,8 +768,9 @@
       if (monthStatus.some(s => s === 'projected')) keys.push('<span class="cc-key-item"><span class="key key-swatch cc-key-solid-swatch" aria-hidden="true"></span>Actual</span><span class="cc-key-item"><span class="key key-swatch is-hatched" aria-hidden="true"></span>Plan (striped)</span>');
     }
     const kinds = new Set([...mks.values()].flat().map(mk => mk.kind));
-    if (kinds.has('oneTime')) keys.push('<span class="cc-key-item"><span class="key cc-key-once" aria-hidden="true"></span>One-time change</span>');
-    if (kinds.has('monthly')) keys.push('<span class="cc-key-item"><span class="key cc-key-monthly" aria-hidden="true"></span>Monthly change</span>');
+    if (kinds.has('oneTime')) keys.push('<span class="cc-key-item cc-key-marker"><span class="key cc-key-once" aria-hidden="true"></span>One-time</span>');
+    if (kinds.has('monthly')) keys.push('<span class="cc-key-item cc-key-marker"><span class="key cc-key-monthly" aria-hidden="true"></span>Monthly from</span>');
+    if (kinds.has('goal')) keys.push('<span class="cc-key-item cc-key-marker"><span class="key cc-key-goal" aria-hidden="true"></span>Goal reached</span>');
     const keysHtml = `<div class="cc-axisrow"><p class="cc-axis-title">${esc(axisTitle)}</p>${keys.length ? `<p class="cc-keys">${keys.join('')}</p>` : ''}</div>`;
 
     // ---- table twin
@@ -670,13 +778,13 @@
     let columnsT, rowsT;
     if (mode === 'balance') {
       const anyNote = real.some(s => s.pts.some(p => p.note));
-      const cols = [...real, ...ghosts];
+      const cols = [...real, ...ghosts, ...compares];
       columnsT = [{ key: 'm', label: 'Month' }, { key: 'st', label: 'Status' }, ...cols.map((s, si) => ({ key: 's' + si, label: s.name, align: 'right' })), ...(anyNote ? [{ key: 'note', label: 'Note' }] : [])];
       rowsT = months.map((m, i) => {
         const r = { m: fmt.month(m), st: statusOfRow(i), note: [...new Set(real.map(s => s.pts[i].note).filter(Boolean))].join('; ') };
         cols.forEach((s, si) => {
           const p = s.pts[i];
-          if (s.role === 'ghost') { r['s' + si] = known(p.cents) ? money(p.cents) : '—'; return; }
+          if (isAside(s.role)) { r['s' + si] = known(p.cents) ? money(p.cents) : '—'; return; }
           const v = p.status === 'gap' && !known(p.cents) ? 'No data' : money(p.cents);
           const tags = [];
           if (p.status && p.status !== monthStatus[i]) tags.push(STATUS[p.status].toLowerCase());
@@ -721,6 +829,7 @@
       rowsT.forEach((r, i) => { r.pc = (mks.get(i) || []).map(markerText).join('; '); });
     }
     const tableHtml = UI.c.table({ caption: tableCaption || (title ? title + ', by month' : 'By month'), columns: columnsT, rows: rowsT, cls: 'cc-table' });
+    const tableTwin = `<details class="chart-table cc-table-twin" id="${esc(figId)}-table"><summary>Show as a table</summary>${tableHtml}</details>`;
 
     // The model rides in an inert JSON block (never executed; '<' escaped so it cannot close the tag).
     const modelJson = JSON.stringify(model, (k, v) => (v === '' && k !== 'v' ? undefined : v))
@@ -732,9 +841,10 @@
         ${svg}
         <div class="cc-tip" hidden></div>
       </div>
-      ${caption ? `<p class="cc-caption">${esc(caption)}</p>` : ''}
       <p class="sr-only" aria-live="polite" data-cc-live></p>
-      <details class="chart-table cc-table-twin" id="${esc(figId)}-table"><summary>Show as a table</summary>${tableHtml}</details>
+      ${caption && captionFold
+    ? `<div class="cc-foot"><details class="cc-about" id="${esc(figId)}-about"><summary>${esc(captionFold)}</summary><p class="cc-caption">${esc(caption)}</p></details>${tableTwin}</div>`
+    : `${caption ? `<p class="cc-caption">${esc(caption)}</p>` : ''}${tableTwin}`}
     </figure>`;
   }
 

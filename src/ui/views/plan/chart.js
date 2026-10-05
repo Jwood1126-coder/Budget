@@ -1,11 +1,14 @@
 'use strict';
 /*
  * Plan (#/overview), 1. the chart card: one chart in three modes on one timeline (Balance: the
- * combined cash and each account at month end; Flows: money in and out each month; Trends: the
- * monthly series and month-end balances picked, with an average and a trend line, the title,
- * the y-axis, the caption and the spoken summary saying which kind it shows), Past and Ahead,
- * Export CSV. Shared helpers come from
- * BudgetUI._plan (plan/common.js).
+ * combined cash, each account and the investments at month end; Flows: money in and out each
+ * month; Trends: the monthly series and month-end balances picked, with an average and a trend
+ * line, the title, the y-axis, the caption and the spoken summary saying which kind it shows),
+ * Past and Ahead, Export CSV. Markers above the plot: accepted planned changes (a pack's items by
+ * the pack's name), what Budget adds after the plan starts, and the month each savings goal is
+ * reached. Balance mode has Compare: a what-if (the changes tagged with that name, accepted or
+ * not) drawn as its own line, with how far it ends from the plan; the choice is the route's
+ * ?compare=, never saved. Shared helpers come from BudgetUI._plan (plan/common.js).
  */
 (function (root) {
   const UI = root.BudgetUI;
@@ -14,7 +17,7 @@
   const fmt = UI.fmt;
   const c = UI.c;
   const P = UI._plan;
-  const { DIAL_CLS, whole, exact } = P;
+  const { DIAL_CLS, whole, exact, isCents, packOf, shortLabel } = P;
 
   const MODES = [{ value: 'balance', label: 'Balance' }, { value: 'flows', label: 'Flows' }, { value: 'trends', label: 'Trends' }];
   const PAST = [{ value: 6, label: '6 mo' }, { value: 12, label: '12 mo' }, { value: 'all', label: 'All' }];
@@ -88,9 +91,7 @@
       id: 'plan-chart', mode, months, todayMonth: tl.todayMonth, planStart: tl.planStart,
       hidden: mode === 'trends' ? [] : hiddenOf(ctx, tl),
       title: TITLE[mode], titleHidden: UI.chart.isNarrow(), tableCaption: TITLE[mode],
-      // Accepted planned changes, marked on the bottom edge in every mode (from the plan start when earlier).
-      markers: tl.changes.list.filter(ch => ch.status === 'applied' && !ch.readOnly)
-        .map(ch => ({ month: ch.startMonth < tl.planStart ? tl.planStart : ch.startMonth, label: ch.label, cents: ch.cents, kind: ch.kind })),
+      markers: markersOf(tl),
     };
     if (mode === 'balance') {
       const b = tl.balances;
@@ -107,11 +108,14 @@
       for (const a of b.accounts) spec.lines.push({ key: 'acct-' + a.id, name: a.name, role: 'account', points: points(a.points, a) });
       // Investments: their own line, never part of combined cash (growth only at a rate the household entered: illustrative).
       if (b.investments && b.investments.points.some(p => p.cents !== null)) {
-        spec.lines.push({ key: 'balance-investments', name: 'Investments', role: 'account', points: b.investments.points.slice(from).map(p => ({ month: p.month, cents: p.cents, status: p.status === 'illustrative' ? 'projected' : p.status, illustrative: p.status === 'illustrative', note: p.status === 'illustrative' ? b.investments.illustrative : '' })) });
+        spec.lines.push({ key: 'balance-investments', name: 'Investments', role: 'account', cls: 'series-4', points: b.investments.points.slice(from).map(p => ({ month: p.month, cents: p.cents, status: p.status === 'illustrative' ? 'projected' : p.status, illustrative: p.status === 'illustrative', note: p.status === 'illustrative' ? b.investments.illustrative : '' })) });
       }
       // The plan at baseline (no dial moved, no planned change): a faint line to compare with.
       const ghost = tl.changed && b.combined && Array.isArray(b.combined.baselinePoints) ? b.combined.baselinePoints : null;
       if (ghost) spec.lines.push({ key: 'ghost', name: 'Baseline plan', role: 'ghost', points: ghost.slice(from).map((cents, i) => ({ month: months[i], cents, status: cents === null ? null : 'projected' })) });
+      // A what-if chosen in Compare: the plan with that what-if's changes, accepted or not.
+      const cmp = tl.compare && Array.isArray(tl.compare.points) ? tl.compare : null;
+      if (cmp) spec.lines.push({ key: 'compare', name: cmp.scenario, role: 'compare', points: cmp.points.slice(from).map(p => ({ month: p.month, cents: p.cents, status: p.cents === null ? null : 'projected' })) });
     } else if (mode === 'flows') {
       const known = (...vals) => (vals.some(v => v === null || v === undefined) ? null : vals.reduce((s, v) => s + v, 0));
       const cin = tl.people.map(p => ({ key: 'in-' + p.id, name: p.name + ' → joint', cls: DIAL_CLS[p.id] || 'series-muted', values: rows.map(m => m.in[p.id]) }));
@@ -146,6 +150,45 @@
       spec.axisTitle = TREND_AXIS[trendUnits(tl)];
     }
     return spec;
+  }
+
+  /**
+   * What the chart marks above the plot: the accepted planned changes with an amount (from the
+   * plan start when earlier), what Budget adds once the plan is under way (bills that start or
+   * end later, goals spent), and the month each savings goal is reached.
+   */
+  function markersOf(tl) {
+    const list = tl.changes.list
+      .filter(ch => ch.status === 'applied' && (!ch.readOnly || ch.startMonth > tl.planStart))
+      .map(ch => {
+        const pack = packOf(ch);
+        return { month: ch.startMonth < tl.planStart ? tl.planStart : ch.startMonth, label: shortLabel(ch.label), title: ch.label, cents: ch.cents, kind: ch.kind, pack: pack ? pack.name : '' };
+      });
+    for (const mk of Array.isArray(tl.markers) ? tl.markers : []) {
+      if (mk.kind === 'goal') list.push({ month: mk.month, label: shortLabel(String(mk.label).replace(/ reached$/, '')) + ' ✓', title: String(mk.label).replace(/ reached$/, ''), cents: mk.cents, kind: 'goal' });
+    }
+    return list;
+  }
+
+  /** The Compare control (Balance mode, when the plan has what-ifs) and how far the what-if ends from the plan. */
+  function compareHtml(ctx, tl) {
+    const names = (tl.scenarios || []).map(x => x.name);
+    if (!names.length) return '';
+    const cur = tl.compare ? tl.compare.scenario : '';
+    const opts = [['', 'Nothing']].concat(names.map(n => [n, n]));
+    let diff = '';
+    const cmp = tl.compare;
+    const main = tl.balances.combined ? tl.balances.combined.points : [];
+    if (cmp && Array.isArray(cmp.points)) {
+      const last = cmp.points.map((p, i) => (isCents(p.cents) && main[i] && isCents(main[i].cents) ? i : -1)).filter(i => i >= 0).pop();
+      if (last !== undefined) {
+        const d = cmp.points[last].cents - main[last].cents;
+        const by = fmt.month(cmp.points[last].month);
+        diff = `<span class="plan-compare-diff${d < 0 ? ' is-down' : d > 0 ? ' is-up' : ''}" id="plan-compare-diff">${d === 0 ? esc('Same as this plan by ' + by) : `<strong>${esc((d > 0 ? '+' : '') + whole(d))}</strong> ${esc('by ' + by)}`}</span>`;
+      }
+      if (cmp.unset && cmp.unset.length) diff += `<span class="plan-compare-unset" id="plan-compare-unset">${esc(cmp.unset.length + (cmp.unset.length === 1 ? ' amount' : ' amounts') + ' not set')}</span>`;
+    }
+    return `<span class="plan-compare${cur ? ' is-on' : ''}"><label for="plan-compare">Compare</label><select id="plan-compare" data-action="plan:compare">${opts.map(([v, l]) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>${diff}</span>`;
   }
 
   /** 'Oct 1–2, 2026', 'Sep 29 – Oct 2, 2026', 'Dec 30, 2025 – Jan 2, 2026', or one day. */
@@ -244,19 +287,16 @@
     const none = tl.balances.mode === 'none';
     const options = none ? MODES.filter(m => m.value !== 'balance') : MODES;
     const prompt = none ? `<a class="plan-prompt" id="plan-prompt" href="#plan-balances" data-action="plan:goto-balances">Enter today’s balances below to see where the money is heading</a>` : '';
-    const controls = `${prompt}${c.segmented({ label: 'Show', name: 'plan-mode', options, value: mode, action: 'plan:mode', hideLabel: true })}${mode === 'trends' ? trendPicker(tl) : ''}`;
+    const controls = `${prompt}${c.segmented({ label: 'Show', name: 'plan-mode', options, value: mode, action: 'plan:mode', hideLabel: true })}${mode === 'balance' ? compareHtml(ctx, tl) : ''}${mode === 'trends' ? trendPicker(tl) : ''}`;
     const spec = chartSpec(ctx, tl);
-    const chart = UI.chart.cashChart(Object.assign(spec, { caption: captionOf(tl, mode, spec), controls }));
+    const chart = UI.chart.cashChart(Object.assign(spec, { caption: captionOf(tl, mode, spec), captionFold: 'About this chart', controls }));
     const ranges = `<div class="plan-ranges">
         ${c.segmented({ label: 'Past', name: 'plan-past', options: PAST, value: tl.settings.past, action: 'plan:past' })}
         ${c.segmented({ label: 'Ahead', name: 'plan-horizon', options: AHEAD, value: tl.settings.horizon, action: 'plan:horizon' })}
         ${c.button('Export CSV', { action: 'plan:export-csv', id: 'plan-export-csv', cls: 'btn-small plan-export' })}
       </div>`;
-    const b = tl.balances;
-    const low = b.runsOut
-      ? c.notice({ tone: 'warn', title: `On this plan the combined cash goes below $0 in ${fmt.monthLong(b.runsOut)}${b.lowest ? ` (lowest ${whole(b.lowest.cents)})` : ''}.` })
-      : '';
-    return `<section class="card plan-chart-card" id="plan-chart-card" data-mode="${esc(mode)}" aria-label="Plan chart">${chart}${ranges}${low}</section>`;
+    // Going below $0 is the Lowest point tile above the chart (plan/tiles.js).
+    return `<section class="card plan-chart-card" id="plan-chart-card" data-mode="${esc(mode)}" aria-label="Plan chart">${chart}${ranges}</section>`;
   }
 
   /** The timeline cut to the months the chart shows (for the CSV: one row per month shown). */

@@ -32,6 +32,7 @@
     "ui/router.js",
     "ui/shared.js",
     "ui/views/plan/common.js",
+    "ui/views/plan/tiles.js",
     "ui/views/plan/chart.js",
     "ui/views/plan/balances.js",
     "ui/views/plan/dials.js",
@@ -45,7 +46,6 @@
     "ui/views/budget/goals.js",
     "ui/views/budget/setup.js",
     "ui/views/budget.js",
-    "ui/views/forecast.js",
     "ui/views/review.js",
     "ui/views/data.js",
     "ui/app.js"
@@ -56,7 +56,6 @@
     "styles/overview.css",
     "styles/spending.css",
     "styles/budget.css",
-    "styles/forecast.css",
     "styles/review.css",
     "styles/data.css"
   ]

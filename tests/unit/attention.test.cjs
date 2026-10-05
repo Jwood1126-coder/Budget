@@ -339,6 +339,7 @@ test('forecast: negative months and scenario amounts not entered come from the p
   assert.equal(baby.severity, 'info');
   assert.equal(baby.title, '“Baby arrives (May 2027)” has 3 amounts not entered');
   assert.match(baby.detail, /Birth and hospital costs: amount not entered/);
+  assert.equal(baby.route, '#/overview?compare=Baby%20arrives%20(May%202027)', 'Forecast is retired: the what-if opens in the Plan chart’s Compare');
   assert.ok(item(items, 'scn-missing-home-projects-scenario'));
 });
 

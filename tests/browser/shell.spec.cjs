@@ -1,6 +1,6 @@
 'use strict';
 // Shell and navigation checks in a real browser (the Plan screen has its own spec: plan.spec.cjs).
-const VIEWS = ['overview', 'spending', 'budget', 'forecast', 'review', 'data'];
+const VIEWS = ['overview', 'spending', 'budget', 'review', 'data'];
 
 const { noHorizontalScroll } = require('./helpers.cjs');
 
@@ -25,7 +25,7 @@ module.exports = [
     },
   },
   {
-    name: 'phone tab bar: Plan, Transactions, More and Data; More opens the other three views',
+    name: 'phone tab bar: Plan, Transactions, More and Data; More opens the other two views',
     viewport: 'phone',
     async run(t) {
       await t.open('#/overview');
@@ -40,7 +40,7 @@ module.exports = [
       t.assert.ok(!(await t.page.isVisible('.nav-desktop-only')), 'the desktop-only group is hidden on phones');
       await t.page.click('.nav-more-menu > summary');
       const more = await t.page.$$eval('.nav-more-list a', as => as.map(a => ({ view: a.dataset.nav, visible: a.getBoundingClientRect().height > 0, right: a.getBoundingClientRect().right })));
-      t.assert.deepEqual(more.map(m => m.view), ['spending', 'budget', 'forecast']);
+      t.assert.deepEqual(more.map(m => m.view), ['spending', 'budget'], 'Forecast is retired: its what-ifs are the Plan chart’s Compare');
       t.assert.ok(more.every(m => m.visible && m.right <= vw + 1), 'More menu items visible and inside the viewport');
       await t.shot('nav-more');
       await t.page.click('.nav-more-list a[data-nav="budget"]');
@@ -55,16 +55,16 @@ module.exports = [
       await t.open('#/overview');
       await t.nav('budget');
       await t.page.waitForFunction(() => location.hash.startsWith('#/budget'));
-      await t.nav('forecast');
-      await t.page.waitForFunction(() => location.hash.startsWith('#/forecast'));
+      await t.nav('spending');
+      await t.page.waitForFunction(() => location.hash.startsWith('#/spending'));
       await t.page.goBack();
       await t.page.waitForFunction(() => location.hash.startsWith('#/budget'));
       t.assert.equal(await t.page.$eval('.nav-desktop-only a[data-nav="budget"]', a => a.getAttribute('aria-current')), 'page');
       await t.page.goForward();
-      await t.page.waitForFunction(() => location.hash.startsWith('#/forecast'));
+      await t.page.waitForFunction(() => location.hash.startsWith('#/spending'));
       await t.page.reload();
       await t.page.waitForSelector('#page-title');
-      t.assert.ok((await t.page.evaluate(() => location.hash)).startsWith('#/forecast'));
+      t.assert.ok((await t.page.evaluate(() => location.hash)).startsWith('#/spending'));
     },
   },
   {

@@ -30,6 +30,14 @@
 .key-line.series-ghost, .cc-chip .key-line.series-ghost, .cc-tip-name .key-line.series-ghost { border-top: 2px dashed var(--text-3); opacity: .6; }
 .cash-chart .line.cc-ghost-line { stroke: var(--text-3); stroke-opacity: .6; stroke-width: 1.25; stroke-dasharray: 4 4; }
 
+/* A what-if (role 'compare', the Plan's Compare): dash-dot in amber (--series-6), over the account
+   lines and under the combined line, with its own end value and legend chip. */
+.key-line.series-compare, .cc-chip .key-line.series-compare, .cc-tip-name .key-line.series-compare { border-top: 3px dashed var(--series-6); }
+.cash-chart .line.cc-compare-line { stroke: var(--series-6); stroke-width: 2.5; stroke-dasharray: 9 4 2 4; stroke-linecap: round; }
+.chart .end-dot.series-compare { fill: var(--series-6); }
+.cc-tip-row.is-compare .cc-tip-name { color: var(--text-2); }
+.cc-tip-row.is-compare .cc-tip-value { color: var(--text); font-weight: 650; }
+
 /* Trends: moving average (thick, translucent, same hue) and least-squares trend (thin; dotted across the plan). */
 .cash-chart .line.cc-ma-line { stroke-width: 4.5; stroke-opacity: .55; }
 .cash-chart .line.cc-trend-line { stroke-width: 1.25; }
@@ -38,13 +46,18 @@
 .cash-chart .key-line.cc-key-ma { border-top-width: 5px; opacity: .55; }
 .cash-chart .key-line.cc-key-trend { border-top-width: 1.5px; }
 
-/* Planned changes on the bottom axis line: triangle (one-time), tick + faint band (monthly from). */
-.cash-chart .cc-change-once { fill: var(--text-2); stroke: var(--surface); stroke-width: 1.5; stroke-linejoin: round; paint-order: stroke; }
-.cash-chart .cc-change-monthly { stroke: var(--text-2); stroke-width: 2; stroke-linecap: round; }
-.cash-chart .cc-change-band { fill: var(--text-2); fill-opacity: .12; }
-.cash-chart .cc-change-count { fill: var(--text-2); font-size: 10px; font-weight: 700; font-family: var(--font); font-variant-numeric: tabular-nums; paint-order: stroke; stroke: var(--surface); stroke-width: 3px; stroke-linejoin: round; }
-.key.cc-key-once { width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 8px solid var(--text-2); }
-.key.cc-key-monthly { width: 12px; height: 10px; border-left: 2px solid var(--text-2); background: linear-gradient(to top, var(--border-strong) 0 4px, transparent 4px); }
+/* Markers in the lane above the plot: a dot (one-time), a rounded square (monthly from), a green
+   diamond (a savings goal reached); a short label beside it and a faint rule down to the axis. */
+.cash-chart .cc-ann-glyph { fill: var(--text-2); stroke: var(--surface); stroke-width: 1.5; paint-order: stroke; }
+.cash-chart .cc-ann.is-goal .cc-ann-glyph { fill: var(--good); }
+.cash-chart .cc-ann-rule { stroke: var(--text-3); stroke-width: 1; stroke-dasharray: 1 3; stroke-opacity: .8; }
+.cash-chart .cc-ann.is-goal .cc-ann-rule { stroke: var(--good); }
+.cash-chart .cc-ann-label { fill: var(--text-2); font-size: 10.5px; font-weight: 650; font-family: var(--font); paint-order: stroke; stroke: var(--surface); stroke-width: 3px; stroke-linejoin: round; }
+.cash-chart .cc-ann.is-goal .cc-ann-label { fill: var(--good); }
+.cash-chart .cc-change-band { fill: var(--text-2); fill-opacity: .1; }
+.key.cc-key-once { width: 8px; height: 8px; border-radius: 50%; background: var(--text-2); }
+.key.cc-key-monthly { width: 8px; height: 8px; border-radius: 2px; background: var(--text-2); }
+.key.cc-key-goal { width: 8px; height: 8px; background: var(--good); transform: rotate(45deg); }
 
 /* ------------------------------------------------------------- frame */
 .cash-chart { position: relative; min-width: 0; }
@@ -149,6 +162,16 @@
 .cash-chart:not([data-mode="flows"]) .cc-tip-row.is-ma .cc-tip-name, .cash-chart:not([data-mode="flows"]) .cc-tip-row.is-trend .cc-tip-name { padding-left: 10px; }
 
 .cc-caption { margin: var(--space-2) 0 0; font-size: .82rem; color: var(--text-3); }
+/* Under the plot, quietly: "About this chart" (the caption, folded) and "Show as a table". */
+.cc-foot { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 var(--space-4); margin-top: var(--space-2); }
+.cc-foot > details { min-width: 0; max-width: 100%; }
+.cc-foot > details[open] { flex: 1 1 100%; }
+.cash-chart .cc-foot > .chart-table { margin-top: 0; }
+.cc-about { font-size: .85rem; }
+.cc-about > summary, .cc-foot > .chart-table > summary { padding-block: 6px; cursor: pointer; color: var(--text-2); font-weight: 600; }
+.cc-about > summary:hover, .cc-about[open] > summary, .cc-foot > .chart-table > summary:hover, .cc-foot > .chart-table[open] > summary { color: var(--brand); }
+.cc-about .cc-caption { margin: var(--space-1) 0 var(--space-2); max-width: 90ch; }
+@media (max-width: 599px), (pointer: coarse) { .cc-about > summary, .cc-foot > .chart-table > summary { padding-block: 10px; } }
 .cash-chart .chart-table { margin-top: var(--space-2); }
 
 @media (max-width: 639px) {
@@ -158,6 +181,8 @@
   .cc-chip { font-size: .76rem; padding: 2px 5px; gap: 5px; border-color: transparent; background: transparent; }
   .cc-chip[aria-pressed="false"] { border-color: var(--border-strong); }
   .cc-tip { min-width: 0; max-width: min(260px, 100%); font-size: .76rem; padding: 6px 8px; }
+  /* The marker glyphs explain themselves in the readout: their keys stay off the phone legend. */
+  .cc-keys .cc-key-marker { display: none; }
 }
 @media (max-width: 599px), (pointer: coarse) {
   .cc-chip { min-height: 34px; }
@@ -165,8 +190,8 @@
 @media (forced-colors: active) {
   .cc-chip[aria-pressed="false"] { border-style: dashed; }
   .cash-chart .line, .cash-chart .cc-net-line { stroke: CanvasText; }
-  .cash-chart .cc-change-once { fill: CanvasText; }
-  .cash-chart .cc-change-monthly { stroke: CanvasText; }
+  .cash-chart .cc-ann-glyph { fill: CanvasText; }
+  .cash-chart .cc-ann-label { fill: CanvasText; }
 }
 @media print {
   .cc-tip { display: none !important; }

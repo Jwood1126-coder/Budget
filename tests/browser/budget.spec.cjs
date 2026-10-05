@@ -93,7 +93,20 @@ function partialOctober(ds) {
 }
 
 /** A balance-only investment account with monthly transfers into it from checking. */
+/** The sample without its investment account (and the transfers into it). */
+function noInvestments(ds) {
+  const ids = new Set(ds.accounts.filter(a => a.type === 'investment').map(a => a.id));
+  ds.accounts = ds.accounts.filter(a => !ids.has(a.id));
+  ds.balances = (ds.balances || []).filter(b => !ids.has(b.accountId));
+  ds.transactions = ds.transactions.filter(x => !(x.kind === 'transfer' && x.subtype === 'investment'));
+}
+
 function investments(ds) {
+  // (withDataset runs this in the page, so it cannot call noInvestments: the same filter, inline.)
+  const ids = new Set(ds.accounts.filter(a => a.type === 'investment').map(a => a.id));
+  ds.accounts = ds.accounts.filter(a => !ids.has(a.id));
+  ds.balances = (ds.balances || []).filter(b => !ids.has(b.accountId));
+  ds.transactions = ds.transactions.filter(x => !(x.kind === 'transfer' && x.subtype === 'investment'));
   ds.accounts.push({ id: 'joint-invest', label: 'Index fund', type: 'investment', scope: 'joint', ownerId: null, paidInFull: false, coverage: [] });
   ds.balances = (ds.balances || []).concat([{ accountId: 'joint-invest', date: '2026-03-31', cents: 2050000, source: 'statement' }, { accountId: 'joint-invest', date: '2026-09-30', cents: 2310000, source: 'statement' }]);
   for (const m of ['2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09']) {
@@ -133,7 +146,7 @@ module.exports = [
       const outside = await legend(t.page, 'out');
       t.assert.deepEqual(outside, {
         essentials: whole(s.outByGroup.essentials), flexible: whole(s.outByGroup.flexible), irregular: whole(s.outByGroup.irregular),
-        other: whole(s.outByGroup.other), savings: whole(s.savingsCents), left: whole(s.leftCents),
+        other: whole(s.outByGroup.other), savings: whole(s.savingsCents), investing: whole(s.investingCents), left: whole(s.leftCents),
       });
       t.assert.equal(await text(t.page, '#bud-legend-out [data-key="other"] .bud-legend-label'), 'Debt & business');
       t.assert.equal(await text(t.page, '#bud-net .bud-hero-net-value'), '+' + whole(s.inCents - s.outCents));
@@ -357,7 +370,8 @@ module.exports = [
     name: 'investments: the balance, the month’s investing and a sparkline, never counted as cash',
     async run(t) {
       await openBudget(t);
-      t.assert.equal(await t.page.$('#bud-invest'), null, 'no investment account, no card');
+      await withDataset(t, noInvestments);
+      t.assert.equal(await t.page.$$eval('#bud-invest', x => x.length), 0, 'no investment account, no card');
       await withDataset(t, investments);
       t.assert.ok(await t.page.$('#bud-invest'));
       t.assert.equal(await text(t.page, '#bud-invest .bud-invest-balance'), '$23,100');
@@ -375,6 +389,10 @@ module.exports = [
     name: 'coming up: the plan’s changes in month order with their amounts, and a link to the chart',
     async run(t) {
       await openBudget(t);
+      // The sample's what-ifs (copied from its profile's scenarios) are set aside: this test starts
+      // from what Budget adds (bills, goals) and one pack added below.
+      await t.page.evaluate(() => { const s = window.HouseholdBudget.getState(); s.plan.changes = []; window.HouseholdBudget.setState(s); });
+      await settled(t);
       const items = () => t.page.$$eval('#bud-coming .bud-up-item', els => els.map(el => el.textContent.replace(/\s+/g, ' ').trim()));
       let list = await items();
       t.assert.match(list[0], /^Oct 2026 Life insurance \(being considered\) Essentials Bill \$40 a month$/);

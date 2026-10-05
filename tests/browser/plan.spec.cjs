@@ -1,6 +1,7 @@
 'use strict';
-// Plan (#/overview): the chart, the balances it starts from, the dials and their drill-down, the
-// headline, planned changes, Trends and the CSV export. Synthetic sample only.
+// Plan (#/overview): the tiles, the chart, Coming up (planned changes and packs), the dials and
+// their drill-down, the headline, the balances, Trends and the CSV export. Synthetic sample only.
+// The tiles, Compare, Coming up and the Forecast redirect have their own file: plan-v4.spec.cjs.
 const fs = require('node:fs');
 
 const { noHorizontalScroll, state, whole, amt, signedAmt, boxText, money, centsOf } = require('./helpers.cjs');
@@ -131,7 +132,7 @@ const shortDate = date => {
 
 module.exports = [
   {
-    name: 'the chart is in the first screen, with nothing above it',
+    name: 'the chart is in the first screen, with only the tiles above it',
     viewport: 'both',
     async run(t) {
       const { page, assert } = t;
@@ -146,9 +147,10 @@ module.exports = [
         const root = document.querySelector('#plan-root');
         return { top: plot.top, vh: innerHeight, above: above.length, ids: [...root.children].map(x => x.id).filter(Boolean), text: root.textContent };
       });
-      assert.ok(r.top < r.vh * 0.55, `plot starts at ${Math.round(r.top)}px of ${r.vh}px`);
-      assert.equal(r.above, 0, 'nothing above the chart card');
-      assert.deepEqual(r.ids, ['plan-chart-card', 'plan-balances', 'plan-dials', 'plan-changes', 'plan-more', 'plan-live', 'plan-sample'], 'chart → balances → dials → drawers');
+      // The tiles come first; on a phone the plot still starts well inside the first screen.
+      assert.ok(r.top < r.vh * (t.viewport === 'phone' ? 0.66 : 0.55), `plot starts at ${Math.round(r.top)}px of ${r.vh}px`);
+      assert.equal(r.above, 0, 'no card, notice or metric above the chart card (the tiles are not cards)');
+      assert.deepEqual(r.ids, ['plan-kpis', 'plan-chart-card', 'plan-changes', 'plan-dials', 'plan-balances', 'plan-more', 'plan-live', 'plan-sample'], 'tiles → chart → coming up → dials → balances → more');
       assert.ok(!/safe to spend|affordable|cash available|bank balance/i.test(r.text), 'no promises about spendable cash');
       // Balance mode by default (the sample knows its balances); savings shows with the combined line, checking starts switched off.
       assert.equal(await page.getAttribute('#plan-chart', 'data-mode'), 'balance');
@@ -164,9 +166,13 @@ module.exports = [
       assert.equal((await page.textContent('#plan-dial-flexible-sub')).trim(), 'Where the budget can realistically move');
       assert.equal((await page.textContent('#plan-dial-irregular-sub')).trim(), 'One-time things that still happen every year, spread per month');
       assert.ok(!(await page.$('#plan-dial-card, #plan-dial-bank')), 'card and bank are no longer dials');
-      assert.equal(await page.$eval('#plan-changes', d => d.open), false, 'planned changes start closed');
-      // The sample profile’s two scenarios arrive as what-ifs: listed, not accepted.
-      assert.equal((await page.textContent('#plan-changes > summary')).trim(), 'Planned changes · 0 of 8 applied · 7 without an amount');
+      // Coming up is always there: what Budget adds is on its strip and in its list; the packs are one tap away.
+      assert.equal((await page.textContent('#plan-changes-h')).trim(), 'Coming up');
+      assert.ok(await page.isVisible('#plan-coming-strip'));
+      assert.deepEqual(await page.$$eval('#plan-add > details > summary', ss => ss.map(x => x.textContent.replace('+', '').trim())), ['New baby', 'Childcare', 'Kid costs', 'Custom']);
+      // The dials say what they are behind ⓘ; one short line under each.
+      assert.equal(await page.$eval('#plan-dial-essentials-info', d => d.open), false);
+      assert.ok(!(await page.isVisible('#plan-dial-essentials-sub')), 'the long explanation is folded away');
       assert.ok(await noHorizontalScroll(page));
       await t.shot('plan');
     },
@@ -263,8 +269,8 @@ module.exports = [
       await page.waitForSelector('#plan-prompt');
       assert.equal(await page.getAttribute('#plan-chart', 'data-mode'), 'flows', 'flows when nothing is known');
       const top = await page.evaluate(() => document.querySelector('#plan-chart-plot').getBoundingClientRect().top / innerHeight);
-      // 0.62: the flows legend has a "From savings" chip now that the sample's trip goal is spent from savings.
-      assert.ok(top < 0.62, 'the flows plot starts in the first screen too (' + Math.round(top * 100) + '%)');
+      // 0.7: the monthly tile above, and the flows legend has a "From savings" chip (the sample's trip goal is spent from savings).
+      assert.ok(top < 0.7, 'the flows plot starts in the first screen too (' + Math.round(top * 100) + '%)');
       assert.equal((await page.textContent('#plan-prompt')).trim(), 'Enter today’s balances below to see where the money is heading');
       assert.deepEqual(await page.$$eval('input[name="plan-mode"]', xs => xs.map(x => x.value)), ['flows', 'trends'], 'no balance switch without a balance');
       assert.equal(await page.inputValue('#plan-bal-joint-checking-date'), '');
@@ -1147,13 +1153,18 @@ module.exports = [
     async run(t) {
       const { page, assert } = t;
       await t.open('#/overview');
-      assert.ok(!(await page.$('#plan-chart-card .notice-warn')), 'quiet while the plan stays above $0');
+      assert.ok(!(await page.$('#plan-kpi-low')), 'quiet while the plan stays above $0');
       await typeAmount(page, '#plan-dial-essentials', '20,000');
       await page.waitForFunction(() => window.HouseholdBudget.getState().ui.plan.dials.essentials === 2000000);
-      await page.waitForSelector('#plan-chart-card .notice-warn');
+      await page.waitForSelector('#plan-kpi-low');
       const exp = await timeline(page);
       assert.ok(exp.balances.runsOut);
-      assert.match(await page.textContent('#plan-chart-card .notice-warn'), /On this plan the combined cash goes below \$0 in [A-Z][a-z]+ \d{4} \(lowest −\$[\d,]+\)/);
+      // The warning is a tile: how low, and from when.
+      assert.equal((await page.textContent('#plan-kpi-low .kpi-label')).trim(), 'Lowest point');
+      assert.match((await page.textContent('#plan-kpi-low-value')).trim(), /^−\$[\d,]+$/);
+      assert.match((await page.textContent('#plan-kpi-low-sub')).trim(), /^below \$0 from [A-Z][a-z]{2} \d{4}$/);
+      assert.match(await page.textContent('#plan-kpi-month-value'), /^−\$/, 'the monthly tile is negative too');
+      assert.ok(await page.$('#plan-kpi-month.tone-warn'));
       const tb = await table(page);
       const negatives = tb.rows.filter(r => r[tb.col('Combined cash')].startsWith('−$'));
       assert.ok(negatives.length > 0, 'negative balances are shown, not floored');
@@ -1220,7 +1231,7 @@ module.exports = [
     },
   },
   {
-    name: 'planned changes: the Baby template is listed, accepted, applied once amounts are set, and kept',
+    name: 'planned changes: the New baby pack is listed, accepted, applied once amounts are set, and kept',
     async run(t) {
       const { page, assert } = t;
       await t.open('#/overview');
@@ -1228,33 +1239,39 @@ module.exports = [
       // from a plan with no planned changes of its own.
       await page.evaluate(() => { const s = window.HouseholdBudget.getState(); s.plan.changes = []; window.HouseholdBudget.setState(s); });
       await t.settled();
-      // Two years ahead, so every item of the template falls inside the plan.
+      // Two years ahead, so every item of the pack falls inside the plan.
       await page.click('label[for^="plan-horizon-24"]');
       await page.waitForFunction(() => window.HouseholdBudget.getState().ui.plan.horizon === 24);
       const exp0 = await timeline(page);
       const before = await table(page);
       const lastCombined = tb => tb.rows[tb.rows.length - 1][tb.col('Combined cash')];
-      await page.click('#plan-changes > summary');
-      assert.match(await page.textContent('#plan-changes'), /No planned changes yet/);
+      const own = () => page.$$eval('#plan-ch-list > li:not(.is-derived)', x => x.length);
+      const marks = () => page.$$eval('#plan-chart .cc-change', x => x.length);
+      const marked0 = await marks(); // what Budget adds later in the plan (the trip goal spent) is marked already
+      assert.equal(await own(), 0, 'only what Budget adds so far');
       // Due 6 months after the plan starts.
       const [y, m] = exp0.planStart.split('-').map(Number);
       const dm = m + 6 > 12 ? m + 6 - 12 : m + 6;
       const due = `${m + 6 > 12 ? y + 1 : y}-${String(dm).padStart(2, '0')}-15`;
-      await page.click('#plan-tpl-baby');
-      await page.waitForSelector('#plan-tpl-baby-date-error:not([hidden])');
+      await page.click('#plan-add-baby > summary');
+      await page.click('#plan-pack-baby-add');
+      await page.waitForSelector('#plan-pack-baby-date-error:not([hidden])');
       assert.equal((await state(page)).plan.changes.length, 0, 'nothing added without a due date');
-      await page.fill('#plan-tpl-baby-date', due);
-      await page.click('#plan-tpl-baby');
-      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.changes.length === 14);
-      await page.waitForSelector('#plan-ch-list');
-      assert.match(await page.textContent('#toast'), /^Added 14 baby items — review the amounts, then accept them\./);
-      assert.equal(await page.$$eval('#plan-ch-list > li', x => x.length), 14);
+      await page.fill('#plan-pack-baby-date', due);
+      await page.click('#plan-pack-baby-add');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.changes.length === 9);
+      await page.waitForFunction(() => document.querySelectorAll('#plan-ch-list > li:not(.is-derived)').length === 9);
+      assert.match(await page.textContent('#toast'), /^New baby: 9 items added, not in the plan yet\. Check the amounts, then accept them\./);
+      const saved = (await state(page)).plan.changes;
+      assert.ok(saved.every(c => c.template === 'babyFirstYear' && c.scenario === 'New baby' && c.accepted === false), 'tagged as a what-if of its own, never accepted for you');
+      assert.equal(await page.$eval('#plan-add-baby', d => d.open), false, 'the little form closes');
       let exp = await timeline(page);
       assert.equal(exp.changes.applied, 0);
-      assert.equal((await page.textContent('#plan-changes > summary')).trim(), 'Planned changes · 0 of 14 applied · 1 without an amount');
-      assert.ok(await page.$eval('#plan-changes', d => d.open), 'the drawer stays open');
-      assert.equal(await page.$$eval('#plan-chart .cc-change', x => x.length), 0, 'nothing marked before accepting');
+      assert.equal((await page.textContent('#plan-ch-counts')).trim(), '0 of 9 in the plan · 1 without an amount');
+      assert.equal(await marks(), marked0, 'nothing more marked before accepting');
       assert.equal(lastCombined(await table(page)), lastCombined(before), 'listed only: the plan is unchanged');
+      // On the strip: one faded bar for the pack.
+      assert.ok(await page.$('#plan-coming-strip .cu-item.is-pack.is-off'));
       const leave = exp.changes.list.find(ch => ch.cents === null);
       assert.ok(leave && leave.group === 'income', 'the leave item has no amount');
       assert.match(await page.textContent(`#plan-ch-${leave.id}-unset`), /^amount not set — enter the monthly reduction/);
@@ -1262,55 +1279,60 @@ module.exports = [
       for (const ch of exp.changes.list.filter(x => x.cents !== null && x.source === 'plan')) assert.match(await page.textContent(`#plan-ch-${ch.id}-status`), /Not accepted/);
 
       // Accept all: everything with an amount applies; the leave item waits for one.
-      assert.equal((await page.textContent('#plan-ch-accept-all')).trim(), 'Accept all 14');
+      assert.equal((await page.textContent('#plan-ch-accept-all')).trim(), 'Accept all 9');
       await page.click('#plan-ch-accept-all');
       await page.waitForFunction(() => window.HouseholdBudget.getState().plan.changes.every(c => c.accepted));
       exp = await timeline(page);
-      assert.equal(exp.changes.applied, 13);
+      assert.equal(exp.changes.applied, 8);
       assert.deepEqual(exp.changes.unset, [leave.id]);
-      const sum = (await page.textContent('#plan-changes > summary')).trim();
-      assert.ok(sum.startsWith('Planned changes · 13 of 14 applied · 1 without an amount · one-time ' + amt(exp.changes.totalOneTimeCents) + ' · +$'), sum);
-      assert.match(sum, / from [A-Z][a-z]{2} \d{4}$/);
-      assert.ok(await page.$$eval('#plan-chart .cc-change', x => x.length) > 0, 'markers on the chart');
+      assert.equal((await page.textContent('#plan-ch-counts')).trim(), '8 of 9 in the plan · 1 without an amount');
+      assert.ok(await marks() > marked0, 'markers on the chart');
+      assert.ok(await page.$('#plan-chart .cc-ann-label'), 'with a short label');
       assert.ok(await page.$('#plan-chart .cc-ghost-line'), 'the plan without the changes is drawn faintly');
+      assert.ok(await page.$('#plan-coming-strip .cu-item.is-pack.is-part'), 'the pack is in the plan, but for the leave item');
       const mid = await table(page);
       assert.ok(centsOf(lastCombined(mid)) < centsOf(lastCombined(before)), `the combined line ends lower (${lastCombined(before)} → ${lastCombined(mid)})`);
       assert.ok(mid.heads.includes('Planned changes'), 'the table lists them by month');
-      assert.match(await page.textContent(`#plan-ch-${leave.id}-unset`), /^amount not set/);
       assert.match(await page.textContent(`#plan-ch-${leave.id}-status`), /Amount not set/);
       // The leave amount: entered, it applies.
       await typeAmount(page, `#plan-ch-${leave.id}-amt`, '-1,500');
       await page.waitForFunction(id => window.HouseholdBudget.getState().plan.changes.find(c => c.id === id).cents === -150000, leave.id);
       exp = await timeline(page);
-      assert.equal(exp.changes.applied, 14);
+      assert.equal(exp.changes.applied, 9);
       assert.ok(!(await page.$(`#plan-ch-${leave.id}-unset`)));
-      assert.match(await page.textContent(`#plan-ch-${leave.id}-status`), /Applied/);
+      assert.match(await page.textContent(`#plan-ch-${leave.id}-status`), /In plan/);
       assert.ok(centsOf(lastCombined(await table(page))) < centsOf(lastCombined(mid)), 'less income on leave: lower again');
+      // When and how: folded under the date; a new start month moves it.
+      const seat = exp.changes.list.find(ch => ch.kind === 'oneTime' && ch.source === 'plan');
+      await page.click(`#plan-ch-${seat.id}-edit > summary`);
+      assert.ok(await page.isVisible(`#plan-ch-${seat.id}-kind`));
+      await page.selectOption(`#plan-ch-${seat.id}-group`, 'flexible');
+      await page.waitForFunction(id => window.HouseholdBudget.getState().plan.changes.find(c => c.id === id).group === 'flexible', seat.id);
       // Edit one, remove one.
-      const seat = exp.changes.list.find(ch => ch.kind === 'oneTime');
       await typeAmount(page, `#plan-ch-${seat.id}-amt`, '400');
       await page.waitForFunction(id => window.HouseholdBudget.getState().plan.changes.find(c => c.id === id).cents === 40000, seat.id);
       await page.click(`#plan-ch-${seat.id}-remove`);
-      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.changes.length === 13);
-      await page.waitForFunction(() => /^Planned changes · 13 of 13 applied/.test(document.querySelector('#plan-changes > summary').textContent.trim()));
-      assert.equal(await page.$$eval('#plan-ch-list > li', x => x.length), 13);
+      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.changes.length === 8);
+      await page.waitForFunction(() => document.querySelector('#plan-ch-counts').textContent.trim() === '8 of 8 in the plan');
+      assert.equal(await own(), 8);
+      assert.match(await page.evaluate(() => document.activeElement.id), /^plan-ch-.+-remove$/, 'focus stays in the list');
       // A change of the household's own: added accepted.
+      await page.click('#plan-add-custom > summary');
       await page.fill('#plan-ch-new-label', 'Roof repair');
       await page.fill('#plan-ch-new-amt', '2,000');
       await page.click('#plan-ch-new-add');
-      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.changes.length === 14);
+      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.changes.length === 9);
       const roof = (await state(page)).plan.changes.find(c => c.label === 'Roof repair');
-      assert.deepEqual([roof.kind, roof.group, roof.startMonth, roof.cents, roof.accepted], ['oneTime', 'irregular', exp0.planStart, 200000, true]);
+      assert.deepEqual([roof.kind, roof.group, roof.startMonth, roof.cents, roof.accepted, roof.scenario || null], ['oneTime', 'irregular', exp0.planStart, 200000, true, null]);
       // Kept after a reload.
       await page.reload();
-      await page.waitForSelector('#plan-changes');
-      assert.match((await page.textContent('#plan-changes > summary')).trim(), /^Planned changes · 14 of 14 applied · one-time /);
+      await page.waitForSelector('#plan-ch-counts');
+      assert.equal((await page.textContent('#plan-ch-counts')).trim(), '9 of 9 in the plan');
       // Unaccept all: listed only again.
-      await page.click('#plan-changes > summary');
       await page.click('#plan-ch-unaccept-all');
       await page.waitForFunction(() => window.HouseholdBudget.getState().plan.changes.every(c => !c.accepted));
       assert.equal((await timeline(page)).changes.applied, 0);
-      await page.waitForFunction(() => !document.querySelector('#plan-chart .cc-change'));
+      await page.waitForFunction(n => document.querySelectorAll('#plan-chart .cc-change').length === n, marked0);
       await t.shot('plan-changes');
     },
   },
@@ -1451,7 +1473,8 @@ module.exports = [
       const { page, assert } = t;
       await t.open('#/overview');
       for (const key of ['p1', 'p2']) {
-        assert.match(await page.textContent(`#plan-dial-${key}-basis`), /^From Budget: .+ · Change in Budget$/);
+        assert.equal((await page.textContent(`#plan-dial-${key}-basis`)).trim(), 'From Budget · Change', 'one short line');
+        assert.match(await page.textContent(`#plan-dial-${key}-why`), /^From Budget: .+/, 'the whole basis behind ⓘ');
         assert.equal(await page.getAttribute(`#plan-dial-${key}-budget`, 'href'), '#/budget?section=income');
         assert.ok(!(await page.$(`#plan-dial-${key}-unconfirmed`)), 'no "Not confirmed" badge with pay in Budget');
       }
@@ -1466,7 +1489,8 @@ module.exports = [
       await page.waitForSelector('#plan-dial-p2-unconfirmed');
       assert.equal((await page.textContent('#plan-dial-p2-unconfirmed')).trim().replace(/^!/, ''), 'Not confirmed');
       assert.ok(!(await page.$('#plan-dial-p1-unconfirmed')), 'Alex still has pay in Budget');
-      const basis = (await page.textContent('#plan-dial-p2-basis')).trim();
+      assert.equal((await page.textContent('#plan-dial-p2-basis')).trim(), 'Deposit average · Set pay in Budget');
+      const basis = (await page.textContent('#plan-dial-p2-why')).trim();
       assert.match(basis, /^Average of .+ deposits, \d+ months — not a confirmed setting\. Budget has no amount for: Sam paycheck\. Enter the current amount here, or save pay in Budget\.$/);
       assert.equal(await page.getAttribute('#plan-dial-p2-budget', 'href'), '#/budget?section=income');
       // Entering the amount here settles it.
@@ -1531,7 +1555,7 @@ module.exports = [
       await page.click('#plan-dial-p1-reset');
       await page.waitForFunction(() => window.HouseholdBudget.getState().ui.plan.dials.p1 === undefined);
       await page.waitForFunction(v => document.querySelector('#plan-dial-p1').value === v, boxText(budget('p1')));
-      assert.match(await page.textContent('#plan-dial-p1-basis'), /^From Budget: /);
+      assert.match(await page.textContent('#plan-dial-p1-basis'), /^From Budget/);
     },
   },
   {
@@ -1572,12 +1596,14 @@ module.exports = [
     async run(t) {
       const { page, assert } = t;
       await t.open('#/overview');
-      await page.click('#plan-changes > summary');
-      await page.fill('#plan-tpl-baby-date', '2027-04-15');
-      await page.click('#plan-tpl-baby');
-      await page.waitForSelector('#plan-ch-list');
+      await page.click('#plan-add-baby > summary');
+      await page.fill('#plan-pack-baby-date', '2027-04-15');
+      await page.click('#plan-pack-baby-add');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.changes.length === 9);
+      await page.waitForSelector('#plan-ch-accept-all');
       await page.evaluate(() => {
-        for (const id of ['plan-drill-essentials', 'plan-drill-flexible', 'plan-drill-irregular', 'plan-more', 'plan-deposits', 'plan-bal-joint-checking-edit']) document.getElementById(id).open = true;
+        for (const id of ['plan-drill-essentials', 'plan-drill-flexible', 'plan-drill-irregular', 'plan-more', 'plan-deposits', 'plan-bal-joint-checking-edit', 'plan-add-childcare', 'plan-chart-about']) document.getElementById(id).open = true;
+        for (const d of document.querySelectorAll('.plan-ch-edit')) d.open = true;
         for (const kid of document.querySelectorAll('#plan-drill-flexible .drill-kids')) kid.open = true;
       });
       assert.ok(await noHorizontalScroll(page), 'no sideways scroll with everything open');

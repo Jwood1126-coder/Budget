@@ -3,17 +3,22 @@
  * Hash routing: '#/view?key=value&…'. Every drilldown level is its own URL, so the browser's
  * Back/Forward buttons, bookmarks and reloads all work. Views never read location directly;
  * they receive { view, params } and build links with href().
+ * Retired views (REDIRECTS) parse as the view that replaced them, with `redirectFrom` set, so the
+ * app can rewrite the address (and carry over what still applies): #/forecast is now the Plan.
  */
 (function (root) {
   const UI = root.BudgetUI || (root.BudgetUI = {});
 
-  const VIEWS = ['overview', 'spending', 'budget', 'forecast', 'review', 'data'];
+  const VIEWS = ['overview', 'spending', 'budget', 'review', 'data'];
   const DEFAULT = 'overview';
+  /** Retired views and the view that replaced each. */
+  const REDIRECTS = { forecast: 'overview' };
 
   function parse(hash) {
     const raw = String(hash || '').replace(/^#\/?/, '');
     const [path, query = ''] = raw.split('?');
-    const view = VIEWS.includes(path) ? path : DEFAULT;
+    const redirectFrom = Object.prototype.hasOwnProperty.call(REDIRECTS, path) ? path : null;
+    const view = redirectFrom ? REDIRECTS[path] : VIEWS.includes(path) ? path : DEFAULT;
     const params = {};
     for (const part of query.split('&')) {
       if (!part) continue;
@@ -22,7 +27,7 @@
       const v = i === -1 ? '' : decodeURIComponent(part.slice(i + 1).replace(/\+/g, ' '));
       if (k) params[k] = v;
     }
-    return { view, params, known: VIEWS.includes(path) };
+    return { view, params, known: VIEWS.includes(path), redirectFrom };
   }
 
   /** Build '#/view?…' omitting empty params. Param order is preserved for stable URLs. */
@@ -44,5 +49,5 @@
     if (replace) root.dispatchEvent(new HashChangeEvent('hashchange'));
   }
 
-  UI.router = { VIEWS, DEFAULT, parse, href, current, go };
+  UI.router = { VIEWS, DEFAULT, REDIRECTS, parse, href, current, go };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

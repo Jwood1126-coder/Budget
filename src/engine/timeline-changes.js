@@ -214,23 +214,6 @@
   // ------------------------------------------------------------------ templates
 
   const ESTIMATE = 'A generic estimate: adjust it to your own quotes and plans.';
-  /** Baby: generic US estimates, timed from the due month D: [label, kind, group, months from D, cents, end (months from D), note]. */
-  const BABY = [
-    ['Car seat', 'oneTime', 'irregular', -2, 25000],
-    ['Nursery setup (paint, dresser, glider)', 'oneTime', 'irregular', -2, 90000],
-    ['Starter clothes and basics', 'oneTime', 'irregular', -1, 25000],
-    ['Feeding gear (bottles, pump accessories)', 'oneTime', 'irregular', -1, 20000],
-    ['Baby monitor', 'oneTime', 'irregular', -1, 10000],
-    ['Crib and mattress (after the bassinet)', 'oneTime', 'irregular', 4, 35000],
-    ['Delivery out-of-pocket (insurance deductible/out-of-pocket max)', 'oneTime', 'irregular', 1, 350000, null, 'Check your plan’s deductible and out-of-pocket maximum. ' + ESTIMATE],
-    ['Diapers and wipes', 'monthly', 'essentials', 0, 8500],
-    ['Formula / feeding', 'monthly', 'essentials', 0, 12000, null, 'About $0 if breastfeeding. ' + ESTIMATE],
-    ['Baby food', 'monthly', 'essentials', 6, 7500],
-    ['Clothes as they grow', 'monthly', 'flexible', 0, 4500],
-    ['Health copays and medicines', 'monthly', 'essentials', 0, 4000],
-    ['Childcare', 'monthly', 'essentials', 3, 120000, null, 'Typical infant daycare; set to $0 for family care. ' + ESTIMATE],
-    ['Parental leave: income change', 'monthly', 'income', 0, null, 2, 'Enter the monthly reduction in take-home while on leave (as a negative amount). ' + ESTIMATE],
-  ];
 
   /**
    * The packs: generic placeholder estimates in the style of US national averages (not this
@@ -300,21 +283,6 @@
   /** Kid costs from age 1 (template 'kidCosts'): monthly from D+12 (diapers through D+35), timed from the due date. */
   const kidCosts = (dueDate, opts) => packItems(KID_COSTS, dueMonth(dueDate), 'kidCosts', opts);
 
-  /**
-   * The earlier Baby template (template 'baby'), kept exactly as it was while the screen still
-   * offers it; new plans use the three packs above (templates.list). Changes saved from it stay
-   * exactly as saved.
-   * @param {string} dueDate 'YYYY-MM-DD'
-   * @returns {object[]} items for addChange (no ids: addChange gives each one)
-   */
-  function babyTemplate(dueDate) {
-    const due = dueMonth(dueDate);
-    return BABY.map(([label, kind, group, from, cents, end, note]) => ({
-      label, kind, group, personId: null, startMonth: E.months.add(due, from),
-      endMonth: kind === 'monthly' && Number.isInteger(end) ? E.months.add(due, end) : null,
-      cents, accepted: false, template: 'baby', note: note || ESTIMATE,
-    }));
-  }
   const templates = {
     list: () => [
       { key: 'babyFirstYear', label: 'New baby: the first year', needs: ['dueDate'] },
@@ -322,7 +290,6 @@
       { key: 'kidCosts', label: 'Kid costs from age 1', needs: ['dueDate'] },
     ],
     babyFirstYear, childcare, kidCosts,
-    baby: babyTemplate,
   };
 
 
