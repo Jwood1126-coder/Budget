@@ -801,15 +801,17 @@ module.exports = [
       await setGroceries(page, 12345);
       const prof = readJSON('fixtures/sample-profile.json');
       prof.household.name = 'Kept-budget test (fictional)';
+      prof.plan.targets.Fuel = 14100;
       prof.plan.targets.Groceries = 43210;
       await page.setInputFiles('#dp-pick-profile', textFile('kept-profile.json', JSON.stringify(prof)));
       await page.waitForSelector('#dp-profile-keep');
-      t.assert.ok((await text(page, '#dp-profile-decide')).includes('Your saved plan stays as it is'), 'says what keeping means');
+      t.assert.ok((await text(page, '#dp-profile-decide')).includes('What you changed here stays as it is'), 'says what keeping means');
       await page.check('#dp-profile-keep');
       await Promise.all([page.waitForNavigation({ waitUntil: 'load' }), page.click('#dp-profile-use')]);
       await page.waitForSelector('#dp-using');
       t.assert.ok((await text(page, '#dp-using')).includes('Kept-budget test (fictional)'), 'the profile is in use');
       t.assert.equal((await state(page)).plan.targets.Groceries, 12345, 'the saved budget was kept');
+      t.assert.equal((await state(page)).plan.targets.Fuel, 14100, 'a target never changed here follows the profile');
     },
   },
   {

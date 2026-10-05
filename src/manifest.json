@@ -22,6 +22,7 @@
     "engine/timeline-writes.js",
     "engine/timeline.js",
     "engine/state.js",
+    "engine/setup-sync.js",
     "engine/attention.js"
   ],
   "ui": [

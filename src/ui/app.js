@@ -23,7 +23,7 @@
 
   const app = {
     build: null, profile: null, dataset: null, state: null,
-    loadNotes: [], datasetError: null, dataSource: 'embedded',
+    loadNotes: [], setupNotes: [], datasetError: null, dataSource: 'embedded',
     storage: null, storageOk: true, saveError: null, savedText: undefined, otherTabFiles: false,
     undoStack: [], undoFocus: [], undoLabels: [], derived: null, renderTimer: null, loadedMeta: null, profileMeta: null,
   };
@@ -103,8 +103,12 @@
     // The engine picks the earlier version's storage keys by dataset type (sample vs household),
     // so a private budget never inherits the sample page's invented figures or vice versa.
     const result = E.state.loadFromStorage(app.storage || memoryStorage(), app.dataset.datasetId, app.profile, app.dataset);
-    app.state = result.state;
-    app.loadNotes.push(...(result.notes || []));
+    // The setup file's (profile's) later changes reach the saved budget (E.setupSync); its notes
+    // are shown once, with the other notes from opening the page.
+    const synced = E.setupSync.apply(result.state, app.profile, { now: new Date().toISOString() });
+    app.state = synced.state;
+    app.loadNotes.push(...(result.notes || []), ...synced.notes);
+    app.setupNotes = synced.notes;
     app.stateSource = result.source;
     app.savedText = readSaved();
   }
@@ -127,7 +131,8 @@
   }
 
   function storedState() {
-    return E.state.loadFromStorage(app.storage, app.dataset.datasetId, app.profile, app.dataset).state;
+    const loaded = E.state.loadFromStorage(app.storage, app.dataset.datasetId, app.profile, app.dataset).state;
+    return E.setupSync.apply(loaded, app.profile, { now: new Date().toISOString() }).state;
   }
   function clearUndo() { app.undoStack = []; app.undoFocus = []; app.undoLabels = []; }
   /**
@@ -909,6 +914,8 @@
       toast('Your earlier saved budget was upgraded. Details are in Data & privacy.', { timeout: 9000 });
     } else if (readUnreadableCopy() !== null && app.loadNotes.some(n => /damaged/.test(n))) {
       toast('The budget saved in this browser could not be read. See the warning at the top of the page.', { timeout: 9000 });
+    } else if (app.setupNotes.length) {
+      toast(app.setupNotes[0] + ' Details are in Data & privacy.', { timeout: 9000 });
     }
   }
 

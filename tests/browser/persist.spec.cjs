@@ -1,5 +1,8 @@
 'use strict';
-// Saving, several tabs, damaged or unavailable storage, Undo and keyboard/touch access, in a real browser.
+// Saving, several tabs, damaged or unavailable storage, Undo and keyboard/touch access, setup sync, in a real browser.
+const fs = require('node:fs');
+const path = require('node:path');
+
 const KEY = 'household-budget:v5:sample';
 const GROCERIES = 'input[data-bind="plan.targets.Groceries"]';
 const FUEL = 'input[data-bind="plan.targets.Fuel"]';
@@ -251,6 +254,43 @@ module.exports = [
       await page.waitForFunction(() => !document.getElementById('dp-unreadable-download'));
       assert.ok(await page.isHidden('#appAlerts'), 'the warning goes with the copy');
       assert.equal(await page.evaluate(k => localStorage.getItem(k + ':unreadable'), KEY), null);
+    },
+  },
+  {
+    name: 'a saved budget picks up a changed value from a rebuilt page’s setup file and keeps the household’s own',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/budget?section=targets');
+      await commit(page, GROCERIES, '650');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.targets.Groceries === 65000);
+      assert.ok(await page.evaluate(k => !!JSON.parse(localStorage.getItem(k)).meta.setup.hash, KEY), 'the saved budget records the setup it has');
+      // The same page rebuilt with a tuned setup file (the embedded household profile): new Fuel and
+      // Groceries targets. Groceries was changed here, so it stays; Fuel was not, so it follows.
+      const dist = decodeURIComponent(t.url.replace(/^file:\/\//, ''));
+      const html = fs.readFileSync(dist, 'utf8');
+      const open = html.indexOf('<script id="budget-profile"');
+      const close = html.indexOf('</script>', open);
+      assert.ok(open > 0 && close > open, 'the build embeds a profile');
+      const profileText = html.slice(open, close);
+      assert.ok(profileText.includes('"Fuel":13000') && profileText.includes('"Groceries":60000'));
+      const rebuilt = path.join(path.dirname(dist), 'setup-sync-rebuilt.html');
+      fs.writeFileSync(rebuilt, html.slice(0, open) + profileText.replace('"Fuel":13000', '"Fuel":14500').replace('"Groceries":60000', '"Groceries":62000') + html.slice(close));
+      try {
+        await page.goto('file://' + rebuilt + '#/budget?section=targets');
+        await page.waitForSelector('#page-title');
+        await page.waitForFunction(() => window.HouseholdBudget.getState().plan.targets.Fuel === 14500);
+        assert.equal(await stateTarget(page, 'Groceries'), 65000, 'the household’s own target is kept');
+        assert.equal(await storedTarget(page, 'Fuel'), 14500, 'and saved');
+        assert.match(await text(page, '#toast'), /Your setup file updated 1 setting \(Fuel target\); kept 1 you changed here \(Groceries target\)\./);
+        assert.equal(await page.inputValue(FUEL), '145');
+        // Opening it again: nothing more to do, so nothing more is said.
+        await page.reload();
+        await page.waitForSelector('#page-title');
+        assert.doesNotMatch(await page.evaluate(() => document.getElementById('toast')?.textContent || ''), /setup file/);
+        assert.equal(await stateTarget(page, 'Fuel'), 14500);
+      } finally {
+        fs.rmSync(rebuilt, { force: true });
+      }
     },
   },
   {

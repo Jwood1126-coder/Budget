@@ -18,7 +18,9 @@
  * Money rules that apply throughout:
  *   - Amounts are integer cents. null means unknown and is never turned into $0. An invalid
  *     saved amount becomes unknown (null), not a guess.
- *   - Saved state wins over the household profile; the profile only fills what was never saved.
+ *   - Here saved state wins over the household profile: the profile fills what was never saved.
+ *     Its later changes reach a saved budget through BudgetEngine.setupSync (setup-sync.js), run
+ *     after loading; that bookkeeping is kept in meta.setup (SETUP_FIELDS).
  *   - Nothing a household saved is dropped silently: every value that cannot be kept is named in
  *     the returned notes, and a migration also keeps its notes and a raw snapshot in meta.
  *   - No clock: timestamps arrive through an optional { now } argument (epoch otherwise).
@@ -422,12 +424,22 @@
   const CHECKLIST_RULE = rule('boolmap', { max: LIMITS.checklist, def: {} });
   const NOTES_RULE = rule('strings', { def: [], maxItems: LIMITS.migrationNotes });
 
+  // meta.setup: setup sync's bookkeeping (BudgetEngine.setupSync): the hash of the household
+  // profile's setup-managed values last applied, when, and those values (base).
+  const SETUP_FIELDS = [
+    ['hash', rule('text', { max: 100, def: '' })],
+    ['appliedAt', ISO_TIME],
+    ['base', rule('json', { nullable: true, max: LIMITS.workbookChars })]
+  ];
+
   const META_FIELDS = [
     ['createdAt', ISO_TIME],
     ['updatedAt', ISO_TIME],
     ['migratedFrom', int(0, 4, null, { nullable: true })],
     ['migrationNotes', NOTES_RULE],
-    ['legacySnapshot', rule('snapshot', { nullable: true })]
+    ['legacySnapshot', rule('snapshot', { nullable: true })],
+    // Absent until setup sync first runs on this budget.
+    ['setup', optional(rule('object', { nullable: true, fields: SETUP_FIELDS }))]
   ];
 
   const FIELD_NAMES = {
@@ -633,6 +645,11 @@
         const changed = list.length !== value.length || list.some((s, i) => s !== value[i]);
         if (changed && strict) return bad('Notes must be text of up to ' + LIMITS.note + ' characters.');
         return ok(list, changed ? 'cleaned (blank or non-text notes removed, long ones shortened)' : null);
+      }
+      case 'json': { // a group of JSON values kept as they are (meta.setup.base)
+        const text = isObj(value) ? safeStringify(value) : null;
+        if (text === null) return bad('Expected a group of details.');
+        return text.length <= r.max ? ok(JSON.parse(text)) : bad('Too long.');
       }
       case 'snapshot': {
         if (typeof value !== 'string') return bad('Expected text.');

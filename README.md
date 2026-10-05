@@ -30,7 +30,9 @@ The importer recognises common US export layouts: signed amount, debit/credit co
 
 ### 2. Describe your household
 
-Copy `fixtures/sample-profile.json` to `private/household-profile.json` and edit it: names, income streams, bills, debts, savings goals and starting scenarios. Leave anything you don't know as `null`. Unknown values stay visibly unknown in the app and are never treated as $0.
+Copy `fixtures/sample-profile.json` to `private/household-profile.json` and edit it: names, income streams, bills, debts, savings goals and starting scenarios. Leave anything you don't know as `null`. Unknown values stay visibly unknown in the app and are never treated as $0. An optional `planUi` section sets plan-screen settings too (the spending dials, how many months the baselines average, category groupings).
+
+This profile is the household's setup file, and it can keep changing after the budget is in use. When you edit it and rebuild, a browser that already saved a budget picks up the changes the next time the page opens: each setting the household left alone takes the new value, and anything they changed in the app stays theirs (as do bills, goals and other items they added or removed there). The page says what it updated and what it kept, for example "Your setup file updated 5 settings (Dining & takeout target, …); kept 2 you changed here (…)." A value in the profile that is not valid is not applied, and the page names it.
 
 ### 3. Build your private copy
 

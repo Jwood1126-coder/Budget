@@ -471,7 +471,8 @@
       } catch { /* importWorkbook explains */ }
     }
     try {
-      const r = E.state.importWorkbook(String(text), ctx.profile, ctx.dataset, { now: new Date().toISOString() });
+      // Then the setup file's values, as on every load (E.setupSync).
+      const r = E.setupSync.importWorkbook(String(text), ctx.profile, ctx.dataset, { now: new Date().toISOString() });
       out.state = r.state;
       out.notes = r.notes || [];
     } catch (err) {
@@ -1321,7 +1322,7 @@
     const form = `<form id="dp-profile-form" data-action="dp:profile-use" aria-label="Use this profile">
       <fieldset class="dp-choice"><legend>Your budget in this browser</legend>
         <label class="check" for="dp-profile-start"><input type="radio" id="dp-profile-start" name="mode" value="start"${startDefault ? ' checked' : ''}> <span><strong>Start the budget from this profile.</strong> The plan and scenarios saved for “${esc(ctx.dataset.datasetId)}” are replaced. Transaction corrections and references are kept.</span></label>
-        <label class="check" for="dp-profile-keep"><input type="radio" id="dp-profile-keep" name="mode" value="keep"${startDefault ? '' : ' checked'}> <span><strong>Keep the budget saved in this browser.</strong> Your saved plan stays as it is. The profile is used by Reset, and for a data set with no saved budget yet.</span></label>
+        <label class="check" for="dp-profile-keep"><input type="radio" id="dp-profile-keep" name="mode" value="keep"${startDefault ? '' : ' checked'}> <span><strong>Keep the budget saved in this browser.</strong> What you changed here stays as it is; settings you never changed here follow this profile, as when the setup file is updated. The profile is also used by Reset, and for a data set with no saved budget yet.</span></label>
       </fieldset>
       <ul class="dp-points"><li>The page reloads. The profile is kept in this browser’s storage on this device only, until you choose Forget.</li></ul>
       ${p.useError ? `<div id="dp-profile-use-error" class="dp-error" tabindex="-1">${c.notice({ tone: 'bad', title: 'The profile could not be kept in this browser', body: esc(p.useError) })}</div>` : ''}
@@ -1994,9 +1995,11 @@
         danger: true,
       });
       if (!ok) return;
-      const fresh = E.state.defaults(ctx.profile, ctx.dataset, { now: new Date().toISOString() });
+      const now = new Date().toISOString();
+      const fresh = E.state.defaults(ctx.profile, ctx.dataset, { now });
       fresh.ui = { ...fresh.ui, scope: st.ui.scope, lastRoute: st.ui.lastRoute };
-      ctx.app.replaceState(fresh, 'Budget reset to the household profile.');
+      // The profile's plan-screen settings (planUi) too, and setup sync's record of what was applied.
+      ctx.app.replaceState(E.setupSync.apply(fresh, ctx.profile, { now }).state, 'Budget reset to the household profile.');
     },
   };
 

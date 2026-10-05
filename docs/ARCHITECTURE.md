@@ -56,6 +56,7 @@ src/
                          changes (planned changes, templates), export (toCSV), writes (state writes, upgrades)
     timeline.js          the plan screen: build, the Trends series, the public API (BudgetEngine.timeline)
     state.js             saved-state schema, migration, storage  (BudgetEngine.state)
+    setup-sync.js        the profile's later changes reach a saved budget (BudgetEngine.setupSync)
     attention.js         "needs attention" list (Review)         (BudgetEngine.attention)
   ui/
     core.js              escaping, formatting, DOM helpers       (BudgetUI.dom/.fmt): fmt.amount (cents
@@ -346,8 +347,11 @@ not make spending incomplete (`purpose: 'all'` expects every account).
 
 ## 3. Household profile
 
-Supplies the starting plan. The repository has `fixtures/sample-profile.json` (invented). A real
-household keeps `private/household-profile.json`. Saved state always wins over profile defaults.
+Supplies the starting plan, and is the household's **setup file**: their assistant keeps tuning it
+and rebuilds the page. The repository has `fixtures/sample-profile.json` (invented). A real
+household keeps `private/household-profile.json`. A new budget starts from it (`state.defaults`);
+its later changes reach a budget that was already saved through **setup sync** (below), so a value
+changed in the profile arrives unless the household changed that value in the app.
 
 ```js
 Profile = {
@@ -355,6 +359,11 @@ Profile = {
   isSynthetic: boolean,
   household: { name: string, people: [{ id: 'p1', name: string }, { id: 'p2', name: string }] },
   plan: Plan,                         // section 5
+  planUi: { ... },                    // optional: plan-screen settings (fields of ui.plan, §7) the setup
+                                      // file manages: dials, rows, groups, irregularOff, baselineMonths,
+                                      // coverFromSavings, investReturnPct (when this version has it).
+                                      // Checked with the ui.plan rules (state.cleanPlanUi); not applied by
+                                      // `defaults`, only by setup sync
   scenarios: Scenario[],              // optional starting scenarios (templates with blanks)
   references: Reference[],            // optional; NOT copied into State.references (user-entered only)
   rulesNote: string,                  // optional
@@ -365,6 +374,48 @@ Profile = {
 People names come from `plan.people`, then `household.people`, then "Partner A"/"Partner B".
 The sample keeps Sam's paycheck with `jointPerPaycheckCents: null` plus a separate contribution
 stream; that is the shape the joint-scope rule in section 8 (`plan`) expects.
+
+**Setup sync** (`BudgetEngine.setupSync`, `engine/setup-sync.js`). The page runs it on every load
+(after `state.loadFromStorage`, including a new budget and another tab's save) and on workbook
+import (after `state.importWorkbook`), so always after the saved budget was checked and upgraded
+(`sanitize`, `V5_UPGRADES`). It is a three-way merge of the saved value (S), the profile's value
+applied last time (B, `meta.setup.base`) and the profile now (P), and it only runs when the hash of
+the profile's setup-managed values differs from `meta.setup.hash` (so an unchanged profile costs
+nothing and says nothing).
+
+- Setup-managed (the table `MANAGED` at the top of `setup-sync.js`, `setupSync.MANAGED`):
+  `plan.incomes`, `plan.bills`, `plan.debts`, `plan.savings`, `plan.changes`, `plan.people` (lists,
+  by id, field by field; people: the name), `plan.targets` (by key), `plan.settings` and
+  `plan.balances` (field by field), and from `profile.planUi` the `ui.plan` fields `dials`, `rows`,
+  `groups`, `irregularOff` (by key), `baselineMonths`, `coverFromSavings`, `investReturnPct`
+  (whole). A `ui.plan` row is used only when this version's `ui.plan` has the field. Not managed:
+  `personalSpending`, scenarios, references, ledger corrections and every other setting.
+- Per unit (an item's field, a map entry, a field, a value): **S = B → P** (the household left it
+  alone); **S ≠ B → S** (changed here, kept). An item or entry new in P is added (lists: at the
+  end, checked like a new budget's, never `accepted`); one in B but not in P is removed when
+  unchanged since B (compared on the fields B has), otherwise kept; one the household added (not
+  in B) or removed (in B, not in S) stays as it is. Deep equality over JSON values, so fields added
+  to the format later need no change: B is read through the same checks first, so a field B does
+  not have yet counts as its default.
+- **First run** (no `meta.setup`, or an unreadable base): B := P for the plan, so nothing saved
+  changes and every value that differs from the profile counts as the household's. `ui.plan` never
+  came from the profile (`defaults` does not apply `planUi`), so its B is the `ui.plan` defaults:
+  a setting still at its default takes `planUi`'s value; one the household changed is kept.
+- **Strict:** a profile value the normal checks would change (`state.defaults`' cleaning for the
+  plan, `state.cleanPlanUi` for `planUi`) is not used: S stays and B keeps its earlier value there,
+  so a corrected file flows later. A list item without an id of its own is not followed (one B
+  holds is then not removed). The merged result goes through the same checks; a list item that does
+  not pass (fields depend on each other: start and end month) goes back to exactly what was saved,
+  an entry or value that does not pass stays as saved; all named in a note.
+- Deterministic and idempotent: running it again changes nothing (same hash: the same state back;
+  even with the hash forgotten, the merge finds nothing to change). Fields kept as saved from a newer
+  copy (forward compatibility, §7) are never compared or dropped.
+- Notes, shown once with the other notes from opening the page (Data & privacy, and a toast):
+  "Your setup file updated 5 settings (Dining & takeout target, …); kept 2 you changed here (…).",
+  "Your setup file changed 1 setting you changed here; kept yours (…).", on a first run with
+  differences "Your setup file is now linked to this budget; 3 settings here differ from it and were
+  kept (…).", and "Your setup file has 1 value this version could not use (…); kept what was here."
+  Not recorded in `meta.migrationNotes`.
 
 ## 4. Ledger edits (user corrections; part of saved state)
 
@@ -553,7 +604,16 @@ State = {
                                                  // essentials, flexible and irregular (timeline.migrateDials). Both idempotent.
         dismissed: { [noticeId]: boolean } },
   meta: { createdAt, updatedAt, migratedFrom: null|0..4,           // 0 = unversioned earlier budget
-          migrationNotes: string[], legacySnapshot: string|null }  // raw earlier data, set only by a migration
+          migrationNotes: string[], legacySnapshot: string|null,   // raw earlier data, set only by a migration
+          setup?: { hash: string, appliedAt: ISO-8601,             // setup sync's bookkeeping (§3); absent until it
+                    base: object|null } }                          // first runs. base: the profile's setup-managed
+                                                                   // values last applied, shaped like the state
+                                                                   // ({ plan: { incomes, …, targets, settings, balances,
+                                                                   // people }, ui: { plan: { dials, …, baselineMonths } } });
+                                                                   // a group of JSON values kept as they are, up to
+                                                                   // 25,000,000 chars (not valid: null, noted; the next
+                                                                   // sync then runs as a first run). An older copy keeps
+                                                                   // meta.setup as saved (forward compatibility, below)
 }
 ```
 
@@ -604,7 +664,8 @@ named, "…not part of the saved budget format; dropped"); map entries (`ui.plan
 `dials`, …), where an entry with a part this version does not know is still dropped as not valid;
 ledger corrections' fields; and an item rewritten whole by `updateItem`/`updateEvent`, which copies
 only the fields it knows. Writes stay strict: `setPath` refuses a field this version does not know.
-The household profile is not a saved budget: `defaults` leaves its unknown keys out.
+The household profile is not a saved budget: `defaults` leaves its unknown keys out (and so does
+setup sync).
 
 **Limits** (`state.LIMITS`): label 80 chars, note 500, category key 80, id 80, lastRoute 1000;
 scenarios 20, events per scenario 200, incomes 12, bills 60, savings 30, debts 30, targets 200,
@@ -632,6 +693,11 @@ on one device**; it is not shared between people or devices. Sharing uses workbo
 3. `defaults(profile, dataset)`.
 
 **In the page** (`src/ui/app.js`):
+
+- After `loadFromStorage` (on opening, and when another tab's save is taken over) and after a
+  workbook import (`views/data.js`), setup sync (§3) brings the profile's later changes into the
+  budget; its notes go with the other notes from opening the page (Data & privacy) and the first
+  one is shown once as a toast.
 
 - While a `'<key>:unreadable'` copy exists, every view shows a warning and Data & privacy offers
   to download or delete it.
@@ -1555,6 +1621,26 @@ naming what is missing, when a public name has not been added), the parts in bet
 - `loadFromStorage(storage, datasetId, profile, dataset, { legacyCopyIds, now }?) -> { state, notes, source: 'v5'|'legacy'|'none' }`,
   `saveToStorage(storage, state) -> { ok, error, key?, bytes? }` (take a Storage-like object; never
   touch globals; never throw; quota errors get a plain message). See section 7 for the key order.
+  These return the budget before setup sync; the page (and any tool loading a budget for the
+  household) runs `setupSync.apply` next, or calls `setupSync.loadFromStorage` / `importWorkbook`.
+
+### BudgetEngine.setupSync
+Setup sync, section 3. Loaded after `state.js`; uses `state.defaults`, `state.cleanPlanUi` and
+`state.PLAN_UI` when called. Pure; no clock.
+- `apply(state, profile, { now }?) -> { state, notes, changed, report }` — the three-way merge.
+  The input is not changed. Without a profile, or when the hash of the profile's setup-managed
+  values equals `meta.setup.hash`: `{ state }` (the same object), no notes, `changed: false`,
+  `report: null`. Otherwise `meta.setup` is written (`appliedAt` = `now`, else the earlier one, else
+  `meta.updatedAt`), `meta.updatedAt` = `now` when a saved value changed (`changed`), and
+  `report = { first, updated: string[], kept: string[], invalid: string[] }` holds the labels
+  behind the notes ("Rent amount", "Dining & takeout target", "Water (new)", "Streaming (removed)",
+  "Cushion (removed here)").
+- `loadFromStorage(storage, datasetId, profile, dataset, opts?)` and `importWorkbook(text, profile,
+  dataset, opts?)` — the `state` functions followed by `apply` (same `opts`); results add
+  `setupNotes` (also appended to `notes`) and `setup` (the report).
+- `MANAGED` — the setup-managed paths `[{ path, kind: 'list'|'map'|'fields'|'value' }]`, from the one
+  table in `setup-sync.js`; `SYNC_VERSION` (part of the hash: raised when the merge changes);
+  `equal(a, b)` — the deep equality over JSON values it uses.
 
 ### BudgetEngine.attention
 - `list({ dataset, txns, state, ctx, balanceKnown? }) -> [{ id, severity: 'action'|'decision'|'info', title, detail, route, cta? }]`
