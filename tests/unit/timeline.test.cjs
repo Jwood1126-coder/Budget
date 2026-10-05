@@ -789,7 +789,8 @@ test('build needs today and the data set; settings fall back to the defaults', (
   assert.deepEqual(T.settings({ horizon: 36, baselineMonths: 'all', dials: { essentials: 1.5, flexible: -4 }, rows: { a: { included: false, x: 1 }, b: {} },
     groups: { Pets: 'essentials', 'merchant:Bayside Club': 'flexible', Travel: 'sometimes' }, irregularOff: { t1: true, t2: false }, trends: { series: ['card', 'card', 'nope', 'in-p2'], ma: 4 } }),
   { baselineMonths: 'all', horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: { flexible: -4 }, rows: { b: {} }, hidden: null,
-    groups: { Pets: 'essentials', 'merchant:Bayside Club': 'flexible' }, irregularOff: { t1: true, t2: false }, legacyDials: {}, cardSplit: {}, trends: { series: ['card', 'in-p2'], ma: 3, trend: true } });
+    groups: { Pets: 'essentials', 'merchant:Bayside Club': 'flexible' }, irregularOff: { t1: true, t2: false }, legacyDials: {}, cardSplit: {}, trends: { series: ['card', 'in-p2'], ma: 3, trend: true },
+    otherDial: 'debt', investReturnPct: null, scenariosCopied: true });
   // A card or bank amount still among the dials (not yet checked by state.sanitize) waits to be carried over, and is newer.
   assert.deepEqual(T.settings({ dials: { card: 5000, essentials: 7 }, legacyDials: { card: 1, bank: 2, x: 3 }, cardSplit: { essentials: { cents: 7, card: 3 }, flexible: { cents: 1 }, card: { cents: 1, card: 1 } } }),
     Object.assign(T.settings({}), { dials: { essentials: 7 }, legacyDials: { card: 5000, bank: 2 }, cardSplit: { essentials: { cents: 7, card: 3 } } }));
@@ -1004,7 +1005,7 @@ test('planned changes: one-time in its month only, monthly through its end month
   assert.deepEqual(at('2026-07').changesApplied.map(a => a.id), ['raise', 'side']);
   assert.deepEqual([at('2026-07').in.p2, at('2026-07').in.other, at('2026-07').in.total], [30000, r.plan.in.other + 5000, 200000 + 35000]);
   assert.deepEqual(at('2026-08').changesApplied.map(a => a.id), ['gym', 'raise']);
-  assert.deepEqual(at('2026-08').changesApplied[0], { id: 'gym', label: 'gym', group: 'flexible', cents: 6000 });
+  assert.deepEqual(at('2026-08').changesApplied[0], { id: 'gym', label: 'gym', group: 'flexible', cents: 6000, source: 'plan' });
   assert.deepEqual([at('2026-08').out.flexible, at('2026-08').out.bank, at('2026-08').out.total], [56000, r.plan.out.bank + 6000, 206000]);
   assert.equal(at('2026-09').out.irregular, r.plan.out.irregular + 250000, 'the one-time change in its month');
   assert.equal(at('2026-10').out.irregular, r.plan.out.irregular, '…and only then');
@@ -1034,7 +1035,7 @@ test('planned changes through state: add, edit, accept and remove; switching kin
   st = T.addChange(st, { label: 'New car payment', kind: 'monthly', group: 'essentials', startMonth: '2026-09', endMonth: '2029-08', cents: 41000 });
   const id = st.plan.changes[0].id;
   assert.match(id, /^change-/);
-  assert.deepEqual(st.plan.changes[0], { id, label: 'New car payment', kind: 'monthly', group: 'essentials', personId: null, startMonth: '2026-09', endMonth: '2029-08', cents: 41000, accepted: false, template: null, note: '' });
+  assert.deepEqual(st.plan.changes[0], { id, label: 'New car payment', kind: 'monthly', group: 'essentials', personId: null, startMonth: '2026-09', endMonth: '2029-08', cents: 41000, accepted: false, template: null, scenario: null, note: '' });
   st = T.acceptChanges(st, [id], true);
   assert.equal(st.plan.changes[0].accepted, true);
   st = T.setChange(st, id, { kind: 'oneTime' });
@@ -1055,8 +1056,9 @@ test('planned changes through state: add, edit, accept and remove; switching kin
   assert.deepEqual(st.plan.changes, []);
 });
 
-test('the baby template: dated from the due month, every amount present except the leave income, nothing accepted', () => {
-  assert.deepEqual(T.templates.list(), [{ key: 'baby', label: 'Baby', needs: ['dueDate'] }]);
+test('the earlier baby template (kept as it was while the screen offers it): dated from the due month, every amount present except the leave income, nothing accepted', () => {
+  // The packs replaced it in the list; templates.baby still gives exactly what it gave.
+  assert.deepEqual(T.templates.list().map(t => t.key), ['babyFirstYear', 'childcare', 'kidCosts']);
   const items = T.templates.baby('2028-05-14');
   const by = label => items.find(i => i.label === label);
   assert.deepEqual(items.map(i => [i.label, i.kind, i.group, i.startMonth, i.endMonth, i.cents]), [
@@ -1151,8 +1153,8 @@ test('series: every catalogue key is there, aligned with the months; incomplete 
   const flows = r.series.filter(s => s.kind === 'flow');
   assert.deepEqual(r.series.slice(0, flows.length), flows);
   assert.ok(flows.every(s => s.unit === 'perMonth'));
-  assert.deepEqual(flows.map(s => s.key), ['in-p1', 'in-p2', 'in-other', 'in-total', 'card', 'bank', 'essentials', 'flexible', 'irregular', 'other-out', 'out-total', 'to-savings', 'from-savings', 'net', 'combined-change']);
-  assert.deepEqual(flows.map(s => s.group), ['in', 'in', 'in', 'in', 'out', 'out', 'out', 'out', 'out', 'out', 'out', 'savings', 'savings', 'net', 'net']);
+  assert.deepEqual(flows.map(s => s.key), ['in-p1', 'in-p2', 'in-other', 'in-total', 'card', 'bank', 'essentials', 'flexible', 'irregular', 'other-out', 'investing', 'out-total', 'to-savings', 'from-savings', 'net', 'combined-change']);
+  assert.deepEqual(flows.map(s => s.group), ['in', 'in', 'in', 'in', 'out', 'out', 'out', 'out', 'out', 'out', 'out', 'out', 'savings', 'savings', 'net', 'net']);
   assert.equal(r.series[0].name, 'Morgan');
   assert.ok(r.series.every(s => s.values.length === r.months.length));
   const s = key => r.series.find(x => x.key === key).values;
@@ -1248,7 +1250,8 @@ test('CSV: a settings block, a blank line, then one row per month; plain dollars
   assert.ok(blank > 2, 'a blank line between the blocks');
   assert.deepEqual(rows[blank + 1], ['Months']);
   const header = rows[blank + 2];
-  assert.deepEqual(header, ['month', 'status', 'in_p1', 'in_p2', 'in_other', 'in_total', 'essentials', 'flexible', 'irregular', 'other_out', 'out_total', 'to_savings', 'from_savings', 'combined_change', 'net_checking', 'combined_balance', 'combined_status', 'chk_balance', 'chk_status', 'sav_balance', 'sav_status']);
+  // Net to investments comes last (after the account columns), so the earlier columns keep their places.
+  assert.deepEqual(header, ['month', 'status', 'in_p1', 'in_p2', 'in_other', 'in_total', 'essentials', 'flexible', 'irregular', 'other_out', 'out_total', 'to_savings', 'from_savings', 'combined_change', 'net_checking', 'combined_balance', 'combined_status', 'chk_balance', 'chk_status', 'sav_balance', 'sav_status', 'investing']);
   const body = rows.slice(blank + 3);
   assert.equal(body.length, r.months.length);
   const cell = (month, col) => body.find(x => x[0] === month)[header.indexOf(col)];
@@ -1674,3 +1677,417 @@ test('a carried-over amount stays explained until it is kept or changed: per dia
     assert.equal(after.dialsByKey.irregular.bankCents, before.dialsByKey.irregular.bankCents);
   });
 }
+
+// ================================================================== the integrated plan (Budget reaches the chart)
+// One invented household built with the shared helpers (tests/helpers/ledger.cjs): six complete
+// months, January–June 2026, so the plan starts in July. Each month: Alex's pay 4,000 in; the
+// mortgage 1,500, internet 70 and a store-card payment 50 from checking; groceries 600, dining 200,
+// pets 10, hobbies 9 and gifts 8 on the card; 300 to savings; 200 to investments (from checking).
+const H = require('../helpers/ledger.cjs');
+const COVER = [{ start: '2026-01-01', end: '2026-06-30' }];
+const INV_ACCOUNT = { id: 'inv', label: 'Index fund', type: 'investment', scope: 'joint' };
+function integrated({ invest = true, investAccount = false, invRows = () => [], extraAccounts = [] } = {}) {
+  const r = H.rowMaker({ prefix: 'ip', description: n => 'IP ROW ' + n });
+  const txns = [];
+  for (const m of E.months.range('2026-01', '2026-06')) {
+    const d = day => `${m}-${String(day).padStart(2, '0')}`;
+    txns.push(r('chk', d(1), 400000, { kind: 'income', subtype: 'payroll', category: 'Income', merchant: 'Fernhill Labs', personId: 'p1' }));
+    txns.push(r('chk', d(2), -150000, { category: 'Mortgage', merchant: 'Westbrook Home Loans' }));
+    txns.push(r('chk', d(12), -7000, { category: 'Internet & phone', merchant: 'Lakeline Fiber' }));
+    txns.push(r('chk', d(9), -5000, { kind: 'debt_payment', subtype: 'store_card', category: 'Debt payment', merchant: 'Oakmont Store Card' }));
+    txns.push(r('card', d(10), -60000, { category: 'Groceries', merchant: 'Harbor Grocer' }));
+    txns.push(r('card', d(14), -20000, { category: 'Dining & takeout', merchant: 'Pine Cafe' }));
+    txns.push(r('card', d(16), -1000, { category: 'Pets', merchant: 'Kibble Barn' }));
+    txns.push(r('card', d(17), -900, { category: 'Hobbies', merchant: 'Quill Paper Co' }));
+    txns.push(r('card', d(18), -800, { category: 'Gifts & donations', merchant: 'Juniper Gifts' }));
+    txns.push(...H.pair(r('chk', d(20), -30000, { kind: 'transfer', subtype: 'savings', category: 'Transfer', merchant: 'Savings' }),
+      r('sav', d(20), 30000, { kind: 'transfer', subtype: 'savings', category: 'Transfer', merchant: 'Savings' })));
+    if (invest) txns.push(r('chk', d(21), -20000, { kind: 'transfer', subtype: 'investment', category: 'Transfer', merchant: 'Index fund' }));
+  }
+  const accounts = H.jointAccounts({ coverage: COVER, cardExtra: { paidInFull: true } }).concat(investAccount ? [investAccount === true ? INV_ACCOUNT : investAccount] : [], extraAccounts);
+  const balances = [{ accountId: 'chk', date: '2026-06-30', cents: 500000, source: 'statement' }, { accountId: 'sav', date: '2026-06-30', cents: 1000000, source: 'statement' }];
+  if (investAccount) balances.push({ accountId: 'inv', date: '2026-06-30', cents: 2000000, source: 'statement' });
+  return H.dataset({ datasetId: 'integrated-test', accounts, transactions: txns.concat(invRows(r)), balances });
+}
+const ipPlan = (extra = {}) => Object.assign(planWith(), extra);
+const ipRun = (ds, { plan = ipPlan(), settings = {}, today = '2026-07-08', compare } = {}) => T.build({ txns: L.applyEdits(ds, {}), dataset: ds, plan, settings: Object.assign({ baselineMonths: 6 }, settings), today, compare });
+const catRow = (r, group, label) => r.dialsByKey[group].drill.rows.find(x => x.level === 1 && x.label === label);
+const monthOf = (r, m) => r.months.find(x => x.month === m);
+
+test('category budgets: a row plans at its own change, else its budget (plan.targets), else its history; the dial baseline counts the budgets', () => {
+  const ds = integrated({ invest: false });
+  const plan = ipPlan({ targets: { Groceries: 55000, 'Dining & takeout': null, Clothing: 8000, Pets: 1500 } });
+  const r = ipRun(ds, { plan });
+  const groceries = catRow(r, 'essentials', 'Groceries');
+  assert.deepEqual([groceries.defaultCents, groceries.budgetCents, groceries.planCents, groceries.source], [60000, 55000, 55000, 'budget']);
+  const dining = catRow(r, 'flexible', 'Dining & takeout');
+  assert.deepEqual([dining.budgetCents, dining.planCents, dining.source], [null, 20000, 'history'], 'a budget of null is "not set"');
+  // A budget for a category with no history: a row of its own, in the taxonomy's group.
+  const clothing = catRow(r, 'flexible', 'Clothing');
+  assert.deepEqual([clothing.history, clothing.defaultCents, clothing.avgCents, clothing.budgetCents, clothing.planCents, clothing.source, clothing.txnCount, clothing.groupKey],
+    [false, 0, 0, 8000, 8000, 'budget', 0, 'Clothing']);
+  assert.equal(r.dialsByKey.flexible.drill.rows.filter(x => x.parent === clothing.id).length, 0, 'no history: no rows under it');
+  // A budget keeps a tiny category out of "Other", so its budget applies; the rest are still grouped.
+  const pets = catRow(r, 'flexible', 'Pets');
+  assert.deepEqual([pets.planCents, pets.source], [1500, 'budget']);
+  assert.deepEqual(catRow(r, 'flexible', 'Other').members.sort(), ['Gifts & donations', 'Hobbies']);
+  // The dial's baseline: each category at its budget when it has one, else its default. Nothing is "changed".
+  for (const k of ['essentials', 'flexible']) {
+    const d = r.dialsByKey[k];
+    const cats = d.drill.rows.filter(x => x.level === 1);
+    assert.equal(d.baselineCents, cats.reduce((s, x) => s + (x.budgetCents !== null ? x.budgetCents : x.defaultCents), 0), k);
+    assert.equal(d.planCents, d.baselineCents, k);
+    assert.equal(d.source, 'baseline', k);
+  }
+  assert.equal(r.dialsByKey.flexible.baselineCents, 20000 + 8000 + 1500 + 1700);
+  assert.equal(r.changed, false, 'budgets are the plan as it stands, not a change to it');
+  assert.match(r.dialsByKey.essentials.basis, /1 category budget from Budget$/);
+  // Card and bank still add up: a budget splits by the category's card share.
+  assert.equal(groceries.cardCents + groceries.bankCents, 55000);
+  assert.equal(groceries.cardCents, 55000, 'groceries are all on the card');
+  // A change saved on the row (ui.plan.rows) still wins over the budget.
+  const set = ipRun(ds, { plan, settings: { rows: { [groceries.id]: { cents: 52000 } } } });
+  assert.deepEqual([catRow(set, 'essentials', 'Groceries').planCents, catRow(set, 'essentials', 'Groceries').source], [52000, 'set']);
+  assert.equal(set.dialsByKey.essentials.source, 'rows');
+});
+
+test('setRow on a category row writes its budget (the row keeps only its included flag); setTarget is the same write for Budget', () => {
+  const ds = integrated({ invest: false });
+  let st = E.state.defaults(null, ds);
+  const tl = T.build({ txns: L.applyEdits(ds, {}), dataset: ds, plan: st.plan, settings: st.ui.plan, today: '2026-07-08' });
+  const groceries = tl.dialsByKey.essentials.drill.rows.find(x => x.level === 1 && x.label === 'Groceries');
+  const merchant = tl.dialsByKey.essentials.drill.rows.find(x => x.level === 2 && x.parent === groceries.id);
+  // An earlier amount and an included flag saved on the row.
+  st = E.state.setPath(st, 'ui.plan.rows.' + groceries.id, { included: false, cents: 61000 });
+  const a = T.setRow(st, groceries.id, { cents: 58000 }, tl);
+  assert.equal(a.plan.targets.Groceries, 58000);
+  assert.deepEqual(a.ui.plan.rows[groceries.id], { included: false }, 'the row keeps its included flag, not an amount');
+  // Without the timeline the category is found from the row id (budget keys and the taxonomy).
+  assert.deepEqual(T.setRow(st, groceries.id, { cents: 58000 }), a);
+  // Clearing the amount clears the budget too ("not set": null), back to the history.
+  const b = T.setRow(a, groceries.id, { cents: null }, tl);
+  assert.equal(b.plan.targets.Groceries, null);
+  assert.deepEqual(b.ui.plan.rows[groceries.id], { included: false });
+  // A category with no budget saved: clearing adds nothing.
+  assert.equal(Object.prototype.hasOwnProperty.call(T.setRow(st, groceries.id, { cents: null }, tl).plan.targets, 'Groceries'), false);
+  // A negative amount, a place row and the grouped "Other" keep using ui.plan.rows.
+  assert.deepEqual(T.setRow(st, groceries.id, { cents: -500 }, tl).ui.plan.rows[groceries.id], { included: false, cents: -500 });
+  const m = T.setRow(st, merchant.id, { cents: 59000 }, tl);
+  assert.deepEqual([m.ui.plan.rows[merchant.id], m.plan.targets], [{ cents: 59000 }, {}]);
+  const other = tl.dialsByKey.flexible.drill.rows.find(x => x.level === 1 && x.label === 'Other');
+  assert.deepEqual(T.setRow(st, other.id, { cents: 2000 }, tl).ui.plan.rows[other.id], { cents: 2000 });
+  // The new budget reaches the plan.
+  const after = T.build({ txns: L.applyEdits(ds, {}), dataset: ds, plan: a.plan, settings: a.ui.plan, today: '2026-07-08' });
+  assert.equal(after.dialsByKey.essentials.drill.rows.find(x => x.id === groceries.id).planCents, 58000);
+  // setTarget: what the Budget screen writes.
+  assert.equal(T.setTarget(st, 'Clothing', 9000).plan.targets.Clothing, 9000);
+  assert.equal(T.setTarget(T.setTarget(st, 'Clothing', 9000), 'Clothing', null).plan.targets.Clothing, null);
+  assert.throws(() => T.setTarget(st, 'Clothing', -1), err => err instanceof E.ValidationError);
+  assert.throws(() => T.setTarget(st, ' ', 1), err => err instanceof E.ValidationError && err.field === 'category');
+});
+
+test('bills: joint bills the history does not hold are added, seen bills that end are taken out, nothing is counted twice', () => {
+  const ds = integrated({ invest: false });
+  const bill = (id, fields) => Object.assign({ id, label: id, category: null, monthlyCents: 1000, fundedFrom: 'joint', type: 'other', debtId: null, status: 'existing', startMonth: null, endMonth: null, note: '' }, fields);
+  const bills = [
+    bill('mortgage', { category: 'Mortgage', monthlyCents: 150000, type: 'housing' }),               // seen: already in the dials
+    bill('internet', { category: 'Internet & phone', monthlyCents: 7000, endMonth: '2026-09' }),      // seen, ends: out from October
+    bill('gym', { category: 'Fitness', monthlyCents: 4000 }),                                          // not seen: added from July
+    bill('life', { category: 'Life insurance', monthlyCents: 3000, status: 'planned', startMonth: '2026-10' }), // planned, starts later
+    bill('store', { monthlyCents: 5000, type: 'debt' }),                                               // a debt payment the history holds
+    bill('loan', { monthlyCents: 12000, type: 'debt', startMonth: '2026-09', endMonth: '2027-02' }),   // starts later: added to debt & business
+    bill('car', { monthlyCents: 24500, type: 'debt', fundedFrom: 'p1' }),                              // paid personally
+    bill('mystery', { monthlyCents: 1500, type: 'subscription' }),                                     // no category: never added
+    bill('unknown', { category: 'Fitness', monthlyCents: null }),                                      // no amount
+    bill('old', { category: 'Streaming', monthlyCents: 1200, endMonth: '2026-05' }),                   // not seen and ended
+    bill('pets', { category: 'Pets', monthlyCents: 900 }),                                             // its category has a budget
+  ];
+  const plan = ipPlan({ bills, targets: { Pets: 1200 } });
+  const r = ipRun(ds, { plan });
+  assert.deepEqual(r.bills.map(b => [b.id, b.status, b.changeId]), [
+    ['mortgage', 'seen', null], ['internet', 'ends', 'bill-internet-ends'], ['gym', 'added', 'bill-gym'], ['life', 'added', 'bill-life'],
+    ['store', 'seen', null], ['loan', 'added', 'bill-loan'], ['car', 'notJoint', null], ['mystery', 'noCategory', null],
+    ['unknown', 'noAmount', null], ['old', 'ended', null], ['pets', 'inBudget', null],
+  ]);
+  const derived = r.changes.list.filter(c => c.source === 'bill');
+  assert.deepEqual(derived.map(c => [c.id, c.group, c.startMonth, c.endMonth, c.cents, c.status, c.readOnly, c.accepted]), [
+    ['bill-internet-ends', 'essentials', '2026-10', null, -7000, 'applied', true, true],
+    ['bill-gym', 'essentials', '2026-07', null, 4000, 'applied', true, true],
+    ['bill-life', 'essentials', '2026-10', null, 3000, 'applied', true, true],
+    ['bill-loan', 'debt', '2026-09', '2027-02', 12000, 'applied', true, true],
+  ]);
+  assert.match(derived[0].note, /^From Budget: internet is in your history and its last payment is in Sep 2026/);
+  // Month by month: the dials, plus exactly the bills the history does not hold.
+  const base = r.plan;
+  assert.equal(monthOf(r, '2026-07').out.essentials, base.out.essentials + 4000, 'the mortgage is not added again');
+  assert.equal(monthOf(r, '2026-09').out.essentials, base.out.essentials + 4000);
+  assert.equal(monthOf(r, '2026-10').out.essentials, base.out.essentials + 4000 + 3000 - 7000);
+  assert.equal(monthOf(r, '2026-10').out.bank, base.out.bank + 4000 + 3000 - 7000, 'bills are paid from the bank');
+  assert.deepEqual(['2026-08', '2026-09', '2027-02', '2027-03'].map(m => monthOf(r, m).out.debt), [base.out.debt, base.out.debt + 12000, base.out.debt + 12000, base.out.debt]);
+  assert.equal(base.out.debt, 5000, 'the store card is in the baseline once');
+  assert.equal(monthOf(r, '2026-09').out.other, base.out.other + 12000);
+  assert.equal(monthOf(r, '2026-09').out.total, base.out.total + 4000 + 12000);
+  assert.equal(monthOf(r, '2026-06').changesApplied.length, 0, 'never in months that happened');
+  // Part of the plan as it stands: not a change, and in the ghost when something else changes.
+  assert.deepEqual([r.changed, r.changedBy.changes, r.changes.derived], [false, false, 4]);
+  const moved = ipRun(ds, { plan, settings: { dials: { flexible: 10000 } } });
+  assert.equal(moved.changed, true);
+  assert.equal(monthOf(moved, '2026-10').baseline.out, moved.baseline.plan.out.total + 4000 + 3000 - 7000 + 12000, 'the ghost has the bills too');
+  // Read-only on the plan: they cannot be accepted, edited or removed there.
+  assert.throws(() => T.acceptChanges(E.state.defaults(null, ds), 'bill-gym'), err => err instanceof E.ValidationError);
+});
+
+test('savings goals: their monthly amounts are the savings baseline; each goal reaches its target in turn; a goal spent moves its money out of savings', () => {
+  const ds = integrated({ invest: false });
+  const goal = (id, fields) => Object.assign({ id, label: id, targetCents: null, targetMonth: null, savedCents: null, monthlyCents: null, spendAtTarget: false, note: '' }, fields);
+  const savings = [
+    goal('cushion', { label: 'Cushion', targetCents: 1100000, monthlyCents: 20000 }),
+    goal('trip', { label: 'Trip', targetCents: 100000, targetMonth: '2026-12', monthlyCents: 10000, spendAtTarget: true, savedCents: 0 }),
+    goal('fund', { label: 'Fund', monthlyCents: 5000 }),
+  ];
+  const r = ipRun(ds, { plan: ipPlan({ savings }) });
+  const sav = r.dialsByKey.savings;
+  assert.deepEqual([sav.baselineCents, sav.planCents, sav.source, sav.budgetCents, sav.averageCents, sav.basisKind], [35000, 35000, 'baseline', 35000, 30000, 'budget']);
+  assert.equal(sav.basis, 'From Budget: 3 savings goals ($350.00 a month)');
+  // The savings line: 10,000.00 on 30 June, + 350 a month, − 1,000 for the trip in December.
+  const line = account(r, 'sav');
+  assert.deepEqual(['2026-07', '2026-09', '2026-11', '2026-12', '2027-01', '2027-03'].map(m => point(line, m).cents), [1035000, 1105000, 1175000, 1110000, 1145000, 1215000]);
+  // In list order, cumulatively: the cushion at 11,000; the trip at 11,000 + 1,000; no target, no month.
+  assert.deepEqual(r.goals.map(g => [g.id, g.cumulativeCents, g.reachMonth, g.already]), [['cushion', 1100000, '2026-09', false], ['trip', 1200000, '2027-03', false], ['fund', null, null, false]]);
+  assert.deepEqual(r.goals[1], { id: 'trip', label: 'Trip', targetCents: 100000, savedCents: 0, monthlyCents: 10000, targetMonth: '2026-12', spendAtTarget: true, cumulativeCents: 1200000, reachMonth: '2027-03', already: false });
+  assert.deepEqual(r.markers, [{ kind: 'goal', id: 'cushion', month: '2026-09', label: 'Cushion reached', cents: 1100000 }, { kind: 'goal', id: 'trip', month: '2027-03', label: 'Trip reached', cents: 100000 }]);
+  // The trip is spent in December: out of savings, into irregular spending; checking is untouched.
+  const dec = monthOf(r, '2026-12'), nov = monthOf(r, '2026-11');
+  const spent = r.changes.list.find(c => c.id === 'goal-trip');
+  assert.deepEqual([spent.source, spent.kind, spent.group, spent.fromSavings, spent.cents, spent.status], ['goal', 'oneTime', 'irregular', true, 100000, 'applied']);
+  assert.deepEqual([dec.savings, dec.out.irregular - nov.out.irregular, dec.combinedChange - nov.combinedChange, dec.net], [35000 - 100000, 100000, -100000, nov.net]);
+  assert.equal(r.changes.totalOneTimeCents, 0, 'no cost to checking');
+  // The dial set directly still wins; a goal already reached at the start says so.
+  const direct = ipRun(ds, { plan: ipPlan({ savings }), settings: { dials: { savings: 0 } } });
+  assert.deepEqual([direct.dialsByKey.savings.planCents, direct.dialsByKey.savings.basisKind, direct.dialsByKey.savings.baselineCents], [0, 'direct', 35000]);
+  const small1 = ipRun(ds, { plan: ipPlan({ savings: [goal('a', { targetCents: 500000 })] }) });
+  assert.deepEqual([small1.goals[0].reachMonth, small1.goals[0].already], ['2026-06', true]);
+  // No goal with a monthly amount: the average, as before.
+  assert.deepEqual([small1.dialsByKey.savings.baselineCents, small1.dialsByKey.savings.basisKind], [30000, 'average']);
+  // No savings line: no reach months.
+  const noLine = ipRun(H.dataset({ datasetId: 'x', accounts: ds.accounts, transactions: ds.transactions, balances: [] }), { plan: ipPlan({ savings }) });
+  assert.ok(noLine.goals.every(g => g.reachMonth === null));
+});
+
+test('investments: their own dial and their own line, never part of joint cash; growth only at a rate the household entered, labelled illustrative', () => {
+  const ds = integrated({ investAccount: true });
+  const r = ipRun(ds);
+  const inv = r.dialsByKey.investing;
+  assert.deepEqual([inv.label, inv.baselineCents, inv.planCents, inv.source], ['Investing', 20000, 20000, 'baseline']);
+  assert.deepEqual([r.dialsByKey.other.label, r.dialsByKey.other.baselineCents], ['Debt & business', 5000], 'other is debt & business only');
+  assert.deepEqual(r.groups.out, ['essentials', 'flexible', 'irregular', 'savings', 'investing', 'other']);
+  assert.deepEqual([r.plan.out.invest, r.plan.out.other, r.plan.out.debt], [20000, 5000, 5000]);
+  assert.equal(r.plan.out.total, r.plan.out.card + r.plan.out.bank + r.plan.out.other + r.plan.out.invest);
+  // Actual months: invest apart from debt & business, inside the total.
+  const jun = monthOf(r, '2026-06');
+  assert.deepEqual([jun.out.invest, jun.out.other, jun.out.total], [20000, 5000, 60000 + 20000 + 1000 + 900 + 800 + 150000 + 7000 + 5000 + 20000]);
+  // The line: the statement balance, then + 200 a month (no growth assumed).
+  const line = r.balances.investments;
+  assert.deepEqual(line.accounts.map(a => [a.id, a.primary, a.anchor.date, a.anchor.cents, a.anchor.source]), [['inv', true, '2026-06-30', 2000000, 'statement']]);
+  assert.deepEqual(['2026-06', '2026-07', '2026-08'].map(m => line.points.find(p => p.month === m)).map(p => [p.cents, p.status]),
+    [[2000000, 'reconstructed'], [2020000, 'projected'], [2040000, 'projected']]);
+  assert.deepEqual([line.returnPct, line.illustrative], [null, null]);
+  assert.match(line.rule, /never part of the combined line/);
+  // Never joint cash: the combined line is checking + savings only.
+  assert.deepEqual(r.balances.combined.members, ['chk', 'sav']);
+  assert.equal(point(r.balances.combined, '2026-06').cents, 1500000);
+  assert.ok(!r.balances.accounts.some(a => a.id === 'inv'));
+  // Series and CSV.
+  const series = r.series.find(s => s.key === 'balance-investments');
+  assert.deepEqual([series.name, series.group, series.kind, series.unit], ['Investments', 'balances', 'balance', 'atMonthEnd']);
+  assert.deepEqual(series.values, line.points.map(p => p.cents));
+  assert.ok(E.state.TREND_SERIES.includes('balance-investments'));
+  assert.deepEqual(r.series.find(s => s.key === 'investing').values[r.months.findIndex(m => m.month === '2026-08')], 20000);
+  const rows = parseCSV(T.toCSV(r));
+  const header = rows.find(x => x[0] === 'month');
+  assert.deepEqual(header.slice(-3), ['investing', 'investments_balance', 'investments_status']);
+  const aug = rows.find(x => x[0] === '2026-08');
+  assert.deepEqual([aug[header.indexOf('investing')], aug[header.indexOf('investments_balance')], aug[header.indexOf('investments_status')]], ['200.00', '20400.00', 'projected']);
+  // With a growth rate the household entered: compounded monthly, every projected point illustrative.
+  const g = ipRun(ds, { settings: { investReturnPct: 6 } });
+  const monthly = Math.pow(1.06, 1 / 12) - 1;
+  const jul = Math.round(2000000 * monthly) + 2000000 + 20000;
+  const aug2 = jul + Math.round(jul * monthly) + 20000;
+  assert.deepEqual(['2026-07', '2026-08'].map(m => g.balances.investments.points.find(p => p.month === m)).map(p => [p.cents, p.status]), [[jul, 'illustrative'], [aug2, 'illustrative']]);
+  assert.equal(g.balances.investments.returnPct, 6);
+  assert.match(g.balances.investments.illustrative, /^Illustrative: grows 6% a year, compounded monthly, at the rate you entered\. Not a forecast of returns\.$/);
+  assert.deepEqual(g.balances.combined.points, r.balances.combined.points, 'joint cash is the same with or without growth');
+  assert.equal(rows.find(x => x[0] === 'invest_return_pct')[1], '');
+  // No investment account and no transfers: no investing dial, no line.
+  const none = ipRun(integrated({ invest: false }));
+  assert.deepEqual([none.dialsByKey.investing, none.balances.investments], [undefined, null]);
+  // An investment account with no transfers yet still gets the dial, so contributions can be planned.
+  const fresh = ipRun(integrated({ invest: false, investAccount: true }));
+  assert.deepEqual([fresh.dialsByKey.investing.baselineCents, fresh.balances.investments.points.find(p => p.month === '2026-09').cents], [0, 2000000]);
+});
+
+test('investments: rows on an investment account itself are not joint money; its transfers are counted once, on the cash side', () => {
+  const invCovered = Object.assign({}, INV_ACCOUNT, { coverage: COVER });
+  const ds = integrated({
+    invest: false, investAccount: invCovered,
+    invRows: r => {
+      const out = [];
+      for (const m of E.months.range('2026-01', '2026-06')) {
+        out.push(...H.pair(r('chk', `${m}-21`, -20000, { kind: 'transfer', subtype: 'investment', category: 'Transfer', merchant: 'Index fund' }),
+          r('inv', `${m}-22`, 20000, { kind: 'transfer', subtype: 'investment', category: 'Transfer', merchant: 'From checking' })));
+        out.push(r('inv', `${m}-28`, 1500, { kind: 'income', subtype: 'other', category: 'Income', merchant: 'Dividend' }));
+      }
+      return out;
+    },
+  });
+  const r = ipRun(ds);
+  assert.deepEqual([monthOf(r, '2026-03').out.invest, monthOf(r, '2026-03').in.total], [20000, 400000], 'once, and dividends inside the account are not joint money in');
+  assert.equal(r.dialsByKey.investing.baselineCents, 20000);
+  // Worked across its own export: 2,000,000 on 30 June, so 31 May was 2,000,000 − 20,000 − 1,500.
+  assert.equal(r.balances.investments.points.find(p => p.month === '2026-05').cents, 2000000 - 21500);
+});
+
+test('dials.other saved before investments had their own dial: marked on loading, read as debt & business plus investments, split once on the plan screen', () => {
+  const ds = integrated({ investAccount: true });
+  let st = E.state.defaults(null, ds);
+  const raw = JSON.parse(JSON.stringify(st));
+  raw.ui.plan.dials = { other: 60000 };
+  delete raw.ui.plan.otherDial;
+  const loaded = E.state.sanitize(raw, null, ds);
+  assert.equal(loaded.state.ui.plan.otherDial, 'withInvesting');
+  assert.deepEqual(loaded.notes, ['ui.plan.dials.other: your amount for debt, business and investments ($600.00) will be split the next time Plan opens, now that investments have a dial of their own.']);
+  const build = s => T.build({ txns: L.applyEdits(ds, {}), dataset: ds, plan: s.plan, settings: s.ui.plan, today: '2026-07-08', coverageMap: undefined });
+  const before = build(loaded.state);
+  // Until then: other = 600 − the investing baseline (200), investing at its baseline; the total is what was set.
+  assert.deepEqual([before.dialsByKey.other.planCents, before.dialsByKey.other.source, before.dialsByKey.investing.planCents, before.dialsByKey.investing.source], [40000, 'direct', 20000, 'baseline']);
+  assert.deepEqual(before.dialsByKey.other.split, { fromCents: 60000, investingCents: 20000, otherCents: 40000 });
+  const note = 'ui.plan.dials.other: your amount for debt, business and investments ($600.00) was split now that investments have a dial of their own: Investing is set to $200.00, its average; Debt & business is set to $400.00.';
+  assert.equal(before.migration.other.note, note);
+  const up = T.pendingUpgrade(before);
+  assert.deepEqual([up.steps, up.note], [['splitOther'], note.replace(/^ui\.plan\.dials\.other: y/, 'Y')]);
+  const split = up.apply(loaded.state);
+  assert.deepEqual([split.ui.plan.dials, split.ui.plan.otherDial], [{ other: 40000, investing: 20000 }, 'debt']);
+  assert.equal(split.meta.migrationNotes.filter(n => n === note).length, 1);
+  assert.deepEqual(up.apply(split), split, 'safe to run twice');
+  const after = build(split);
+  assert.equal(after.migration, null);
+  assert.equal(after.plan.out.total, before.plan.out.total, 'the plan is the same before and after');
+  // A budget saved since has the mark already: sanitize leaves dials.other alone.
+  const again = E.state.sanitize(JSON.parse(JSON.stringify(split)), null, ds);
+  assert.deepEqual([again.state.ui.plan.dials, again.notes], [{ other: 40000, investing: 20000 }, []]);
+  // Setting other while the split waits: the new amount is debt & business only.
+  assert.equal(T.setDial(loaded.state, 'other', 7000).ui.plan.otherDial, 'debt');
+  // No investments in the baseline: only the mark changes, and nothing is noted.
+  const plain = E.state.sanitize(raw, null, integrated({ invest: false })).state;
+  const tl0 = T.build({ txns: L.applyEdits(integrated({ invest: false }), {}), dataset: integrated({ invest: false }), plan: plain.plan, settings: plain.ui.plan, today: '2026-07-08' });
+  assert.equal(tl0.migration.note, '');
+  const done0 = T.pendingUpgrade(tl0).apply(plain);
+  assert.deepEqual([done0.ui.plan.dials, done0.ui.plan.otherDial, done0.meta.migrationNotes.length], [{ other: 60000 }, 'debt', plain.meta.migrationNotes.length]);
+});
+
+test('what-ifs: changes tagged with a scenario stay listed; build({ compare }) gives the combined line with that scenario applied', () => {
+  const ds = integrated({ invest: false });
+  const plan = ipPlan({ changes: [
+    change('crib', { kind: 'oneTime', group: 'irregular', startMonth: '2026-09', cents: 40000, accepted: false, scenario: 'Baby' }),
+    change('care', { group: 'essentials', startMonth: '2026-10', cents: 120000, accepted: false, scenario: 'Baby' }),
+    change('leave', { group: 'income', personId: 'p1', startMonth: '2026-10', endMonth: '2026-11', cents: null, accepted: false, scenario: 'Baby' }),
+    change('roof', { kind: 'oneTime', group: 'irregular', startMonth: '2026-08', cents: 900000, accepted: false, scenario: 'Repairs' }),
+    change('gym', { group: 'flexible', startMonth: '2026-08', cents: 5000, accepted: true }),
+  ] });
+  const r = ipRun(ds, { plan, compare: 'Baby' });
+  assert.deepEqual(r.scenarios, [{ name: 'Baby', count: 3, accepted: 0 }, { name: 'Repairs', count: 1, accepted: 0 }]);
+  assert.deepEqual(r.changes.list.map(c => [c.id, c.scenario, c.status]), [['crib', 'Baby', 'notAccepted'], ['care', 'Baby', 'notAccepted'], ['leave', 'Baby', 'unset'], ['roof', 'Repairs', 'notAccepted'], ['gym', null, 'applied']]);
+  assert.deepEqual([r.compare.scenario, r.compare.changeIds, r.compare.addedIds, r.compare.unset], ['Baby', ['crib', 'care', 'leave'], ['crib', 'care'], ['leave']]);
+  // The plan itself is unchanged by a what-if; the compare line differs by exactly its changes.
+  const plain = ipRun(ds, { plan });
+  assert.equal(plain.compare, null);
+  assert.deepEqual(r.balances.combined.points, plain.balances.combined.points);
+  const diff = m => point(r.balances.combined, m).cents - r.compare.points.find(p => p.month === m).cents;
+  assert.deepEqual(['2026-08', '2026-09', '2026-10', '2026-12'].map(diff), [0, 40000, 160000, 400000]);
+  assert.equal(r.compare.points.find(p => p.month === '2026-06').cents, null, 'only the projected months');
+  assert.equal(r.compare.months.find(m => m.month === '2026-10').out, monthOf(r, '2026-10').out.total + 120000);
+  // Accepting one applies it to the plan; the compare line then adds only the rest.
+  const accepted = ipRun(ds, { plan: Object.assign({}, plan, { changes: plan.changes.map(c => (c.id === 'care' ? Object.assign({}, c, { accepted: true }) : c)) }), compare: 'Baby' });
+  assert.deepEqual(accepted.compare.addedIds, ['crib']);
+  assert.equal(ipRun(ds, { plan, compare: 'Nope' }).compare, null);
+});
+
+test('summary: the first plan month in one object, the numbers Budget and the Plan tiles share', () => {
+  const ds = integrated({ investAccount: true });
+  const plan = ipPlan({ changes: [change('gym', { group: 'flexible', startMonth: '2026-07', cents: 5000 })], bills: [{ id: 'gym2', label: 'Climbing', category: 'Fitness', monthlyCents: 3000, fundedFrom: 'joint', type: 'other', status: 'existing' }] });
+  const r = ipRun(ds, { plan });
+  const jul = monthOf(r, '2026-07');
+  assert.deepEqual(r.summary, {
+    month: '2026-07', inCents: jul.in.total, inByPerson: { p1: jul.in.p1, p2: jul.in.p2, other: E.money.sumKnown([jul.in.unassigned, jul.in.other]) },
+    outByGroup: { essentials: jul.out.essentials, flexible: jul.out.flexible, irregular: jul.out.irregular, other: jul.out.other },
+    outCents: jul.out.total, savingsCents: jul.savings, investingCents: 20000, leftCents: jul.net,
+  });
+  assert.equal(r.summary.outByGroup.flexible, r.plan.out.flexible + 5000, 'accepted changes are in it');
+  assert.equal(r.summary.outByGroup.essentials, r.plan.out.essentials + 3000, 'and the bills Budget adds');
+  assert.equal(r.summary.leftCents, r.summary.inCents - r.summary.outCents - r.summary.savingsCents);
+  assert.equal(r.summary.outCents, r.summary.outByGroup.essentials + r.summary.outByGroup.flexible + r.summary.outByGroup.irregular + r.summary.outByGroup.other + r.summary.investingCents);
+});
+
+test('packs: new baby (first year), childcare and kid costs — editable estimates, timed from a date, never accepted for you', () => {
+  assert.deepEqual(T.templates.list().map(t => [t.key, t.needs]), [['babyFirstYear', ['dueDate']], ['childcare', ['startMonth', 'monthlyCents']], ['kidCosts', ['dueDate']]]);
+  const baby = T.templates.babyFirstYear('2027-05-14');
+  assert.deepEqual(baby.map(i => [i.label, i.kind, i.group, i.startMonth, i.endMonth, i.cents]), [
+    ['Car seat and stroller', 'oneTime', 'irregular', '2027-03', null, 45000],
+    ['Nursery and sleep (crib, mattress, dresser)', 'oneTime', 'irregular', '2027-03', null, 80000],
+    ['Starter clothes, feeding gear and basics', 'oneTime', 'irregular', '2027-04', null, 50000],
+    ['Birth: out-of-pocket hospital costs', 'oneTime', 'irregular', '2027-06', null, 300000],
+    ['Diapers and wipes', 'monthly', 'essentials', '2027-05', '2028-04', 8000],
+    ['Formula and feeding', 'monthly', 'essentials', '2027-05', '2028-04', 15000],
+    ['Baby health: copays and medicines', 'monthly', 'essentials', '2027-05', '2028-04', 5000],
+    ['Baby clothes as they grow', 'monthly', 'flexible', '2027-05', '2028-04', 4000],
+    ['Parental leave: income change', 'monthly', 'income', '2027-05', '2027-07', null],
+  ]);
+  const care = T.templates.childcare('2027-08');
+  assert.deepEqual(care.map(i => [i.label, i.kind, i.group, i.startMonth, i.endMonth, i.cents, i.template]), [['Childcare', 'monthly', 'essentials', '2027-08', null, 120000, 'childcare']]);
+  assert.equal(T.templates.childcare('2027-08', 95000)[0].cents, 95000);
+  assert.throws(() => T.templates.childcare('soon'), err => err instanceof E.ValidationError && err.field === 'startMonth');
+  assert.throws(() => T.templates.childcare('2027-08', -1), err => err instanceof E.ValidationError && err.field === 'monthlyCents');
+  const kid = T.templates.kidCosts('2027-05-14');
+  assert.deepEqual(kid.map(i => [i.label, i.group, i.startMonth, i.endMonth, i.cents]), [
+    ['Kid: food', 'essentials', '2028-05', null, 20000],
+    ['Kid: health (copays, dental, medicines)', 'essentials', '2028-05', null, 8000],
+    ['Kid: diapers until potty-trained', 'essentials', '2028-05', '2030-04', 7000],
+    ['Kid: clothes and shoes', 'flexible', '2028-05', null, 6000],
+    ['Kid: activities, toys and outings', 'flexible', '2028-05', null, 10000],
+  ]);
+  const all = baby.concat(care, kid);
+  assert.ok(all.every(i => i.accepted === false && i.personId === null && /generic estimate/i.test(i.note) && !('scenario' in i)));
+  assert.deepEqual(Array.from(new Set(all.map(i => i.template))), ['babyFirstYear', 'childcare', 'kidCosts']);
+  assert.throws(() => T.templates.kidCosts('2027-02-30'), err => err instanceof E.ValidationError && err.field === 'dueDate');
+  // As a what-if: every item tagged; into a budget through addChange like any planned change.
+  const tagged = T.templates.babyFirstYear('2027-05-14', { scenario: 'Baby in May' });
+  assert.ok(tagged.every(i => i.scenario === 'Baby in May'));
+  const st = T.addChange(E.state.defaults(null, integrated()), tagged.concat(T.templates.childcare('2027-08', null, { scenario: 'Baby in May' })));
+  assert.equal(st.plan.changes.length, 10);
+  assert.ok(st.plan.changes.every(c => c.scenario === 'Baby in May' && c.accepted === false));
+  // A scenario name longer than 60 characters is refused when saved; the packs shorten it.
+  assert.equal(T.templates.kidCosts('2027-05-14', { scenario: 'x'.repeat(70) })[0].scenario.length, 60);
+  assert.throws(() => T.addChange(E.state.defaults(null, integrated()), Object.assign({}, kid[0], { scenario: 'x'.repeat(61) })), err => err instanceof E.ValidationError);
+});
+
+test('category budgets are for the whole category: rows changed under it move it by their change; a place moved out takes its share along', () => {
+  const ds = integrated({ invest: false });
+  const plan = ipPlan({ targets: { Groceries: 55000, 'Dining & takeout': 25000 } });
+  const r = ipRun(ds, { plan });
+  const groceries = catRow(r, 'essentials', 'Groceries');
+  const grocer = r.dialsByKey.essentials.drill.rows.find(x => x.parent === groceries.id && x.label === 'Harbor Grocer');
+  // A place under it left out: the category drops by exactly that place's amount, from its budget.
+  const out = ipRun(ds, { plan, settings: { rows: { [grocer.id]: { included: false } } } });
+  assert.deepEqual([catRow(out, 'essentials', 'Groceries').planCents, catRow(out, 'essentials', 'Groceries').source], [55000 - grocer.planCents, 'budget']);
+  assert.equal(out.dialsByKey.essentials.planCents, r.dialsByKey.essentials.planCents - grocer.planCents);
+  assert.equal(out.dialsByKey.essentials.source, 'rows');
+  // A place moved to the other group as a whole: its history leaves the budget with it, so the total holds.
+  const moved = ipRun(ds, { plan, settings: { groups: { 'merchant:Pine Cafe': 'essentials' } } });
+  const dining = catRow(moved, 'flexible', 'Dining & takeout');
+  assert.deepEqual([dining.budgetCents, dining.budgetMovedCents, dining.planCents], [25000, 20000, 5000]);
+  assert.equal(catRow(moved, 'essentials', 'Pine Cafe').planCents, 20000);
+  assert.equal(moved.dialsByKey.essentials.baselineCents + moved.dialsByKey.flexible.baselineCents, r.dialsByKey.essentials.baselineCents + r.dialsByKey.flexible.baselineCents, 'nothing counted twice');
+  // Never below $0: a budget smaller than what moved out plans at $0.
+  const small2 = ipRun(ds, { plan: ipPlan({ targets: { 'Dining & takeout': 15000 } }), settings: { groups: { 'merchant:Pine Cafe': 'essentials' } } });
+  assert.deepEqual([catRow(small2, 'flexible', 'Dining & takeout').planCents, catRow(small2, 'flexible', 'Dining & takeout').budgetMovedCents], [0, 15000]);
+});

@@ -3,13 +3,13 @@
  * BudgetEngine.timeline: known balances and the balance lines (timeline-core.js says how the
  * timeline files fit together).
  *
- * Adds to E._timeline: anchors, prorate, mirrorPlan, balancesFor, and the texts SIMPLE_LABEL,
- * RULE, SIMPLE_RULE and ILLUSTRATIVE.
+ * Adds to E._timeline: anchors, prorate, mirrorPlan, balancesFor, investmentsFor, and the texts
+ * SIMPLE_LABEL, RULE, SIMPLE_RULE, ILLUSTRATIVE and INVEST_RULE.
  */
 (function (root) {
   const E = root.BudgetEngine || (root.BudgetEngine = {});
   const T = E._timeline;
-  const { isObj, isCents, own } = T;
+  const { isObj, isCents, own, roundCents } = T;
 
   const SIMPLE_LABEL = 'Illustrative cash projection from the numbers you entered';
   const RULE = 'Month-end balances are worked back and forward from each known balance with the transactions in your exports (reconstructed). '
@@ -348,5 +348,84 @@
     return base;
   }
 
-  Object.assign(T, { anchors, prorate, mirrorPlan, balancesFor, SIMPLE_LABEL, RULE, SIMPLE_RULE, ILLUSTRATIVE });
+  // ------------------------------------------------------------------ investments
+
+  const INVEST_RULE = 'Investments are not joint cash: they are never part of the combined line. Month-end values come from the balances supplied with your data (or entered), worked across the account’s own transactions when it has an export; after the last known balance each month adds that month’s net to investments (the investing dial in plan months).';
+
+  /** The data's joint investment accounts (dataset.accounts type 'investment'). */
+  const investmentAccounts = dataset => (dataset.accounts || []).filter(a => a && a.type === 'investment' && (a.scope || 'joint') === 'joint');
+
+  /**
+   * The investment balance line, or null when the data has no investment account: per account,
+   * known balances as for cash accounts (its supplied or entered balances, worked across its own
+   * transactions where its export covers the days), then projected after the last known day: the
+   * main account (the one with the latest known balance) adds each month's out.invest (the
+   * month's net to investments; pro-rated in the month of that day), the others stay level. With
+   * `cfg.investReturnPct` (% a year, set by the household) every projected month also grows by
+   * that rate compounded monthly — then those points are 'illustrative', never 'projected'.
+   * `points` adds the accounts up (null in a month where any is unknown).
+   * @returns {null|{ accounts: object[], points: object[], missing: object[], returnPct: number|null,
+   *   illustrative: string|null, rule: string, notes: string[] }}
+   */
+  function investmentsFor({ txns, dataset, plan, months, rowsByMonth, cfg }) {
+    const list = investmentAccounts(dataset);
+    if (!list.length) return null;
+    const bal = plan && isObj(plan.balances) ? plan.balances : {};
+    const entered = isObj(bal.accounts) ? bal.accounts : {};
+    const dates = isObj(bal.accountDates) ? bal.accountDates : {};
+    const ids = new Set(list.map(a => a.id));
+    // Worked out like cash accounts (E.balances.history reads cash account types only).
+    const synth = {
+      accounts: list.map(a => Object.assign({}, a, { type: 'other', coverage: Array.isArray(a.coverage) ? a.coverage : [] })),
+      balances: (Array.isArray(dataset.balances) ? dataset.balances : []).filter(b => b && ids.has(b.accountId)),
+      transactions: [],
+    };
+    const enteredAsOf = {};
+    for (const a of list) {
+      const d = E.dates.isDate(own(dates, a.id)) ? dates[a.id] : (E.dates.isDate(bal.accountsAsOf) ? bal.accountsAsOf : null);
+      if (isCents(own(entered, a.id)) && d) enteredAsOf[a.id] = d;
+    }
+    const h = E.balances.history(txns.filter(t => ids.has(t.accountId)), synth, { entered, enteredAsOf, months });
+    const rate = typeof cfg.investReturnPct === 'number' && Number.isFinite(cfg.investReturnPct) && cfg.investReturnPct !== 0 ? cfg.investReturnPct : null;
+    const monthly = rate === null ? 0 : Math.pow(1 + rate / 100, 1 / 12) - 1;
+    const known = h.accounts.filter(a => a.anchor && a.last);
+    const missing = h.accounts.filter(a => !a.anchor || !a.last).map(a => ({ id: a.id, name: a.label }));
+    const notes = missing.map(m => m.name + ' has no known balance: it is left out of the investments line, not counted as $0.');
+    const latest = known.slice().sort((x, y) => (x.anchor.date < y.anchor.date ? 1 : x.anchor.date > y.anchor.date ? -1 : x.id < y.id ? -1 : 1))[0] || null;
+    const accounts = known.map(a => {
+      const lastDay = E.dates.dayNumber(a.last.date);
+      const primary = latest && latest.id === a.id;
+      let running = a.last.cents;
+      const points = months.map((m, i) => {
+        const end = E.dates.dayNumber(E.months.end(m));
+        if (end <= lastDay) {
+          const v = a.values[i];
+          return { month: m, cents: v, status: v === null ? null : 'reconstructed', anchor: a.anchor.date.slice(0, 7) === m };
+        }
+        if (running !== null) {
+          const start = E.dates.dayNumber(E.months.start(m));
+          const share = lastDay >= start ? (end - lastDay) / E.months.daysIn(m) : 1;
+          const r = rowsByMonth.get(m);
+          const invest = primary ? (r && r.out ? r.out.invest : null) : 0;
+          if (invest === null || invest === undefined) running = null;
+          else running += roundCents(running * monthly * share) + (share === 1 ? invest : prorate(invest, end - lastDay, E.months.daysIn(m)));
+        }
+        return { month: m, cents: running, status: running === null ? null : rate === null ? 'projected' : 'illustrative', anchor: a.anchor.date.slice(0, 7) === m };
+      });
+      return { id: a.id, name: a.label, primary, anchor: Object.assign({}, a.anchor, { label: anchorLabel(a.anchor.source, a.anchor.date) }), known: { from: a.first.date, to: a.last.date }, note: a.note, points };
+    });
+    const points = months.map((m, i) => {
+      const ps = accounts.map(a => a.points[i]);
+      if (!ps.length || ps.some(p => p.cents === null)) return { month: m, cents: null, status: null, anchor: false };
+      const status = ps.some(p => p.status === 'illustrative') ? 'illustrative' : ps.some(p => p.status === 'projected') ? 'projected' : 'reconstructed';
+      return { month: m, cents: ps.reduce((s, p) => s + p.cents, 0), status, anchor: ps.some(p => p.anchor) };
+    });
+    return {
+      accounts, points, missing, returnPct: rate,
+      illustrative: rate === null ? null : 'Illustrative: grows ' + rate + '% a year, compounded monthly, at the rate you entered. Not a forecast of returns.',
+      rule: INVEST_RULE, notes,
+    };
+  }
+
+  Object.assign(T, { anchors, prorate, mirrorPlan, balancesFor, investmentsFor, SIMPLE_LABEL, RULE, SIMPLE_RULE, ILLUSTRATIVE, INVEST_RULE });
 })(typeof globalThis !== 'undefined' ? globalThis : this);

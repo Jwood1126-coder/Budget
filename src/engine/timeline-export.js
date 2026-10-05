@@ -28,8 +28,10 @@
   /**
    * The plan as CSV text (RFC 4180, CRLF line ends): a "Settings" block of key,value rows (the
    * baseline window, horizon, each dial, each row change, each one-time cost and whether it is in
-   * the allowance, each known balance, each planned change, cover from savings), a blank line,
-   * then a "Months" block with one row per month. Amounts are plain dollars ("1234.50"; with
+   * the allowance, each known balance and investment balance, each planned change (those worked
+   * out from Budget too), each savings goal's reach month, cover from savings, the investment
+   * growth rate), a blank line, then a "Months" block with one row per month (net to investments,
+   * and the investments line when there is one, come last). Amounts are plain dollars ("1234.50"; with
    * format 'cents', whole cents); unknown amounts are empty; statuses are words. Same input,
    * same text.
    * @param {object} tl build()'s result
@@ -60,6 +62,7 @@
     kv('last_month', tl.lastMonth);
     kv('horizon_months', String(tl.horizon));
     kv('cover_from_savings', yesNo(cfg.coverFromSavings));
+    kv('invest_return_pct', typeof cfg.investReturnPct === 'number' ? String(cfg.investReturnPct) : '');
     for (const d of tl.dials) {
       const k = 'dial.' + d.key;
       kv(k + '.label', csvText(d.label));
@@ -103,6 +106,14 @@
       kv(k + '.amount', money(a.anchor ? a.anchor.cents : null));
       kv(k + '.source', a.anchor ? a.anchor.source : '');
     }
+    const inv = tl.balances.investments || null;
+    for (const a of inv ? inv.accounts : []) {
+      const k = 'investment.' + a.id;
+      kv(k + '.name', csvText(a.name));
+      kv(k + '.date', a.anchor ? a.anchor.date : '');
+      kv(k + '.amount', money(a.anchor ? a.anchor.cents : null));
+      kv(k + '.source', a.anchor ? a.anchor.source : '');
+    }
     if (tl.balances.combined && tl.balances.combined.simple && tl.balances.combined.anchor) {
       kv('balance.joint_cash.date', tl.balances.combined.anchor.date);
       kv('balance.joint_cash.amount', money(tl.balances.combined.anchor.cents));
@@ -119,6 +130,14 @@
       kv(k + '.amount', money(c.cents));
       kv(k + '.accepted', yesNo(c.accepted));
       kv(k + '.status', c.status);
+      kv(k + '.source', c.source || 'plan');
+      if (c.scenario) kv(k + '.scenario', csvText(c.scenario));
+    }
+    for (const g of tl.goals || []) {
+      const k = 'goal.' + g.id;
+      kv(k + '.label', csvText(g.label));
+      kv(k + '.target', money(g.targetCents));
+      kv(k + '.reach', g.reachMonth || '');
     }
     lines.push('');
 
@@ -126,7 +145,8 @@
     const accounts = tl.balances.accounts || [];
     const combined = tl.balances.combined;
     line(['month', 'status'].concat(people.map(p => 'in_' + csvText(p.id)), ['in_other', 'in_total', 'essentials', 'flexible', 'irregular', 'other_out', 'out_total',
-      'to_savings', 'from_savings', 'combined_change', 'net_checking', 'combined_balance', 'combined_status'], accounts.flatMap(a => [csvText(a.id) + '_balance', csvText(a.id) + '_status'])));
+      'to_savings', 'from_savings', 'combined_change', 'net_checking', 'combined_balance', 'combined_status'], accounts.flatMap(a => [csvText(a.id) + '_balance', csvText(a.id) + '_status']),
+      ['investing'], inv ? ['investments_balance', 'investments_status'] : []));
     tl.months.forEach((m, i) => {
       const s = m.savings;
       const cp = combined ? combined.points[i] : null;
@@ -136,7 +156,8 @@
         money(s === null ? null : Math.max(0, s)), money(s === null ? null : Math.max(0, 0 - s)),
         money(m.combinedChange), money(m.net),
         money(cp ? cp.cents : null), cp && cp.status ? cp.status : '',
-      ], accounts.flatMap(a => [money(a.points[i].cents), a.points[i].status || ''])));
+      ], accounts.flatMap(a => [money(a.points[i].cents), a.points[i].status || '']),
+      [money(m.out.invest)], inv ? [money(inv.points[i].cents), inv.points[i].status || ''] : []));
     });
     return lines.join('\r\n') + '\r\n';
   }

@@ -120,7 +120,7 @@
   }
 
   /** A planned change by id (from the current model). */
-  const changeOf = (ctx, id) => model(ctx).changes.list.find(ch => ch.id === id) || null;
+  const changeOf = (ctx, id) => model(ctx).changes.list.find(ch => ch.id === id && !ch.readOnly) || null;
 
   /** Amount typed in a box: cents, null for blank, or undefined after showing what is wrong. */
   function centsFrom(el, field) {
@@ -229,11 +229,14 @@
     'plan:row-cents': (ctx, el) => {
       const id = el.dataset.row;
       const cur = ((ctx.state.ui.plan || {}).rows || {})[id];
+      const tl = model(ctx);
+      const dialOf = tl.dialsByKey[id.split('-')[0]];
+      const shown = dialOf && dialOf.drill ? dialOf.drill.rows.find(r => r.id === id) : null;
       const raw = typed(el.value);
       if (raw === '') {
         showError(el, null);
-        if (!cur || cur.cents === undefined) return;
-        change(ctx, st => E.timeline.setRow(st, id, { cents: null }), `${el.dataset.name} is back to its average.`);
+        if ((!cur || cur.cents === undefined) && !(shown && shown.source === 'budget')) return;
+        change(ctx, st => E.timeline.setRow(st, id, { cents: null }, tl), `${el.dataset.name} is back to its average.`);
         return;
       }
       let cents;
@@ -244,12 +247,10 @@
         return;
       }
       showError(el, null);
-      const dial = model(ctx).dialsByKey[id.split('-')[0]];
-      const row = dial && dial.drill ? dial.drill.rows.find(r => r.id === id) : null;
-      if (row && row.planCents === cents) return;
-      change(ctx, st => E.timeline.setRow(st, id, { cents }), `${el.dataset.name} set to ${amt(cents)} a month.`);
+      if (shown && shown.planCents === cents) return;
+      change(ctx, st => E.timeline.setRow(st, id, { cents }, tl), `${el.dataset.name} set to ${amt(cents)} a month.`);
     },
-    'plan:row-reset': (ctx, el) => change(ctx, st => E.timeline.setRow(st, el.dataset.row, { included: null, cents: null }), `${el.dataset.name} is back to its average.`),
+    'plan:row-reset': (ctx, el) => change(ctx, st => E.timeline.setRow(st, el.dataset.row, { included: null, cents: null }, model(ctx)), `${el.dataset.name} is back to its average.`),
     'plan:move-group': (ctx, el) => {
       const tl = model(ctx);
       const key = el.dataset.key;
@@ -394,14 +395,14 @@
         on ? `${el.dataset.name} accepted${ch && ch.cents === null ? ': it applies once it has an amount' : ''}.` : `${el.dataset.name} is listed only, not applied.`);
     },
     'plan:change-accept-all': ctx => {
-      const list = model(ctx).changes.list.filter(ch => !ch.accepted);
+      const list = model(ctx).changes.list.filter(ch => !ch.readOnly && !ch.accepted);
       if (!list.length) return;
       const unset = list.filter(ch => ch.cents === null).length;
       change(ctx, st => E.timeline.acceptChanges(st, list.map(ch => ch.id), true),
         `Accepted ${plural(list.length, 'planned change')}${unset ? `; ${unset} still ${unset === 1 ? 'needs' : 'need'} an amount` : ''}.`);
     },
     'plan:change-unaccept-all': ctx => {
-      const list = model(ctx).changes.list.filter(ch => ch.accepted);
+      const list = model(ctx).changes.list.filter(ch => !ch.readOnly && ch.accepted);
       if (!list.length) return;
       focusNext = '#plan-ch-accept-all';
       change(ctx, st => E.timeline.acceptChanges(st, list.map(ch => ch.id), false), `${plural(list.length, 'planned change')} no longer applied.`);

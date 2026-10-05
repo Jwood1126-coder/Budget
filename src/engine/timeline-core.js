@@ -5,12 +5,14 @@
  * split by section over these files, loaded in this order (src/manifest.json):
  *
  *   timeline-core.js      shared helpers, the constants, settings(raw); creates E._timeline
- *   timeline-balances.js  known balances (anchors), mirrored savings, the balance lines
+ *   timeline-balances.js  known balances (anchors), mirrored savings, the balance lines, the
+ *                         investments line
  *   timeline-spending.js  spending groups, the essentials and flexible drill-down (pattern
  *                         badges), the irregular dial's items
  *   timeline-dials.js     observed deposits (hints), the dials, the carry-over of the earlier
  *                         card and bank dials (legacyDialsPlan, carriedOver)
- *   timeline-changes.js   planned changes, and their templates (baby)
+ *   timeline-changes.js   planned changes, the changes worked out from Budget (bills, goals),
+ *                         and the packs (templates)
  *   timeline-export.js    toCSV
  *   timeline-writes.js    the screen's validated state writes and the upgrades it applies
  *   timeline.js           build, the Trends series catalogue, and the public E.timeline
@@ -46,7 +48,7 @@
   const { BALANCE_SERIES, BALANCE_SERIES_PREFIX } = PS;
   /** ui.plan.groups key that moves one place (merchant) to a group of its own choosing. */
   const MERCHANT_KEY = 'merchant:';
-  const DIAL_LABEL = { inOther: 'Other money in', essentials: 'Essentials', flexible: 'Flexible spending', irregular: 'Irregular costs', savings: 'Net to savings', other: 'Debt, business & investments' };
+  const DIAL_LABEL = { inOther: 'Other money in', essentials: 'Essentials', flexible: 'Flexible spending', irregular: 'Irregular costs', savings: 'Net to savings', investing: 'Investing', other: 'Debt & business' };
 
   const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
   const isCents = v => Number.isSafeInteger(v);

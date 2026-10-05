@@ -3,15 +3,15 @@
  * BudgetEngine.timeline: the plan screen's validated state writes, and the upgrades it applies
  * once (timeline-core.js says how the timeline files fit together).
  *
- * Adds to E._timeline: setDial, setRow, resetDial, resetPlan, setGroup, setIrregular, addChange,
- * setChange, removeChange, acceptChanges, migrateRows, migrateDials, pendingUpgrade,
- * acceptCarriedOver.
+ * Adds to E._timeline: setDial, setRow, setTarget, resetDial, resetPlan, setGroup, setIrregular,
+ * addChange, setChange, removeChange, acceptChanges, migrateRows, migrateDials, splitOther,
+ * pendingUpgrade, acceptCarriedOver.
  * Uses, when called: rowIdOf (timeline-spending.js).
  */
 (function (root) {
   const E = root.BudgetEngine || (root.BudgetEngine = {});
   const T = E._timeline;
-  const { isObj, isCents, has, own, fail, late, MERCHANT_KEY, SPEND_GROUPS, SPEND_DIALS, LEGACY_DIALS } = T;
+  const { isObj, isCents, has, own, fail, late, MERCHANT_KEY, SPEND_GROUPS, SPEND_DIALS, LEGACY_DIALS, OTHER_CATEGORY } = T;
   const rowIdOf = late('rowIdOf');
 
   // ------------------------------------------------------------------ state writes for the screen
@@ -21,10 +21,13 @@
   /**
    * Set one dial directly (cents, may be negative), or clear it with null/undefined (back to rows
    * or baseline). A card part kept for the dial's earlier amount (ui.plan.cardSplit) is removed.
+   * Setting `other` while an earlier amount still waits to be split (ui.plan.otherDial
+   * 'withInvesting') makes the new amount debt & business only (otherDial 'debt').
    */
   function setDial(state, key, cents) {
     let next = E.state.setPath(state, 'ui.plan.dials.' + key, cents === null ? undefined : cents);
     if (has(planUi(next).cardSplit, key)) next = E.state.setPath(next, 'ui.plan.cardSplit.' + key, undefined);
+    if (key === 'other' && planUi(next).otherDial === 'withInvesting' && cents !== null && cents !== undefined) next = E.state.setPath(next, 'ui.plan.otherDial', 'debt');
     return next;
   }
 
@@ -37,19 +40,71 @@
   }
 
   /**
+   * The category a drill-down row id stands for when it is a level-1 row of one real category
+   * (not the grouped "Other", not a place moved as a whole), else null. With the current timeline
+   * `tl` the row is looked up; without it the id is matched against the categories the budget and
+   * the taxonomy know (row ids are '<group>-c-' + a hash of the category).
+   */
+  function categoryOfRow(state, id, tl) {
+    if (typeof id !== 'string') return null;
+    if (tl && isObj(tl.dialsByKey)) {
+      for (const g of SPEND_GROUPS) {
+        const d = tl.dialsByKey[g];
+        const r = d && d.drill && Array.isArray(d.drill.rows) ? d.drill.rows.find(x => x.id === id) : null;
+        if (r) return r.level === 1 && !r.synthetic && typeof r.groupKey === 'string' && !r.groupKey.startsWith(MERCHANT_KEY) && r.groupKey !== OTHER_CATEGORY ? r.groupKey : null;
+      }
+    }
+    const targets = state && isObj(state.plan) && isObj(state.plan.targets) ? Object.keys(state.plan.targets) : [];
+    for (const cat of targets.concat(E.categories.names())) {
+      if (cat === OTHER_CATEGORY) continue;
+      for (const g of SPEND_GROUPS) if (rowIdOf(g, 'c', cat) === id) return cat;
+    }
+    return null;
+  }
+
+  /**
    * Change one drill-down row: patch { included?: boolean, cents?: number|null }. null/undefined
    * clears that part; included: true is the default and is not stored. An empty change is removed.
+   * On a level-1 row of one category (categoryOfRow; pass the current timeline `tl` to look it up)
+   * an amount is the category's budget: `cents` (0 or more) is written to plan.targets[category]
+   * and the row's own amount in ui.plan.rows is removed (its included flag stays there); clearing
+   * it (null) clears the budget too (plan.targets[category] becomes null, "not set", when it was
+   * there). A negative amount, the grouped "Other", places and places moved as a whole keep using
+   * ui.plan.rows.
    */
-  function setRow(state, id, patch) {
+  function setRow(state, id, patch, tl) {
     const cur = isObj(planUi(state).rows) && isObj(own(planUi(state).rows, id)) ? planUi(state).rows[id] : {};
     const next = Object.assign({}, cur);
+    let target;
+    const category = isObj(patch) && has(patch, 'cents') ? categoryOfRow(state, id, tl) : null;
     for (const k of ['included', 'cents']) {
       if (!isObj(patch) || !Object.prototype.hasOwnProperty.call(patch, k)) continue;
+      if (k === 'cents' && category !== null && (patch.cents === undefined || patch.cents === null || (isCents(patch.cents) && patch.cents >= 0))) {
+        delete next.cents;
+        target = patch.cents === undefined ? null : patch.cents;
+        continue;
+      }
       if (patch[k] === undefined || patch[k] === null) delete next[k];
       else next[k] = patch[k];
     }
     if (next.included === true) delete next.included;
-    return E.state.setPath(state, 'ui.plan.rows.' + id, Object.keys(next).length ? next : undefined);
+    let out = state;
+    if (target !== undefined) {
+      const targets = state && isObj(state.plan) && isObj(state.plan.targets) ? state.plan.targets : {};
+      if (target !== null || has(targets, category)) out = setTarget(out, category, target);
+    }
+    if (Object.keys(next).length || has(planUi(out).rows, id)) out = E.state.setPath(out, 'ui.plan.rows.' + id, Object.keys(next).length ? next : undefined);
+    return out;
+  }
+
+  /**
+   * Set a category's monthly budget (plan.targets[category]): cents (0 or more), or null for "not
+   * set" (the plan then uses the category's history). What the Budget screen and the plan's
+   * category rows write. Validated through state.setPath.
+   */
+  function setTarget(state, category, cents) {
+    if (typeof category !== 'string' || !category.trim()) fail('Choose a category.', 'category');
+    return E.state.setPath(state, 'plan.targets.' + category.trim(), cents === undefined ? null : cents);
   }
 
   /**
@@ -68,7 +123,7 @@
     return next;
   }
 
-  /** Every dial, row and one-time cost back to the baseline (groups, planned changes and other settings stay). */
+  /** Every dial, row and one-time cost back to the baseline (groups, planned changes, budgets and other settings stay). */
   function resetPlan(state) {
     const p = planUi(state);
     let next = state;
@@ -198,19 +253,44 @@
     return recordNote(next, mig.note);
   }
 
+  /**
+   * Split an amount saved for `other` before investments had a dial of their own (ui.plan.otherDial
+   * 'withInvesting'; tl.migration.other from build): investing is set directly to its baseline
+   * (unless it was set directly in the meantime), other to the saved amount minus that baseline,
+   * otherDial becomes 'debt', and the note is appended to meta.migrationNotes. With no
+   * investments in the baseline only otherDial changes (the amount was all debt & business; no
+   * note). Nothing waiting: the state is returned as it is (safe to run twice).
+   */
+  function splitOther(state, tl) {
+    const mig = tl && isObj(tl.migration) && isObj(tl.migration.other) ? tl.migration.other : null;
+    const p = planUi(state);
+    if (p.otherDial !== 'withInvesting') return state;
+    // Nothing is saved for other any more: an amount set from now on is debt & business only.
+    if (!isCents(own(p.dials, 'other'))) return E.state.setPath(state, 'ui.plan.otherDial', 'debt');
+    // A timeline built for another state: nothing to do with it.
+    if (!mig || p.dials.other !== mig.fromCents) return state;
+    let next = state;
+    // No investments in the baseline: the amount was all debt & business; only the mark changes.
+    if (mig.investingCents !== 0 && !isCents(own(p.dials, 'investing'))) next = E.state.setPath(next, 'ui.plan.dials.investing', mig.investingCents);
+    if (mig.otherCents !== p.dials.other) next = E.state.setPath(next, 'ui.plan.dials.other', mig.otherCents);
+    next = E.state.setPath(next, 'ui.plan.otherDial', 'debt');
+    return mig.note ? recordNote(next, mig.note) : next;
+  }
+
   // ------------------------------------------------------------------ upgrades the plan screen applies
   // Upgrades inside saved-state version 5 that need a built plan (row ids depend on the data), so
   // state.sanitize cannot run them (its own are BudgetEngine.state.V5_UPGRADES). Like those, each
   // is safe to run twice and leaves a note in meta.migrationNotes.
-  const SCREEN_UPGRADES = { migrateRows, migrateDials };
+  const SCREEN_UPGRADES = { migrateRows, migrateDials, splitOther };
 
   /**
    * What the plan screen must apply once, as one change, for the timeline `tl` it just built:
    * null when nothing is waiting, else { steps, note, apply }:
    *   steps  the upgrades, in order: 'migrateRows' (row changes saved under the earlier card/bank
-   *          dials) and/or 'migrateDials' (amounts set for those dials, from ui.plan.legacyDials)
+   *          dials), 'migrateDials' (amounts set for those dials, from ui.plan.legacyDials) and
+   *          'splitOther' (an amount saved for other before investments had their own dial)
    *   note   tl.migration.note: what to tell the household, once (also the key for "already done")
-   *   apply  state => the state with every step applied (migrateDials(migrateRows(state, tl), tl));
+   *   apply  state => the state with every step applied (in order, each given `tl`);
    *          safe to run twice (the second run changes nothing)
    * @param {object} tl from build
    */
@@ -220,6 +300,7 @@
     const steps = [];
     if ((Array.isArray(mig.rows) && mig.rows.length) || (Array.isArray(mig.dropped) && mig.dropped.length)) steps.push('migrateRows');
     if (isObj(mig.dials)) steps.push('migrateDials');
+    if (isObj(mig.other)) steps.push('splitOther');
     if (!steps.length) return null;
     return { steps, note: mig.note, apply: state => steps.reduce((st, step) => SCREEN_UPGRADES[step](st, tl), state) };
   }
@@ -239,7 +320,7 @@
   }
 
   Object.assign(T, {
-    setDial, setRow, resetDial, resetPlan, setGroup, setIrregular, addChange, setChange, removeChange, acceptChanges, migrateRows, migrateDials,
-    pendingUpgrade, acceptCarriedOver,
+    setDial, setRow, setTarget, resetDial, resetPlan, setGroup, setIrregular, addChange, setChange, removeChange, acceptChanges, migrateRows, migrateDials,
+    splitOther, pendingUpgrade, acceptCarriedOver,
   });
 })(typeof globalThis !== 'undefined' ? globalThis : this);

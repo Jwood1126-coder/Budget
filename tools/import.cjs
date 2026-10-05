@@ -237,7 +237,8 @@ function printPeriod(dataset, period, log) {
 const EXAMPLE_CONFIG = {
   _help: [
     'Copy this file to private/import.json and replace every placeholder. Paths are relative to the repository root.',
-    'accounts[].type: checking | savings | credit_card | loan | other; scope: joint | personal; ownerId: p1 | p2 | null (personal accounts).',
+    'accounts[].type: checking | savings | credit_card | loan | investment | other; scope: joint | personal; ownerId: p1 | p2 | null (personal accounts).',
+    'An investment account (type investment) may have no files at all: list it in accounts and give its statement balances in "balances" (a balance-only account). It is never counted as cash.',
     'files[].coverageStart / coverageEnd: the full date range you asked the bank to export (YYYY-MM-DD). Omit them to use the first and last row dates.',
     'files[].mapping is optional: add it only if the importer cannot recognise the column headers, e.g.',
     '{ "date": "Trans Date", "description": "Payee", "amount": "Amount", "dateFormat": "MDY", "chargesPositive": true }',

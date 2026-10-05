@@ -28,6 +28,16 @@ function timeline(page) {
     };
   });
 }
+/** Clears the sample's budgets (plan.targets) for these categories, so they plan from their history. */
+async function withoutBudgets(t, categories) {
+  await t.page.evaluate(cats => {
+    const H = window.HouseholdBudget;
+    const st = H.getState();
+    for (const c of cats) st.plan.targets[c] = null;
+    H.setState(st);
+  }, categories);
+  await t.settled();
+}
 /** The Trends series the engine offers for the current state: key, name, group, kind and unit. */
 function seriesInfo(page) {
   return page.evaluate(() => {
@@ -205,18 +215,21 @@ module.exports = [
       await t.open('#/overview');
       const exp = await timeline(page);
       const v = k => dialOf(exp, k).planCents;
-      const spend = v('essentials') + v('flexible') + v('irregular');
       const m = exp.months.find(x => x.month === exp.planStart);
-      assert.equal(m.out.card + m.out.bank, spend, 'the engine: card + bank = the three spending dials');
+      // The month's spending groups: the dials plus what Budget adds (the sample's planned life insurance, $40 a month).
+      const spend = m.out.essentials + m.out.flexible + m.out.irregular;
+      const fromBudget = exp.changes.list.filter(ch => ch.source === 'bill' && ch.status === 'applied' && ch.startMonth <= exp.planStart).reduce((s, ch) => s + ch.cents, 0);
+      assert.equal(spend, v('essentials') + v('flexible') + v('irregular') + fromBudget, 'the three spending dials and the bills from Budget');
+      assert.equal(m.out.card + m.out.bank, spend, 'the engine: card + bank = the three spending groups');
       for (const k of ['essentials', 'flexible', 'irregular']) assert.equal(dialOf(exp, k).cardCents + dialOf(exp, k).bankCents, v(k), k + ' splits into card and bank');
       // Flows: the out columns are the dials.
       await page.click('label[for^="plan-mode-flows"]');
       await page.waitForSelector('#plan-chart[data-mode="flows"]');
       const fl = await table(page);
       const r = row(fl, exp.planLabel);
-      assert.equal(r[fl.col('Out: Essentials')], whole(v('essentials')));
-      assert.equal(r[fl.col('Out: Flexible')], whole(v('flexible')));
-      assert.equal(r[fl.col('Out: Irregular')], whole(v('irregular')));
+      assert.equal(r[fl.col('Out: Essentials')], whole(m.out.essentials));
+      assert.equal(r[fl.col('Out: Flexible')], whole(m.out.flexible));
+      assert.equal(r[fl.col('Out: Irregular')], whole(m.out.irregular));
       // Trends: the card and bank lines for the same month add up to the same total.
       await page.click('label[for^="plan-mode-trends"]');
       await page.waitForSelector('#plan-trend-add');
@@ -248,7 +261,8 @@ module.exports = [
       await page.waitForSelector('#plan-prompt');
       assert.equal(await page.getAttribute('#plan-chart', 'data-mode'), 'flows', 'flows when nothing is known');
       const top = await page.evaluate(() => document.querySelector('#plan-chart-plot').getBoundingClientRect().top / innerHeight);
-      assert.ok(top < 0.55, 'the flows plot starts in the first screen too (' + Math.round(top * 100) + '%)');
+      // 0.62: the flows legend has a "From savings" chip now that the sample's trip goal is spent from savings.
+      assert.ok(top < 0.62, 'the flows plot starts in the first screen too (' + Math.round(top * 100) + '%)');
       assert.equal((await page.textContent('#plan-prompt')).trim(), 'Enter today’s balances below to see where the money is heading');
       assert.deepEqual(await page.$$eval('input[name="plan-mode"]', xs => xs.map(x => x.value)), ['flows', 'trends'], 'no balance switch without a balance');
       assert.equal(await page.inputValue('#plan-bal-joint-checking-date'), '');
@@ -524,13 +538,14 @@ module.exports = [
       await page.waitForFunction(id => !window.HouseholdBudget.getState().ui.plan.rows[id], place.id);
       await page.waitForFunction(v => document.querySelector('#plan-dial-flexible').value === v, boxText(base));
 
-      // A category from its average to $200: the dial is the new sum.
+      // A category to $200: its budget (plan.targets, shared with Budget); the dial is the new sum, and its baseline too.
       const cat = rows.filter(r => r.level === 1 && r.groupKey).sort((a, b) => b.planCents - a.planCents)[1];
       await typeAmount(page, `#plan-row-${cat.id}-amt`, '200');
-      await page.waitForFunction(id => (window.HouseholdBudget.getState().ui.plan.rows[id] || {}).cents === 20000, cat.id);
+      await page.waitForFunction(k => window.HouseholdBudget.getState().plan.targets[k] === 20000, cat.groupKey);
+      assert.equal((await state(page)).ui.plan.rows[cat.id], undefined, 'not a row change');
       const sum = base - cat.planCents + 20000;
       await page.waitForFunction(v => document.querySelector('#plan-dial-flexible').value === v, boxText(sum));
-      assert.match(await page.textContent(`[data-row="${cat.id}"] .drill-meta`), /edited/);
+      assert.match(await page.textContent(`[data-row="${cat.id}"] .drill-meta`), /budget/);
 
       // Dragging the dial sets it directly: the summary shows that value (not the rows) and the baseline.
       await page.$eval('#plan-dial-flexible-range', el => {
@@ -542,14 +557,14 @@ module.exports = [
       await page.waitForSelector('#plan-drill-flexible-use');
       const direct = (await state(page)).ui.plan.dials.flexible;
       assert.equal(await page.inputValue('#plan-dial-flexible'), boxText(direct));
-      assert.equal(await summary(), `What’s in this · ${exp.flexible.categoryCount} categories · ${amt(direct)}/mo · baseline ${amt(d.baselineCents)}`);
+      assert.equal(await summary(), `What’s in this · ${exp.flexible.categoryCount} categories · ${amt(direct)}/mo · baseline ${amt(sum)}`);
       const note = await page.textContent('#plan-drill-flexible .notice');
       assert.ok(note.includes(`Dial set directly to ${amt(direct)}; the rows add up to ${amt(sum)}.`), note);
       await page.click('#plan-drill-flexible-use');
       await page.waitForFunction(() => window.HouseholdBudget.getState().ui.plan.dials.flexible === undefined);
       await page.waitForFunction(v => document.querySelector('#plan-dial-flexible').value === v, boxText(sum));
       assert.ok(!(await page.$('#plan-drill-flexible-use')), 'the notice is gone');
-      assert.equal((await state(page)).ui.plan.rows[cat.id].cents, 20000, 'the rows are kept');
+      assert.equal((await state(page)).plan.targets[cat.groupKey], 20000, 'the budget is kept');
     },
   },
   {
@@ -713,6 +728,8 @@ module.exports = [
     async run(t) {
       const { page, assert } = t;
       await t.open('#/overview');
+      // A category with a budget plans at its budget; these follow their history.
+      await withoutBudgets(t, ['Groceries', 'Household & hardware']);
       const exp = await timeline(page);
       const kroger = exp.essentials.rows.find(r => r.kind === 'merchant' && r.label === 'Kroger');
       const [txn] = await txnsOf(page, kroger.txnIds.slice(0, 1));
@@ -803,6 +820,8 @@ module.exports = [
     async run(t) {
       const { page, assert } = t;
       await t.open('#/overview');
+      // A category with a budget plans at its budget; these follow their history.
+      await withoutBudgets(t, ['Groceries', 'Household & hardware', 'Mixed retail']);
       const exp = await timeline(page);
       const ess = dialOf(exp, 'essentials').planCents, flex = dialOf(exp, 'flexible').planCents;
       // Same group (both flexible): the total does not move.
@@ -936,7 +955,7 @@ module.exports = [
       assert.equal(b.rows[0][0], a.rows[0][0], 'same first month');
       assert.equal(b.rows[b.rows.length - 1][0], a.rows[a.rows.length - 1][0], 'same last month');
       assert.deepEqual(await page.$$eval('#plan-chart .cc-chip', bs => bs.map(x => x.dataset.ccKey)),
-        ['in-p1', 'in-p2', 'in-other', 'out-essentials', 'out-flexible', 'out-irregular', 'out-savings', 'out-other', 'net']);
+        ['in-p1', 'in-p2', 'in-other', 'in-savings', 'out-essentials', 'out-flexible', 'out-irregular', 'out-savings', 'out-other', 'net']);
       // The flows add up: total in − total out = net, every month.
       const f = b.col.bind(b);
       for (const r of b.rows.filter(x => x[f('Status')] !== 'Gap')) {
@@ -1234,7 +1253,7 @@ module.exports = [
       assert.ok(leave && leave.group === 'income', 'the leave item has no amount');
       assert.match(await page.textContent(`#plan-ch-${leave.id}-unset`), /^amount not set — enter the monthly reduction/);
       assert.match(await page.textContent(`#plan-ch-${leave.id}-status`), /Amount not set/);
-      for (const ch of exp.changes.list.filter(x => x.cents !== null)) assert.match(await page.textContent(`#plan-ch-${ch.id}-status`), /Not accepted/);
+      for (const ch of exp.changes.list.filter(x => x.cents !== null && x.source === 'plan')) assert.match(await page.textContent(`#plan-ch-${ch.id}-status`), /Not accepted/);
 
       // Accept all: everything with an amount applies; the leave item waits for one.
       assert.equal((await page.textContent('#plan-ch-accept-all')).trim(), 'Accept all 14');
@@ -1313,7 +1332,8 @@ module.exports = [
       assert.ok(at > 2 && lines[at - 1] === '', 'a blank line, then the months');
       const head = lines[at + 1].split(',');
       assert.deepEqual(head.slice(0, 17), ['month', 'status', 'in_p1', 'in_p2', 'in_other', 'in_total', 'essentials', 'flexible', 'irregular', 'other_out', 'out_total', 'to_savings', 'from_savings', 'combined_change', 'net_checking', 'combined_balance', 'combined_status']);
-      assert.deepEqual(head.slice(17), ['joint-checking_balance', 'joint-checking_status', 'joint-savings_balance', 'joint-savings_status']);
+      // Net to investments comes last (the sample has no investment account, so no investments line).
+      assert.deepEqual(head.slice(17), ['joint-checking_balance', 'joint-checking_status', 'joint-savings_balance', 'joint-savings_status', 'investing']);
       const body = lines.slice(at + 2).filter(Boolean);
       assert.equal(body.length, shown.length, 'one row per month shown');
       const monthsLabel = await page.evaluate(list => list.map(m => window.HouseholdBudget.engine.months.label(m)), body.map(l => l.split(',')[0]));
@@ -1324,8 +1344,9 @@ module.exports = [
       const plan = body.find(l => l.startsWith(exp.planStart + ',')).split(',');
       assert.equal(plan[1], 'plan');
       assert.equal(plan[head.indexOf('flexible')], '1100.50');
-      assert.equal(plan[head.indexOf('combined_change')], (exp.plan.combinedChange / 100).toFixed(2));
-      assert.equal(plan[head.indexOf('net_checking')], (exp.plan.net / 100).toFixed(2));
+      const pm = exp.months.find(x => x.month === exp.planStart);
+      assert.equal(plan[head.indexOf('combined_change')], (pm.combinedChange / 100).toFixed(2));
+      assert.equal(plan[head.indexOf('net_checking')], (pm.net / 100).toFixed(2));
     },
   },
   {

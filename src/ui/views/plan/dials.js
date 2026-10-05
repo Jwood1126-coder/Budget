@@ -22,7 +22,7 @@
     flexible: 'Where the budget can realistically move',
     irregular: 'One-time things that still happen every year, spread per month',
   };
-  const SUM_NAME = { essentials: 'essentials', flexible: 'flexible', irregular: 'irregular', other: 'other' };
+  const SUM_NAME = { essentials: 'essentials', flexible: 'flexible', irregular: 'irregular', investing: 'investing', other: 'other' };
   const GROUP_NAME = { essentials: 'Essentials', flexible: 'Flexible spending' };
   const PATTERN = { bill: 'Bill', everyday: 'Everyday', occasional: 'Occasional' };
   const PATTERN_TIP = {
@@ -39,7 +39,7 @@
 
   const signedAmt = cents => (cents > 0 ? '+' : '') + amt(cents);
   const dialLabel = d => (d.group === 'in' && d.key !== 'inOther' ? d.label + ' → joint' : d.label);
-  const signedDial = d => d.key === 'savings' || d.key === 'other' || (d.baselineCents || 0) < 0 || (d.planCents || 0) < 0;
+  const signedDial = d => d.key === 'savings' || d.key === 'investing' || d.key === 'other' || (d.baselineCents || 0) < 0 || (d.planCents || 0) < 0;
 
   // ------------------------------------------------------------------ 3. dials
   /** Slider range: a convenience around the baseline, widened for the value; never clamps it. */
@@ -127,7 +127,8 @@
     const usual = r.stable && isCents(r.latestCents) ? `usually ${amt(r.latestCents)}` : `avg ${whole(r.avgCents)}/mo`;
     const seen = isCents(r.seenMonths) ? r.seenMonths : r.months;
     const of = isCents(r.ofMonths) ? r.ofMonths : tl.baseline.count;
-    const edited = r.override ? ' ' + c.badge('edited', 'info') + ' ' + c.button('Reset', { action: 'plan:row-reset', data: { row: r.id, name }, cls: 'btn-small btn-ghost drill-reset', id: id + '-reset', ariaLabel: 'Reset ' + name + ' to its average' }) : '';
+    const edited = (r.override ? ' ' + c.badge('edited', 'info') + ' ' + c.button('Reset', { action: 'plan:row-reset', data: { row: r.id, name }, cls: 'btn-small btn-ghost drill-reset', id: id + '-reset', ariaLabel: 'Reset ' + name + ' to its average' }) : '')
+      + (r.source === 'budget' ? ' ' + c.badge('budget', 'info') : '');
     const pattern = PATTERN[r.pattern] ? `<span class="drill-pattern is-${esc(r.pattern)}" id="${esc(id)}-pattern" title="${esc(PATTERN_TIP[r.pattern])}">${esc(PATTERN[r.pattern])}</span>` : '';
     const paid = PAID[r.paidBy] ? `<span class="drill-paid" id="${esc(id)}-paid" title="${esc(PAID_TIP[r.paidBy])}">${esc(PAID[r.paidBy])}</span>` : '';
     const moved = move && move.moved ? badgeWithId(id + '-moved', 'moved', 'info', { title: move.from ? 'Moved from ' + move.from : 'Moved here by you' }) : '';

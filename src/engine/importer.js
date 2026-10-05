@@ -15,7 +15,7 @@
 (function (root) {
   const E = root.BudgetEngine || (root.BudgetEngine = {});
 
-  const ACCOUNT_TYPES = ['checking', 'savings', 'credit_card', 'loan', 'other'];
+  const ACCOUNT_TYPES = ['checking', 'savings', 'credit_card', 'loan', 'investment', 'other'];
   const KINDS = ['spend', 'income', 'transfer', 'card_payment', 'debt_payment'];
   const CONFIDENCE = ['high', 'medium', 'low'];
   const DATE_FORMATS = ['MDY', 'YMD', 'DMY'];
@@ -986,9 +986,12 @@
         b.confidence = 'high';
       }
       a.confidence = 'high';
-      // Money moved to or from a household savings account is saving on both sides of the pair.
+      // Money moved to or from a household investment account is investing on both sides of the
+      // pair; to or from a savings account, saving.
       const special = s => s === 'contribution' || s === 'investment';
-      if (!special(a.subtype) && !special(b.subtype) &&
+      if (a.subtype !== 'contribution' && b.subtype !== 'contribution' && (typeOf(a) === 'investment' || typeOf(b) === 'investment')) {
+        a.subtype = 'investment'; b.subtype = 'investment';
+      } else if (!special(a.subtype) && !special(b.subtype) &&
         (typeOf(a) === 'savings' || typeOf(b) === 'savings' || a.subtype === 'savings' || b.subtype === 'savings')) {
         a.subtype = 'savings'; b.subtype = 'savings';
       }
