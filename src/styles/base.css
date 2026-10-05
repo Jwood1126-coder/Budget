@@ -447,9 +447,8 @@ main { padding: var(--space-6) var(--space-6) var(--space-7); max-width: 1240px;
 @media (max-width: 599px), (pointer: coarse) {
   .btn-small { min-height: 40px; padding: 8px 12px; }
   .segmented label { min-height: 40px; display: inline-flex; align-items: center; }
-  .chart-table summary, .bud-sum-details > summary { padding-block: 10px; } /* stays display: list-item, keeping its marker */
+  .chart-table summary { padding-block: 10px; } /* stays display: list-item, keeping its marker */
   .rv-open, .rv-side > a { display: inline-flex; align-items: center; min-height: 40px; }
-  .bt-remove { min-height: 40px; padding: 8px 0; }
   .topbar-undo { min-height: 40px; }
   input[type="range"] { min-height: 40px; }
 }

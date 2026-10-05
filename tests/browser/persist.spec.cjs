@@ -4,8 +4,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const KEY = 'household-budget:v5:sample';
-const GROCERIES = 'input[data-bind="plan.targets.Groceries"]';
-const FUEL = 'input[data-bind="plan.targets.Fuel"]';
+// The planned amounts typed on Budget's category rows (they write plan.targets).
+const GROCERIES = 'input[data-action="budget:set-plan"][data-cat="Groceries"]';
+const FUEL = 'input[data-action="budget:set-plan"][data-cat="Fuel"]';
 
 const storedTarget = (page, cat) => page.evaluate(([k, c]) => JSON.parse(localStorage.getItem(k)).plan.targets[c], [KEY, cat]);
 const stateTarget = (page, cat) => page.evaluate(c => window.HouseholdBudget.getState().plan.targets[c], cat);
@@ -379,7 +380,7 @@ module.exports = [
       const small = [];
       for (const route of ['#/forecast', '#/budget?section=bills', '#/review?queue=uncertain', '#/overview']) {
         await t.open(route);
-        small.push(...await page.$$eval('#view .btn, #view .segmented label, #view .bt-remove, #view input[type="range"], #view .plan-amount input', els => els
+        small.push(...await page.$$eval('#view .btn, #view .segmented label, #view .bud-plan-input input, #view input[type="range"], #view .plan-amount input', els => els
           .filter(el => el.getBoundingClientRect().width > 0)
           .map(el => ({ text: el.textContent.trim().slice(0, 30), h: Math.round(el.getBoundingClientRect().height) }))
           .filter(x => x.h < 40)).then(xs => xs.map(x => route + ' ' + x.text + ' ' + x.h + 'px')));
