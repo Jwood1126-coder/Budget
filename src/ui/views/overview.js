@@ -123,6 +123,10 @@
     }, true);
     // Category selects: a change made with the keys of a closed list waits for Enter or leaving it.
     keyedCategory(rootEl);
+    // A pack's or a what-if's box shows "some accepted" (a property only script can set); a pack just
+    // added was drawn open once.
+    for (const box of rootEl.querySelectorAll('input[data-mixed]')) box.indeterminate = true;
+    P.openGroup = null;
     // Legend toggles are drawn by the chart itself; only the choice is saved (no re-render).
     const card = rootEl.querySelector('#plan-chart-card');
     if (card) {

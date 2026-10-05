@@ -40,7 +40,7 @@
 @media (max-width: 599px) {
   .plan-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
   .plan-kpis > .kpi:last-child:nth-child(odd) { grid-column: 1 / -1; }
-  .kpi { padding: 10px var(--space-3) var(--space-2); border-radius: 10px; }
+  .kpi { padding: 9px var(--space-3) 7px; border-radius: 10px; }
   .kpi-label { font-size: .72rem; }
   .kpi-value { font-size: 1.3rem; }
   .kpi-from { font-size: .86rem; }
@@ -78,9 +78,20 @@
   .plan-chart-card { padding: var(--space-3) var(--space-3) var(--space-3); }
   .plan-ranges { gap: var(--space-2) var(--space-3); }
   .plan-ranges .plan-export { margin-left: 0; }
-  .plan-compare { flex: 1 1 100%; font-size: .8rem; }
-  .plan-compare select { min-height: 40px; min-width: 0; flex: 0 1 9rem; }
+  /* Phones: Compare shares the mode switch's row (its label is the select's own first line). */
+  .plan-chart-card .cc-controls { flex-wrap: wrap; align-items: center; gap: var(--space-2); width: 100%; }
+  .plan-chart-card .cc-controls .segmented label { padding: 6px 9px; }
+  .plan-compare { flex: 1 1 0; min-width: 6.5rem; font-size: .8rem; }
+  .plan-compare label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .plan-compare select { min-height: 40px; min-width: 0; width: 100%; padding: 4px 22px 4px 8px; }
+  .plan-compare-diff, .plan-compare-unset { flex: 0 0 auto; }
+  .plan-compare.is-on { flex-basis: 100%; }
+  .plan-compare.is-on select { width: auto; flex: 0 1 11rem; }
   .plan-compare-diff { padding: 2px 8px; }
+  /* The tiles: the number and its label only (the line under it is in the readout and the dials). */
+  .kpi:not(.tone-bad) .kpi-sub { display: none; }
+  /* The line keys (actual, plan) are explained under "About this chart". */
+  .plan-chart-card .cc-keys { display: none; }
   /* No known balance: the prompt and the mode switch share one row, so the plot still starts high. */
   .plan-chart-card .cc-controls:has(> .plan-prompt) { flex: 1 1 100%; flex-wrap: nowrap; align-items: center; justify-content: space-between; }
   .plan-chart-card .plan-prompt { flex: 1 1 auto; min-width: 0; font-size: .9rem; line-height: 1.3; }
@@ -189,6 +200,23 @@ button.plan-trend-chip:hover { background: var(--surface-3); }
 .plan-ch-budget { flex: 0 0 auto; display: inline-flex; align-items: center; min-height: 34px; padding: 0 8px; border-radius: 999px; font-size: .78rem; font-weight: 650; white-space: nowrap; text-decoration: none; background: var(--brand-soft); }
 .plan-ch-budget:hover { text-decoration: underline; }
 .plan-ch-item.is-derived .plan-ch-label { flex: 1 1 10rem; }
+/* A pack or a what-if: one folded row (its box sits over the row, beside the colour), opening
+   into its lines, indented under a coloured rule. */
+.plan-ch-group { position: relative; padding: 0; }
+.plan-grp-accept { position: absolute; z-index: 1; left: 18px; top: 6px; }
+.plan-grp > summary { list-style: none; cursor: pointer; padding: 6px 0; min-height: 48px; }
+.plan-grp > summary::-webkit-details-marker { display: none; }
+.plan-grp > summary:hover .plan-grp-name { color: var(--brand); }
+.plan-grp-gap { visibility: hidden; }
+.plan-grp-name { flex: 0 1 auto; min-width: 0; padding: 0 6px; font-weight: 700; overflow-wrap: anywhere; }
+.plan-grp-meta { flex: 1 1 8rem; min-width: 0; font-size: .84rem; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.plan-grp-totals { color: var(--text); font-weight: 650; }
+.plan-grp-sum > .plan-ch-status { flex-basis: auto; gap: 4px; flex-wrap: wrap; }
+.plan-grp-chev { flex: 0 0 34px; display: inline-flex; justify-content: center; }
+.plan-grp-chev::after { content: ""; width: 8px; height: 8px; border-right: 2px solid var(--text-2); border-bottom: 2px solid var(--text-2); transform: translateY(-2px) rotate(45deg); transition: transform .15s; }
+.plan-grp[open] .plan-grp-chev::after { transform: translateY(2px) rotate(-135deg); }
+.plan-ch-sublist { list-style: none; margin: 0 0 var(--space-2) 4px; padding: 0 0 0 var(--space-3); border-left: 2px solid var(--border-strong); }
+.plan-ch-sublist > .plan-ch-item:last-child { border-bottom: 0; }
 .plan-ch-unset { margin: 0 0 0 54px; font-size: .8rem; font-weight: 600; color: var(--warn); }
 .plan-ch-item .field-error { margin: 0 0 0 54px; }
 .plan-ch-bulk { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-3) 0 0; }
@@ -209,6 +237,14 @@ button.plan-trend-chip:hover { background: var(--surface-3); }
   .plan-ch-when-text, .plan-ch-figure, .plan-ch-budget { order: 2; }
   .plan-ch-item.is-derived .plan-ch-label { flex-basis: calc(100% - 30px); }
   .plan-ch-noaccept, .plan-ch-noremove { display: none; }
+  /* A folded row: colour, box, name and the arrow; then how many, the totals and the status. */
+  .plan-grp-accept { top: 10px; }
+  .plan-grp-name { flex: 1 1 calc(100% - 100px); padding: 0 4px; }
+  .plan-grp-chev { order: 1; flex-basis: 24px; }
+  .plan-grp-meta { order: 2; flex: 1 1 auto; padding-left: 30px; }
+  .plan-grp-sum > .plan-ch-when-text { display: none; }
+  .plan-grp-sum > .plan-ch-status { order: 2; }
+  .plan-ch-sublist { margin-left: 0; padding-left: var(--space-2); }
   .plan-ch-figure { flex: 0 0 auto; padding-right: 0; }
   /* "In plan" is a green tick on phones (the box beside the name says it too); other states keep their words. */
   .plan-ch-status .badge-good { font-size: 0; gap: 0; padding: 1px 7px; }

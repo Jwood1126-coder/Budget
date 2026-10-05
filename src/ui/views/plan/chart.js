@@ -175,7 +175,7 @@
     const names = (tl.scenarios || []).map(x => x.name);
     if (!names.length) return '';
     const cur = tl.compare ? tl.compare.scenario : '';
-    const opts = [['', 'Nothing']].concat(names.map(n => [n, n]));
+    const opts = [['', 'What-if…']].concat(names.map(n => [n, n]));
     let diff = '';
     const cmp = tl.compare;
     const main = tl.balances.combined ? tl.balances.combined.points : [];

@@ -10,7 +10,10 @@
  *                Labels never overlap: each item takes the first lane with room.
  *   The list     every planned change, by month: accept, name, amount, status and remove on one
  *                line; when and how (one-time or monthly, group, whose income, start, end) folded
- *                under its date. What Budget adds (bills, goals) is read-only, edited in Budget.
+ *                under its date. A pack's items, and the changes of a what-if copied from a saved
+ *                scenario, are one folded row (name, how many, once + a month, one box to accept
+ *                or unaccept them all) that opens into those lines. What Budget adds (bills,
+ *                goals) is read-only, edited in Budget.
  *   Add          the packs (one tap after a date; never accepted for you, tagged as a what-if of
  *                their own so Compare can show them first) and a change of the household's own.
  */
@@ -21,7 +24,7 @@
   const fmt = UI.fmt;
   const c = UI.c;
   const P = UI._plan;
-  const { amt, plural, inputText, badgeWithId, isCents, packOf, shortLabel, compact, PACKS } = P;
+  const { amt, plural, inputText, badgeWithId, isCents, packOf, SCENARIO_CLS, groupKeyOf, groupIdOf, shortLabel, compact, PACKS } = P;
 
   const KIND_LABEL = { oneTime: 'One-time', monthly: 'Monthly' };
   const CHANGE_GROUP_LABEL = { income: 'Income', essentials: 'Essentials', flexible: 'Flexible', irregular: 'Irregular', savings: 'Savings' };
@@ -43,7 +46,14 @@
   const whenText = ch => (ch.kind === 'monthly' ? (ch.endMonth ? fmt.month(ch.startMonth) + '–' + fmt.month(ch.endMonth) : 'from ' + fmt.month(ch.startMonth)) : fmt.month(ch.startMonth));
   const groupText = ch => CHANGE_GROUP_LABEL[ch.group] || DERIVED_GROUP_LABEL[ch.group] || ch.group;
   /** The colour of a change: its pack's, Budget's quiet one, a goal's green, else the household's own blue. */
-  const clsOf = ch => (packOf(ch) ? packOf(ch).cls : ch.source === 'bill' ? 'series-muted' : ch.source === 'goal' ? 'series-3' : 'series-1');
+  const clsOf = ch => (packOf(ch) ? packOf(ch).cls : ch.scenario && !ch.readOnly ? SCENARIO_CLS : ch.source === 'bill' ? 'series-muted' : ch.source === 'goal' ? 'series-3' : 'series-1');
+  /** A group's totals in a few words: "$4.8k once + $320/mo" (spending and savings; income changes are their own story). */
+  function totalsText(list) {
+    const spend = list.filter(ch => ch.group !== 'income' && isCents(ch.cents));
+    const once = spend.filter(ch => ch.kind === 'oneTime').reduce((s, ch) => s + ch.cents, 0);
+    const monthly = spend.filter(ch => ch.kind === 'monthly').reduce((s, ch) => s + ch.cents, 0);
+    return [once ? compact(once) + ' once' : '', monthly ? compact(monthly) + '/mo' : ''].filter(Boolean).join(' + ');
+  }
   const optionList = (list, value) => list.map(([v, l]) => `<option value="${esc(v)}"${v === value ? ' selected' : ''}>${esc(l)}</option>`).join('');
   /** The note a template wrote, without the sentence every estimate shares. */
   const noteOf = ch => String(ch.note || '').replace(/\s*A generic estimate: adjust it to your own quotes and plans\.\s*$/, '').trim();
@@ -69,10 +79,10 @@
     const groups = new Map();
     for (const ch of tl.changes.list) {
       if (!inRange(ch)) continue;
-      const pack = packOf(ch);
-      if (pack && !ch.readOnly) {
-        const key = 'pack-' + ch.template + '-' + (ch.scenario || '');
-        if (!groups.has(key)) groups.set(key, { key, pack, list: [] });
+      const name = groupKeyOf(ch);
+      if (name) {
+        const key = 'group-' + name;
+        if (!groups.has(key)) groups.set(key, { key, name, cls: clsOf(ch), list: [] });
         groups.get(key).list.push(ch);
         continue;
       }
@@ -89,14 +99,11 @@
       const list = g.list;
       const from = Math.min(...list.map(ch => at(ch.startMonth)));
       const to = Math.max(...list.map(ch => (ch.kind === 'oneTime' ? at(ch.startMonth) : endOf(ch))));
-      const spend = list.filter(ch => ch.group !== 'income' && isCents(ch.cents));
-      const once = spend.filter(ch => ch.kind === 'oneTime').reduce((s, ch) => s + ch.cents, 0);
-      const monthly = spend.filter(ch => ch.kind === 'monthly').reduce((s, ch) => s + ch.cents, 0);
-      const amount = [once ? compact(once) : '', monthly ? compact(monthly) + '/mo' : ''].filter(Boolean).join(' + ');
+      const amount = totalsText(list).replace(' once', '');
       const on = list.filter(ch => ch.status === 'applied').length;
-      items.push({ key: g.key, label: g.pack.name, amount, from, to: to > from ? to : null,
-        dots: list.filter(ch => ch.kind === 'oneTime').map(ch => at(ch.startMonth)), cls: g.pack.cls,
-        state: on === list.length ? 'on' : on ? 'part' : 'off', kind: 'pack', title: g.pack.name + ': ' + plural(list.length, 'item') + (on < list.length ? `, ${on} in the plan` : '') });
+      items.push({ key: g.key, label: shortLabel(g.name), amount, from, to: to > from ? to : null,
+        dots: list.filter(ch => ch.kind === 'oneTime').map(ch => at(ch.startMonth)), cls: g.cls,
+        state: on === list.length ? 'on' : on ? 'part' : 'off', kind: 'pack', title: g.name + ': ' + plural(list.length, 'item') + (on < list.length ? `, ${on} in the plan` : '') });
     }
     for (const goal of tl.goals || []) {
       if (!goal.reachMonth || goal.reachMonth < months[0] || goal.reachMonth > months[last]) continue;
@@ -233,6 +240,60 @@
       </li>`;
   }
 
+  /**
+   * A pack's items or a what-if's changes as one folded row: its colour, one box to accept or
+   * unaccept them all (mixed: some accepted), the name, how many, the totals and how many are in
+   * the plan; open, the lines of its changes (each with its own controls and ids).
+   */
+  function groupRow(ctx, tl, name, list) {
+    const id = groupIdOf(name);
+    const n = list.length;
+    const accepted = list.filter(ch => ch.accepted).length;
+    const on = list.filter(ch => ch.status === 'applied').length;
+    const unset = list.filter(ch => ch.cents === null).length;
+    const [text, tone] = on === n ? ['In plan', 'good'] : on ? [`${on} of ${n} in plan`, 'info'] : accepted ? ['Not in plan yet', 'neutral'] : ['Not accepted', 'neutral'];
+    const totals = totalsText(list);
+    const first = list.reduce((m, ch) => (ch.startMonth < m ? ch.startMonth : m), list[0].startMonth);
+    const open = P.openGroup === name ? ' open' : '';
+    const ids = list.map(ch => ch.id).join(' ');
+    return `<li class="plan-ch-item plan-ch-group${accepted === n ? ' is-applied' : accepted ? ' is-part' : ' is-notAccepted'}" data-group="${esc(name)}">
+        <label class="plan-ch-accept plan-grp-accept" for="${esc(id)}-on" title="Accept or unaccept all ${n}"><input type="checkbox" class="plan-ch-on" id="${esc(id)}-on" data-action="plan:group-accept" data-ids="${esc(ids)}" data-name="${esc(name)}"${accepted === n ? ' checked' : ''}${accepted && accepted < n ? ' data-mixed="1"' : ''} aria-label="${esc('Accepted: all of ' + name)}"></label>
+        <details class="plan-grp" id="${esc(id)}"${open}>
+          <summary class="plan-ch-main plan-grp-sum">
+            <span class="plan-ch-swatch key key-swatch ${esc(clsOf(list[0]))}" aria-hidden="true"></span>
+            <span class="plan-ch-accept plan-grp-gap" aria-hidden="true"></span>
+            <span class="plan-grp-name">${esc(name)}</span>
+            <span class="plan-grp-meta">${esc(plural(n, 'item'))}${totals ? ` · <span class="plan-grp-totals">${esc(totals)}</span>` : ''}</span>
+            <span class="plan-ch-when-text">${esc('from ' + fmt.month(first))}</span>
+            <span class="plan-ch-status">${badgeWithId(id + '-status', text, tone)}${unset ? ' ' + badgeWithId(id + '-unset', unset + ' not set', 'warn') : ''}</span>
+            <span class="plan-grp-chev" aria-hidden="true"></span>
+          </summary>
+          <ul class="plan-ch-sublist" aria-label="${esc(name)}">${list.map(ch => changeRow(ctx, tl, ch)).join('')}</ul>
+        </details>
+      </li>`;
+  }
+
+  /** The list: one row per change, a pack's or a what-if's changes folded into one, by first month. */
+  function listHtml(ctx, tl, all) {
+    const rows = [];
+    const groups = new Map();
+    for (const ch of all) {
+      const name = groupKeyOf(ch);
+      if (!name) { rows.push({ month: ch.startMonth, html: () => changeRow(ctx, tl, ch) }); continue; }
+      if (!groups.has(name)) {
+        const g = { name, list: [] };
+        groups.set(name, g);
+        rows.push({ month: ch.startMonth, group: g });
+      }
+      groups.get(name).list.push(ch);
+    }
+    return rows.map(r => {
+      if (!r.group) return r.html();
+      // A group of one is just its line.
+      return r.group.list.length === 1 ? changeRow(ctx, tl, r.group.list[0]) : groupRow(ctx, tl, r.group.name, r.group.list);
+    }).join('');
+  }
+
   // ------------------------------------------------------------------ add: the packs and a change
   /** The due month of a New baby pack already in the plan ('YYYY-MM'), to start Childcare and Kid costs from. */
   function dueOf(tl) {
@@ -292,7 +353,7 @@
     const accepted = own.length - waiting;
     const bulk = own.length ? `<p class="plan-ch-bulk">${waiting ? c.button(`Accept all ${waiting}`, { action: 'plan:change-accept-all', id: 'plan-ch-accept-all', cls: 'btn-small' }) : ''}${accepted ? c.button('Unaccept all', { action: 'plan:change-unaccept-all', id: 'plan-ch-unaccept-all', cls: 'btn-small btn-ghost' }) : ''}</p>` : '';
     const list = all.length
-      ? `<ul class="plan-ch-list" id="plan-ch-list" aria-label="Planned changes">${all.map(ch => changeRow(ctx, tl, ch)).join('')}</ul>`
+      ? `<ul class="plan-ch-list" id="plan-ch-list" aria-label="Planned changes">${listHtml(ctx, tl, all)}</ul>`
       : '<p class="plan-ch-empty" id="plan-ch-empty">Nothing planned yet. Add a pack or a change of your own.</p>';
     const counts = countsText(tl);
     return `<section class="card plan-coming" id="plan-changes" aria-labelledby="plan-changes-h">

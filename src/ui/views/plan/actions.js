@@ -10,7 +10,7 @@
   const E = root.BudgetEngine;
   const fmt = UI.fmt;
   const P = UI._plan;
-  const { isCents, exact, amt, plural, inputText, todayIso, model, showError, PACKS } = P;
+  const { isCents, exact, amt, plural, inputText, todayIso, model, showError, PACKS, groupIdOf } = P;
   const { pickedOf, shownTimeline, dataAnchorsOf, GROUP_NAME, dialLabel, signedDial, depositsOf, KIND_LABEL, CHANGE_GROUP_LABEL } = P;
   const { txnMap, placeTxns, placeOf, fillTxns, TXN_REASON } = P;
 
@@ -400,6 +400,17 @@
       change(ctx, st => E.timeline.acceptChanges(st, el.dataset.change, on),
         on ? `${el.dataset.name} accepted${ch && ch.cents === null ? ': it applies once it has an amount' : ''}.` : `${el.dataset.name} is listed only, not applied.`);
     },
+    /** A pack's or a what-if's box: accept, or unaccept, every change in it at once. */
+    'plan:group-accept': (ctx, el) => {
+      const on = !!el.checked;
+      const ids = String(el.dataset.ids || '').split(' ').filter(Boolean);
+      const list = model(ctx).changes.list.filter(ch => !ch.readOnly && ids.includes(ch.id));
+      if (!list.length) return;
+      const unset = list.filter(ch => ch.cents === null).length;
+      focusNext = '#' + el.id;
+      change(ctx, st => E.timeline.acceptChanges(st, list.map(ch => ch.id), on),
+        on ? `${el.dataset.name}: ${plural(list.length, 'change')} accepted${unset ? `; ${unset} still ${unset === 1 ? 'needs' : 'need'} an amount` : ''}.` : `${el.dataset.name}: listed only, not applied.`);
+    },
     'plan:change-accept-all': ctx => {
       const list = model(ctx).changes.list.filter(ch => !ch.readOnly && !ch.accepted);
       if (!list.length) return;
@@ -519,7 +530,9 @@
       }
       const box = document.getElementById('plan-add-' + stem);
       if (box) box.open = false; // closed before the render, so it comes back closed
-      focusNext = '#plan-ch-accept-all';
+      // The pack's row comes up open, with its box focused (a pack of one is a plain line).
+      P.openGroup = pack.name;
+      focusNext = items.length > 1 ? '#' + groupIdOf(pack.name) + '-on' : '#plan-ch-accept-all';
       change(ctx, st => E.timeline.addChange(st, items),
         `${pack.name}: ${plural(items.length, 'item')} added, not in the plan yet. Check the amounts, then accept them.`);
       return undefined;

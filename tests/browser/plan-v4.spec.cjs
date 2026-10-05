@@ -1,8 +1,9 @@
 'use strict';
 // Plan (#/overview), the finished-product pieces: the tiles above the chart, Compare (a what-if as
 // its own line), the markers for changes and goals, Coming up (the strip, the packs, what Budget
-// adds), the investments line, the compact dials and Forecast's retirement. Synthetic sample only;
-// an investment account, where needed, is added to the dataset inside the test.
+// adds; a pack's or a what-if's changes as one folded row), the investments line, the compact
+// dials and Forecast's retirement. Synthetic sample only: it has a balance-only brokerage account
+// and two what-ifs copied from its saved scenarios (8 changes, not accepted).
 const { noHorizontalScroll, state, whole } = require('./helpers.cjs');
 
 /** The engine's model for the current state (real local today), with an optional what-if to compare. */
@@ -20,6 +21,9 @@ function timeline(page, compare) {
       cashNow: at(tl.balances.combined.points, now), cashThen: at(tl.balances.combined.points, then),
       savNow: sav.reduce((s, a) => s + at(a.points, now), 0), savThen: sav.reduce((s, a) => s + at(a.points, then), 0),
       combinedLast: tl.balances.combined.points[tl.balances.combined.points.length - 1],
+      combinedMembers: tl.balances.combined.members || null,
+      invNow: tl.balances.investments ? at(tl.balances.investments.points, now) : null,
+      invThen: tl.balances.investments ? at(tl.balances.investments.points, then) : null,
       compare: tl.compare ? { scenario: tl.compare.scenario, points: tl.compare.points } : null,
       scenarios: tl.scenarios.map(x => x.name),
       investments: tl.balances.investments ? tl.balances.investments.points.map(p => ({ month: p.month, cents: p.cents })) : null,
@@ -40,17 +44,10 @@ async function addBaby(page, due) {
   await page.click('#plan-pack-baby-add');
   await page.waitForFunction(k => window.HouseholdBudget.getState().plan.changes.length === k + 9, n);
 }
-/** The sample with a balance-only investment account (synthetic: a statement balance, no transactions). */
-async function withInvestments(page) {
-  await page.evaluate(() => {
-    const ds = JSON.parse(JSON.stringify(window.HouseholdBudget.getDataset()));
-    ds.accounts.push({ id: 'joint-brokerage', label: 'Joint brokerage', type: 'investment', scope: 'joint', ownerId: null, paidInFull: false, coverage: [] });
-    ds.balances.push({ accountId: 'joint-brokerage', date: '2026-09-30', cents: 3150000, source: 'statement' });
-    localStorage.setItem('household-budget:loaded-dataset', JSON.stringify({ dataset: ds, loadedAt: new Date().toISOString(), source: 'json', file: 'with-investments.json' }));
-  });
-  await page.reload();
-  await page.waitForSelector('#page-title');
-}
+/** What-ifs the sample copied from its saved scenarios. */
+const SAMPLE_WHAT_IFS = ['Baby arrives (May 2027)', 'Home projects'];
+/** Changes saved in the budget now. */
+const changeCount = page => page.evaluate(() => window.HouseholdBudget.getState().plan.changes.length);
 
 module.exports = [
   {
@@ -61,7 +58,7 @@ module.exports = [
       await t.open('#/overview');
       const exp = await timeline(page);
       const labels = await page.$$eval('#plan-kpis .kpi-label', ls => ls.map(l => l.textContent.trim()));
-      assert.deepEqual(labels, ['Monthly on this plan', 'Cash in 12 months', 'Savings'], 'no investments tile and no warning tile in the sample');
+      assert.deepEqual(labels, ['Monthly on this plan', 'Cash in 12 months', 'Savings', 'Investments'], 'no warning tile while the sample stays above $0');
       // Monthly: money in − money out for all accounts (the headline), not checking after savings.
       assert.equal((await page.textContent('#plan-kpi-month-value')).trim(), signedWhole(exp.combinedChange));
       assert.notEqual(exp.combinedChange, exp.net, 'the sample moves money to savings, so the two differ');
@@ -84,7 +81,10 @@ module.exports = [
         const boxes = await page.$$eval('#plan-kpis .kpi', ks => ks.map(k => { const r = k.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width) }; }));
         assert.equal(boxes[0].y, boxes[1].y, 'two tiles on the first row');
         assert.ok(boxes[1].x > boxes[0].x);
-        assert.ok(boxes[2].y > boxes[0].y && boxes[2].w > boxes[0].w * 1.8, 'an odd last tile takes the whole row');
+        assert.ok(boxes[2].y > boxes[0].y && boxes[2].x === boxes[0].x && boxes[3].y === boxes[2].y, 'two by two');
+        // The plot still starts in the first screen.
+        const top = await page.evaluate(() => document.querySelector('#plan-chart-plot').getBoundingClientRect().top / innerHeight);
+        assert.ok(top < 0.66, 'plot starts at ' + Math.round(top * 100) + '% of the screen');
       }
       assert.ok(await noHorizontalScroll(page));
       await t.shot('plan-tiles');
@@ -95,10 +95,10 @@ module.exports = [
     async run(t) {
       const { page, assert } = t;
       await t.open('#/overview');
-      assert.ok(!(await page.$('#plan-compare')), 'no Compare while the plan has no what-ifs');
+      assert.deepEqual(await page.$$eval('#plan-compare option', os => os.map(o => o.value)), [''].concat(SAMPLE_WHAT_IFS), 'the sample’s what-ifs');
       await addBaby(page, '2027-02-10');
-      await page.waitForSelector('#plan-compare');
-      assert.deepEqual(await page.$$eval('#plan-compare option', os => os.map(o => o.value)), ['', 'New baby']);
+      await page.waitForFunction(() => [...document.querySelectorAll('#plan-compare option')].some(o => o.value === 'New baby'));
+      assert.deepEqual(await page.$$eval('#plan-compare option', os => os.map(o => o.value)), [''].concat(SAMPLE_WHAT_IFS, ['New baby']));
       assert.ok(!(await page.$('#plan-chart g[data-cc-series="compare"]')));
       await page.focus('#plan-compare');
       await page.selectOption('#plan-compare', 'New baby');
@@ -130,7 +130,7 @@ module.exports = [
       await page.waitForSelector('#plan-compare-diff');
       await page.click('label[for^="plan-mode-flows"]');
       await page.waitForSelector('#plan-chart[data-mode="flows"]');
-      assert.ok(!(await page.$('#plan-compare')));
+      assert.equal(await page.$$eval('#plan-compare', x => x.length), 0);
       await t.shot('plan-compare');
     },
   },
@@ -172,25 +172,27 @@ module.exports = [
       await t.open('#/overview');
       // What Budget adds: a bill not in the history and a goal spent from savings, read-only.
       const bill = '#plan-ch-bill-life-insurance';
-      assert.ok(await page.$(bill + '-status'));
+      assert.ok(!!(await page.$(bill + '-status')));
       assert.ok(!(await page.$(bill + '-amt')) && !(await page.$(bill + '-on')), 'nothing to edit here');
       assert.equal(await page.getAttribute(bill + '-budget', 'href'), '#/budget?section=bills');
       assert.equal(await page.getAttribute('#plan-ch-goal-anniversary-trip-budget', 'href'), '#/budget?section=savings');
-      assert.deepEqual(await page.$$eval('#plan-coming-strip .cu-item', gs => gs.map(g => g.dataset.item)), ['bill-life-insurance', 'goal-anniversary-trip']);
+      const items = await page.$$eval('#plan-coming-strip .cu-item', gs => gs.map(g => g.dataset.item));
+      for (const key of ['bill-life-insurance', 'goal-anniversary-trip', ...SAMPLE_WHAT_IFS.map(n => 'group-' + n)]) assert.ok(items.includes(key), key + ' on the strip');
+      const n0 = await changeCount(page);
       // Childcare: start month and amount, $1,200 a month unless changed.
       await page.click('#plan-add-childcare > summary');
       assert.equal(await page.inputValue('#plan-pack-childcare-amt'), '1,200');
       await page.fill('#plan-pack-childcare-start', '2027-06');
       await page.click('#plan-pack-childcare-add');
-      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.changes.length === 1);
-      const cc = (await state(page)).plan.changes[0];
+      await page.waitForFunction(n => window.HouseholdBudget.getState().plan.changes.length === n + 1, n0);
+      const cc = (await state(page)).plan.changes.find(c => c.template === 'childcare');
       assert.deepEqual([cc.label, cc.kind, cc.group, cc.startMonth, cc.endMonth, cc.cents, cc.accepted, cc.template, cc.scenario], ['Childcare', 'monthly', 'essentials', '2027-06', null, 120000, false, 'childcare', 'Childcare']);
       await page.waitForSelector('#plan-coming-strip .cu-item.is-pack.is-off');
       // Kid costs: from age 1, timed from the due date.
       await page.click('#plan-add-kids > summary');
       await page.fill('#plan-pack-kids-date', '2027-02-10');
       await page.click('#plan-pack-kids-add');
-      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.changes.length === 6);
+      await page.waitForFunction(n => window.HouseholdBudget.getState().plan.changes.length === n + 6, n0);
       const kids = (await state(page)).plan.changes.filter(c => c.template === 'kidCosts');
       assert.ok(kids.length === 5 && kids.every(c => c.startMonth === '2028-02' && c.scenario === 'Kid costs' && !c.accepted));
       // A change saved from the earlier Baby template: an ordinary change, listed, editable, on the strip as "Baby".
@@ -203,7 +205,7 @@ module.exports = [
       });
       await page.waitForSelector(`#plan-ch-${id}-amt`);
       assert.match(await page.textContent(`#plan-ch-${id}-status`), /In plan/);
-      assert.ok(await page.$('#plan-coming-strip .cu-item[data-item^="pack-baby-"]'));
+      assert.ok(!!(await page.$('#plan-coming-strip .cu-item[data-item="group-Baby"]')));
       await typeAmount(page, `#plan-ch-${id}-amt`, '300');
       await page.waitForFunction(i => window.HouseholdBudget.getState().plan.changes.find(c => c.id === i).cents === 30000, id);
       assert.equal((await state(page)).plan.changes.find(c => c.id === id).template, 'baby', 'kept as saved');
@@ -220,24 +222,85 @@ module.exports = [
     },
   },
   {
-    name: 'investments: a balance-only investment account has its own line, chip and tile, never in combined cash',
+    name: 'investments: the sample’s balance-only brokerage account has its own line, chip and tile, never in combined cash',
     viewport: 'both',
     async run(t) {
       const { page, assert } = t;
       await t.open('#/overview');
-      const before = await timeline(page);
-      await withInvestments(page);
+      const exp = await timeline(page);
+      assert.ok(exp.combinedMembers && !exp.combinedMembers.includes('joint-brokerage'), 'not part of combined cash');
       await page.waitForSelector('#plan-chart .cc-chip[data-cc-key="balance-investments"]');
       assert.equal((await page.textContent('#plan-chart .cc-chip[data-cc-key="balance-investments"]')).trim(), 'Investments');
       assert.equal(await page.getAttribute('#plan-chart .cc-chip[data-cc-key="balance-investments"]', 'aria-pressed'), 'true', 'shown by default');
-      assert.ok(await page.$('#plan-chart g.series-4[data-cc-series="balance-investments"] path.line'), 'its own colour');
-      const exp = await timeline(page);
-      assert.equal(exp.cashThen, before.cashThen, 'combined cash is the same without and with investments');
+      assert.equal(await page.$$eval('#plan-chart g.series-4[data-cc-series="balance-investments"] path.line', x => x.length) > 0, true, 'its own colour');
       assert.equal((await page.textContent('#plan-kpi-invest .kpi-label')).trim(), 'Investments');
       assert.equal((await page.textContent('#plan-kpi-invest-sub')).trim(), 'not cash');
-      assert.match((await page.textContent('#plan-kpi-invest-value')).replace(/\s+/g, ' '), /\$32k/);
-      assert.ok(await page.$('#plan-dial-investing'), 'and a dial for what goes into them');
+      assert.equal((await page.textContent('#plan-kpi-invest-value')).replace(/\s+/g, ' ').trim(), `${compact(exp.invNow)}→ to ${compact(exp.invThen)}`);
+      assert.equal(await page.$$eval('#plan-dial-investing', x => x.length), 1, 'and a dial for what goes into them');
+      // Without an investment account: no line, no tile.
+      await page.evaluate(() => {
+        const ds = JSON.parse(JSON.stringify(window.HouseholdBudget.getDataset()));
+        const inv = new Set(ds.accounts.filter(a => a.type === 'investment').map(a => a.id));
+        ds.accounts = ds.accounts.filter(a => !inv.has(a.id));
+        ds.balances = ds.balances.filter(b => !inv.has(b.accountId));
+        ds.transactions = ds.transactions.filter(x => !inv.has(x.accountId));
+        localStorage.setItem('household-budget:loaded-dataset', JSON.stringify({ dataset: ds, loadedAt: new Date().toISOString(), source: 'json', file: 'no-investments.json' }));
+      });
+      await page.reload();
+      await page.waitForSelector('#plan-kpis');
+      assert.equal(await page.$$eval('#plan-kpi-invest, #plan-chart .cc-chip[data-cc-key="balance-investments"]', x => x.length), 0);
       assert.ok(await noHorizontalScroll(page));
+    },
+  },
+  {
+    name: 'Coming up: a pack’s items and a what-if’s changes are one folded row; one box accepts them all; open, each change keeps its own controls',
+    viewport: 'both',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      const groups = () => page.$$eval('#plan-ch-list > li.plan-ch-group', ls => ls.map(l => l.dataset.group));
+      for (const n of SAMPLE_WHAT_IFS) assert.ok((await groups()).includes(n), n + ' is one row');
+      // The sample's copied what-ifs are folded: their lines are not shown until opened.
+      const home = '#plan-ch-list > li.plan-ch-group[data-group="Home projects"]';
+      assert.match((await page.textContent(home + ' .plan-grp-meta')).trim(), /^3 items$/);
+      assert.equal(await page.isVisible('#plan-ch-sc-attic-insulation-amt'), false);
+      // A pack added: one row, open, its box focused; the totals in a few words.
+      await addBaby(page, '2027-02-10');
+      const baby = '#plan-ch-list > li.plan-ch-group[data-group="New baby"]';
+      await page.waitForSelector(baby);
+      assert.equal(await page.$eval(baby + ' details', d => d.open), true, 'opens once, to check the amounts');
+      assert.match(await page.evaluate(() => document.activeElement.id), /^plan-grp-new-baby-.+-on$/);
+      assert.match((await page.textContent(baby + ' .plan-grp-meta')).replace(/\s+/g, ' ').trim(), /^9 items · \$[\d.]+k once \+ \$\d+\/mo$/);
+      assert.match((await page.textContent(baby + ' .plan-ch-status')).replace(/\s+/g, ' '), /Not accepted.*1 not set/);
+      assert.equal(await page.$$eval(baby + ' .plan-ch-sublist > li', x => x.length), 9);
+      // One box accepts the whole pack; the plan follows.
+      await page.check(baby + ' .plan-grp-accept input');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.changes.filter(c => c.scenario === 'New baby').every(c => c.accepted));
+      await page.waitForFunction(s => /8 of 9 in plan/.test(document.querySelector(s + ' .plan-ch-status').textContent), baby);
+      // Each change inside keeps its own controls and ids.
+      const one = (await state(page)).plan.changes.find(c => c.scenario === 'New baby' && c.kind === 'oneTime');
+      await page.uncheck(`#plan-ch-${one.id}-on`);
+      await page.waitForFunction(i => !window.HouseholdBudget.getState().plan.changes.find(c => c.id === i).accepted, one.id);
+      await page.waitForFunction(s => document.querySelector(s + ' .plan-grp-accept input').indeterminate === true, baby);
+      await page.fill(`#plan-ch-${one.id}-amt`, '321');
+      await page.press(`#plan-ch-${one.id}-amt`, 'Enter');
+      await page.waitForFunction(i => window.HouseholdBudget.getState().plan.changes.find(c => c.id === i).cents === 32100, one.id);
+      // Mixed, then pressed: all accepted; pressed again: none.
+      await page.click(baby + ' .plan-grp-accept input');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.changes.filter(c => c.scenario === 'New baby').every(c => c.accepted));
+      await page.click(baby + ' .plan-grp-accept input');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.changes.filter(c => c.scenario === 'New baby').every(c => !c.accepted));
+      // Custom changes and what Budget adds stay single rows.
+      assert.equal(await page.$$eval('#plan-ch-list > li[data-change="bill-life-insurance"]', x => x.length), 1);
+      await page.click('#plan-add-custom > summary');
+      await page.fill('#plan-ch-new-label', 'Roof repair');
+      await page.fill('#plan-ch-new-amt', '2,000');
+      await page.click('#plan-ch-new-add');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.changes.some(c => c.label === 'Roof repair'));
+      const roof = (await state(page)).plan.changes.find(c => c.label === 'Roof repair');
+      await page.waitForSelector(`#plan-ch-list > li[data-change="${roof.id}"]`);
+      assert.ok(await noHorizontalScroll(page));
+      await t.shot('plan-groups');
     },
   },
   {
@@ -255,7 +318,7 @@ module.exports = [
       const reach = exp.goals.find(g => g.id === 'emergency').reachMonth;
       assert.ok(reach, 'reached within the plan');
       await page.waitForSelector(`#plan-chart .cc-ann.is-goal[data-cc-change="${reach}"]`);
-      assert.ok(await page.$('#plan-coming-strip .cu-item.is-reach[data-item="goal-reach-emergency"]'));
+      assert.ok(!!(await page.$('#plan-coming-strip .cu-item.is-reach[data-item="goal-reach-emergency"]')));
       const model = await page.evaluate(() => JSON.parse(document.querySelector('#plan-chart script.cc-model').textContent));
       assert.ok(model.months.some(m => (m.pc || []).includes('Goal reached: Emergency cushion ($6,000)')));
     },

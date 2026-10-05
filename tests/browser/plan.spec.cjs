@@ -482,7 +482,7 @@ module.exports = [
       assert.notEqual(lastRow[after.col('Combined cash')], before.rows[before.rows.length - 1][before.col('Combined cash')]);
       // The plan at baseline: a faint line, its own chip and table column, and a caption line.
       assert.ok(await page.$$eval('#plan-chart .cc-ghost-line', x => x.length) > 0, 'the baseline line is drawn once a dial moves');
-      assert.ok(await page.$('#plan-chart .cc-chip[data-cc-key="ghost"]'));
+      assert.ok(!!(await page.$('#plan-chart .cc-chip[data-cc-key="ghost"]')));
       assert.equal(lastRow[after.col('Baseline plan')], before.rows[before.rows.length - 1][before.col('Combined cash')], 'the baseline line ends where the plan used to');
       assert.match(await page.textContent('#plan-chart .cc-caption'), /Faint dashed: the plan at baseline, before your changes\./);
 
@@ -902,7 +902,7 @@ module.exports = [
       await page.click('#plan-drill-irregular > summary');
       const list = `[id="plan-txns-${item.id}"]`;
       assert.equal((await page.textContent(`${list} > summary`)).trim(), 'Show transaction');
-      assert.ok(await page.$(`#plan-irr-${item.id}-regular`), '“Count as regular” stays');
+      assert.ok(!!(await page.$(`#plan-irr-${item.id}-regular`)), '“Count as regular” stays');
       await page.click(`${list} > summary`);
       await page.waitForSelector(`#plan-txcat-${item.id}`);
       const [line] = await txnLines(page, item.id);
@@ -1003,7 +1003,7 @@ module.exports = [
       assert.equal((await state(page)).ui.plan.mode, 'trends');
       const lines = () => page.$$eval('#plan-chart .cc-trend-series', gs => gs.map(g => g.dataset.ccSeries));
       assert.deepEqual(await lines(), ['card'], 'card spending by default');
-      assert.ok(await page.$('#plan-chart .cc-trend-series[data-cc-series="card"] path.line:not(.cc-ma-line):not(.cc-trend-line)'), 'the card line is drawn');
+      assert.ok(!!(await page.$('#plan-chart .cc-trend-series[data-cc-series="card"] path.line:not(.cc-ma-line):not(.cc-trend-line)')), 'the card line is drawn');
       assert.equal((await page.textContent('#plan-trend-card')).trim(), 'Card purchases');
       assert.ok(!(await page.isVisible('#plan-chart .cc-legend')), 'the picker is the legend');
       // The picker sits under the title, above the plot.
@@ -1085,8 +1085,8 @@ module.exports = [
       await page.waitForFunction(() => window.HouseholdBudget.getState().ui.plan.trends.series.join() === 'card,balance-joint-savings');
       const line = '#plan-chart .cc-trend-series[data-cc-series="balance-joint-savings"] path.line:not(.cc-ma-line):not(.cc-trend-line)';
       await page.waitForSelector(line);
-      assert.ok(await page.$(line + ':not(.is-projected)'), 'actual months: solid');
-      assert.ok(await page.$(line + '.is-projected'), 'plan months: dashed');
+      assert.ok(!!(await page.$(line + ':not(.is-projected)')), 'actual months: solid');
+      assert.ok(!!(await page.$(line + '.is-projected')), 'plan months: dashed');
       assert.equal(await page.getAttribute('#plan-trend-balance-joint-savings', 'aria-label'), `Remove ${savings.name} from the chart`);
       assert.equal(await axis(), '$ — monthly amounts and month-end balances', 'card spending and a balance');
       assert.equal(await title(), 'Monthly amounts and balances over time');
@@ -1164,13 +1164,13 @@ module.exports = [
       assert.match((await page.textContent('#plan-kpi-low-value')).trim(), /^−\$[\d,]+$/);
       assert.match((await page.textContent('#plan-kpi-low-sub')).trim(), /^below \$0 from [A-Z][a-z]{2} \d{4}$/);
       assert.match(await page.textContent('#plan-kpi-month-value'), /^−\$/, 'the monthly tile is negative too');
-      assert.ok(await page.$('#plan-kpi-month.tone-warn'));
+      assert.ok(!!(await page.$('#plan-kpi-month.tone-warn')));
       const tb = await table(page);
       const negatives = tb.rows.filter(r => r[tb.col('Combined cash')].startsWith('−$'));
       assert.ok(negatives.length > 0, 'negative balances are shown, not floored');
       assert.equal(tb.rows[tb.rows.length - 1][tb.col('Combined cash')], whole(exp.balances.combined.points[exp.balances.combined.points.length - 1].cents));
       assert.match(await page.textContent('#plan-headline strong'), /^−\$/);
-      assert.ok(await page.$('#plan-headline strong.tone-warn'), 'a warning tone when the household loses money each month');
+      assert.ok(!!(await page.$('#plan-headline strong.tone-warn')), 'a warning tone when the household loses money each month');
       assert.ok(await noHorizontalScroll(page));
       await t.shot('plan-below-zero');
     },
@@ -1245,7 +1245,8 @@ module.exports = [
       const exp0 = await timeline(page);
       const before = await table(page);
       const lastCombined = tb => tb.rows[tb.rows.length - 1][tb.col('Combined cash')];
-      const own = () => page.$$eval('#plan-ch-list > li:not(.is-derived)', x => x.length);
+      // The household's own lines (a pack's lines sit inside its folded row).
+      const own = () => page.$$eval('#plan-ch-list li[data-change]:not(.is-derived)', x => x.length);
       const marks = () => page.$$eval('#plan-chart .cc-change', x => x.length);
       const marked0 = await marks(); // what Budget adds later in the plan (the trip goal spent) is marked already
       assert.equal(await own(), 0, 'only what Budget adds so far');
@@ -1260,7 +1261,9 @@ module.exports = [
       await page.fill('#plan-pack-baby-date', due);
       await page.click('#plan-pack-baby-add');
       await page.waitForFunction(() => window.HouseholdBudget.getState().plan.changes.length === 9);
-      await page.waitForFunction(() => document.querySelectorAll('#plan-ch-list > li:not(.is-derived)').length === 9);
+      await page.waitForFunction(() => document.querySelectorAll('#plan-ch-list li[data-change]:not(.is-derived)').length === 9);
+      // One folded row for the pack, open once so its amounts can be checked.
+      assert.equal(await page.$$eval('#plan-ch-list > li.plan-ch-group[data-group="New baby"] > details[open]', x => x.length), 1);
       assert.match(await page.textContent('#toast'), /^New baby: 9 items added, not in the plan yet\. Check the amounts, then accept them\./);
       const saved = (await state(page)).plan.changes;
       assert.ok(saved.every(c => c.template === 'babyFirstYear' && c.scenario === 'New baby' && c.accepted === false), 'tagged as a what-if of its own, never accepted for you');
@@ -1271,7 +1274,7 @@ module.exports = [
       assert.equal(await marks(), marked0, 'nothing more marked before accepting');
       assert.equal(lastCombined(await table(page)), lastCombined(before), 'listed only: the plan is unchanged');
       // On the strip: one faded bar for the pack.
-      assert.ok(await page.$('#plan-coming-strip .cu-item.is-pack.is-off'));
+      assert.ok(!!(await page.$('#plan-coming-strip .cu-item.is-pack.is-off')));
       const leave = exp.changes.list.find(ch => ch.cents === null);
       assert.ok(leave && leave.group === 'income', 'the leave item has no amount');
       assert.match(await page.textContent(`#plan-ch-${leave.id}-unset`), /^amount not set — enter the monthly reduction/);
@@ -1287,9 +1290,9 @@ module.exports = [
       assert.deepEqual(exp.changes.unset, [leave.id]);
       assert.equal((await page.textContent('#plan-ch-counts')).trim(), '8 of 9 in the plan · 1 without an amount');
       assert.ok(await marks() > marked0, 'markers on the chart');
-      assert.ok(await page.$('#plan-chart .cc-ann-label'), 'with a short label');
-      assert.ok(await page.$('#plan-chart .cc-ghost-line'), 'the plan without the changes is drawn faintly');
-      assert.ok(await page.$('#plan-coming-strip .cu-item.is-pack.is-part'), 'the pack is in the plan, but for the leave item');
+      assert.ok(!!(await page.$('#plan-chart .cc-ann-label')), 'with a short label');
+      assert.ok(!!(await page.$('#plan-chart .cc-ghost-line')), 'the plan without the changes is drawn faintly');
+      assert.ok(!!(await page.$('#plan-coming-strip .cu-item.is-pack.is-part')), 'the pack is in the plan, but for the leave item');
       const mid = await table(page);
       assert.ok(centsOf(lastCombined(mid)) < centsOf(lastCombined(before)), `the combined line ends lower (${lastCombined(before)} → ${lastCombined(mid)})`);
       assert.ok(mid.heads.includes('Planned changes'), 'the table lists them by month');
@@ -1599,9 +1602,10 @@ module.exports = [
       await page.click('#plan-add-baby > summary');
       await page.fill('#plan-pack-baby-date', '2027-04-15');
       await page.click('#plan-pack-baby-add');
-      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.changes.length === 9);
+      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.changes.filter(c => c.scenario === 'New baby').length === 9);
       await page.waitForSelector('#plan-ch-accept-all');
       await page.evaluate(() => {
+        for (const d of document.querySelectorAll('.plan-grp')) d.open = true;
         for (const id of ['plan-drill-essentials', 'plan-drill-flexible', 'plan-drill-irregular', 'plan-more', 'plan-deposits', 'plan-bal-joint-checking-edit', 'plan-add-childcare', 'plan-chart-about']) document.getElementById(id).open = true;
         for (const d of document.querySelectorAll('.plan-ch-edit')) d.open = true;
         for (const kid of document.querySelectorAll('#plan-drill-flexible .drill-kids')) kid.open = true;

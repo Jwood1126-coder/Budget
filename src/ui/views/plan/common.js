@@ -75,6 +75,17 @@
   };
   /** A change's pack ({ name, cls }) or null for one of the household's own. */
   const packOf = ch => (ch && ch.template && PACKS[ch.template]) || null;
+  /** The colour of a what-if copied from a saved scenario (no pack). */
+  const SCENARIO_CLS = 'series-2';
+  /**
+   * The group a planned change is listed under: its what-if's name (packs added here carry their
+   * pack's name; changes copied from a saved scenario carry the scenario's), else its pack's name
+   * (a pack added without a what-if, the earlier Baby template), else '' (one of the household's
+   * own, or worked out from Budget: listed on its own).
+   */
+  const groupKeyOf = ch => (!ch || ch.readOnly ? '' : ch.scenario || (packOf(ch) ? packOf(ch).name : ''));
+  /** A group's element id: plan-grp-<slug>-<hash> (its accept box adds -on). */
+  const groupIdOf = key => UI.dom.domId('plan-grp', key);
   /** A short name for a change, for the chart and the timeline strip: no brackets, before a colon, ≤ 22 characters. */
   function shortLabel(label) {
     let t = String(label || '').replace(/\s*\([^)]*\)/g, '').trim();
@@ -99,5 +110,5 @@
     if (box) { box.textContent = message || ''; box.hidden = !message; }
   }
 
-  UI._plan = { DIAL_CLS, isCents, whole, exact, amt, plural, inputText, todayIso, shortDate, badgeWithId, model, compareOf, PACKS, packOf, shortLabel, compact, showError };
+  UI._plan = { DIAL_CLS, isCents, whole, exact, amt, plural, inputText, todayIso, shortDate, badgeWithId, model, compareOf, PACKS, packOf, SCENARIO_CLS, groupKeyOf, groupIdOf, shortLabel, compact, showError };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
