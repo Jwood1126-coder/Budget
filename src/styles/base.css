@@ -180,9 +180,10 @@ main { padding: var(--space-6) var(--space-6) var(--space-7); max-width: 1240px;
   .mainnav a svg { width: 24px; height: 24px; }
   .mainnav .nav-label { font-size: .72rem; font-weight: 650; justify-content: center; gap: 3px; }
   .mainnav .nav-hint, .nav-note, .nav-secondary, .nav-secondary.nav-desktop-only { display: none; }
+  .mainnav .nav-phone-hide { display: none; }
   .mainnav a[aria-current="page"] { background: transparent; box-shadow: inset 0 3px 0 var(--brand); }
   .nav-count { position: absolute; transform: translate(26px, -26px); }
-  /* "More" tab: the three secondary views in a small menu above the tab bar */
+  /* "More" tab: the secondary views in a small menu above the tab bar */
   .nav-more { display: block; position: relative; }
   .nav-more-menu > summary {
     list-style: none; cursor: pointer; height: 100%; display: flex; flex-direction: column; justify-content: center; gap: 2px;
@@ -193,7 +194,8 @@ main { padding: var(--space-6) var(--space-6) var(--space-7); max-width: 1240px;
   .nav-more-menu[open] > summary { color: var(--brand); box-shadow: inset 0 3px 0 var(--brand); }
   .nav-more-menu > summary:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
   .mainnav .nav-more-list {
-    height: auto; position: absolute; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%);
+    /* More is the last tab: the menu opens leftwards from the screen's right edge. */
+    height: auto; position: absolute; bottom: calc(100% + 10px); right: 8px;
     min-width: 220px; margin: 0; padding: var(--space-2); list-style: none; display: grid; gap: 2px;
     background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-lg, 0 12px 32px rgba(0,0,0,.18));
   }

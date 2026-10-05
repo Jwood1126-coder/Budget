@@ -68,7 +68,7 @@ Open `dist/index.html`. It contains your transactions and profile, so keep it on
 
 ## Finding your way around
 
-Start on **Plan**: four numbers, one chart and what is coming up answer the everyday questions without any setup beyond your bank exports. The other views are there when you want detail; nothing in them needs regular attention. The sidebar on computers and the bottom tab bar on phones hold five views (Spending and Budget sit under More on phones). **Data & privacy** sits in the top bar on phones. Every view and every drilldown level has its own address, so the browser's Back and Forward buttons, bookmarks and reloads all work.
+Start on **Plan**: four numbers, one chart and what is coming up answer the everyday questions without any setup beyond your bank exports. The other views are there when you want detail; nothing in them needs regular attention. The sidebar on computers and the bottom tab bar on phones lead with **Plan**, **Budget** and **Transactions**; Spending and Data & privacy sit under More on phones, and **Data & privacy** is also in the top bar. Every view and every drilldown level has its own address, so the browser's Back and Forward buttons, bookmarks and reloads all work.
 
 | View | What it answers |
 | --- | --- |

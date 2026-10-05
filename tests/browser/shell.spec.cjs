@@ -25,12 +25,12 @@ module.exports = [
     },
   },
   {
-    name: 'phone tab bar: Plan, Transactions, More and Data; More opens the other two views',
+    name: 'phone tab bar: Plan, Budget, Transactions and More; More opens Spending and Data & privacy',
     viewport: 'phone',
     async run(t) {
       await t.open('#/overview');
-      const tabs = await t.page.$$eval('.mainnav > ul > li:not(.nav-secondary) > a, .mainnav > ul > li > details > summary', els => els.map(a => { const r = a.getBoundingClientRect(); return { label: a.querySelector('.nav-label').textContent.trim().replace(/\d+$/, ''), x: r.x, right: r.right, y: r.y, bottom: r.bottom, visible: r.width > 0 && r.height > 0 }; }));
-      t.assert.deepEqual(tabs.map(b => b.label), ['Plan', 'Transactions', 'More', 'Data & privacy']);
+      const tabs = await t.page.$$eval('.mainnav > ul > li:not(.nav-secondary):not(.nav-phone-hide) > a, .mainnav > ul > li > details > summary', els => els.map(a => { const r = a.getBoundingClientRect(); return { label: a.querySelector('.nav-label').textContent.trim().replace(/\d+$/, ''), x: r.x, right: r.right, y: r.y, bottom: r.bottom, visible: r.width > 0 && r.height > 0 }; }));
+      t.assert.deepEqual(tabs.map(b => b.label), ['Plan', 'Budget', 'Transactions', 'More']);
       const vw = await t.page.evaluate(() => window.innerWidth), vh = await t.page.evaluate(() => window.innerHeight);
       for (const b of tabs) {
         t.assert.ok(b.visible, 'tab visible');
@@ -40,11 +40,11 @@ module.exports = [
       t.assert.ok(!(await t.page.isVisible('.nav-desktop-only')), 'the desktop-only group is hidden on phones');
       await t.page.click('.nav-more-menu > summary');
       const more = await t.page.$$eval('.nav-more-list a', as => as.map(a => ({ view: a.dataset.nav, visible: a.getBoundingClientRect().height > 0, right: a.getBoundingClientRect().right })));
-      t.assert.deepEqual(more.map(m => m.view), ['spending', 'budget'], 'Forecast is retired: its what-ifs are the Plan chart’s Compare');
+      t.assert.deepEqual(more.map(m => m.view), ['spending', 'data'], 'Forecast is retired: its what-ifs are the Plan chart’s Compare');
       t.assert.ok(more.every(m => m.visible && m.right <= vw + 1), 'More menu items visible and inside the viewport');
       await t.shot('nav-more');
-      await t.page.click('.nav-more-list a[data-nav="budget"]');
-      await t.page.waitForFunction(() => location.hash.startsWith('#/budget'));
+      await t.page.click('.nav-more-list a[data-nav="spending"]');
+      await t.page.waitForFunction(() => location.hash.startsWith('#/spending'));
       await t.page.waitForFunction(() => !document.querySelector('.nav-more-menu').open, null, { timeout: 3000 }).catch(() => {});
       t.assert.ok(await t.page.isVisible('.topbar-data'), 'Data & privacy reachable from the top bar');
     },
@@ -59,7 +59,7 @@ module.exports = [
       await t.page.waitForFunction(() => location.hash.startsWith('#/spending'));
       await t.page.goBack();
       await t.page.waitForFunction(() => location.hash.startsWith('#/budget'));
-      t.assert.equal(await t.page.$eval('.nav-desktop-only a[data-nav="budget"]', a => a.getAttribute('aria-current')), 'page');
+      t.assert.equal(await t.page.$eval('.mainnav > ul > li > a[data-nav="budget"]', a => a.getAttribute('aria-current')), 'page');
       await t.page.goForward();
       await t.page.waitForFunction(() => location.hash.startsWith('#/spending'));
       await t.page.reload();
