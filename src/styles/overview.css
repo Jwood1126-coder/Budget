@@ -171,6 +171,40 @@ button.plan-trend-chip:hover { background: var(--surface-3); }
   .irr-kept .drill-name { min-height: 40px; }
 }
 
+/* ---- the transactions behind a row: a quiet toggle, then one line each (the bank's text truncated,
+   its full text in the title), its category as a compact select and a link to its details */
+.plan-txns { margin: 0 0 var(--space-2) 26px; min-width: 0; }
+.irr-row > .plan-txns { grid-column: 1 / -1; }
+.plan-txns > summary { width: fit-content; max-width: 100%; cursor: pointer; padding-block: 4px; color: var(--text-2); font-size: .8rem; font-weight: 600; }
+.plan-txns > summary:hover, .plan-txns[open] > summary { color: var(--brand); }
+.plan-tx-list { list-style: none; margin: 2px 0 0; padding: 0; border-left: 2px solid var(--border); }
+.plan-tx { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 6px 0 6px var(--space-3); border-top: 1px solid var(--border); font-size: .82rem; }
+.plan-tx:first-child { border-top: 0; }
+.plan-tx-line { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+.plan-tx-date { flex: 0 0 auto; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.plan-tx-desc { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-tx-amt { flex: 0 0 auto; margin-left: auto; font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.plan-tx-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--space-2); min-width: 0; color: var(--text-3); }
+.plan-tx-acct { flex: 1 1 6rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-txcat { min-width: 0; max-width: min(100%, 12rem); min-height: 30px; padding: 2px 6px; border: 1px solid var(--control-border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; font-size: .8rem; }
+.plan-tx-split { font-style: italic; overflow-wrap: anywhere; }
+.plan-tx-link { display: inline-flex; align-items: center; min-height: 30px; font-weight: 600; }
+@media (max-width: 599px) {
+  /* Phones: the list sits under its row's name without a further indent; account and Details share
+     a line, the category gets a line of its own. */
+  .plan-txns { margin-left: 0; }
+  .plan-tx { padding-left: var(--space-2); }
+  .plan-tx-meta .plan-txcat, .plan-tx-meta .plan-tx-split { order: 2; max-width: 100%; }
+}
+.plan-txns-all { margin: 2px 0 0 var(--space-2); }
+/* On a place's row: every transaction from it to one category. */
+.plan-bulkcat { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; min-width: 0; max-width: 100%; }
+.plan-bulkcat label { color: var(--text-2); font-weight: 600; }
+@media (max-width: 599px), (pointer: coarse) {
+  .plan-txns > summary { min-height: 40px; padding-block: 10px; }
+  .plan-txcat, .plan-tx-link { min-height: 40px; }
+}
+
 /* ---- who paid in: a quiet drawer under the money-in dials */
 .plan-deposits { margin-top: var(--space-3); }
 .plan-deposits > summary { font-size: .9rem; padding-block: 10px; }

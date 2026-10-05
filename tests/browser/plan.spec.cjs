@@ -3,7 +3,7 @@
 // headline, planned changes, Trends and the CSV export. Synthetic sample only.
 const fs = require('node:fs');
 
-const { noHorizontalScroll, state, whole, amt, signedAmt, boxText, centsOf } = require('./helpers.cjs');
+const { noHorizontalScroll, state, whole, amt, signedAmt, boxText, money, centsOf } = require('./helpers.cjs');
 
 /** The engine's model for the current state, built the way the page builds it (real local today). */
 function timeline(page) {
@@ -84,6 +84,40 @@ async function loadWithoutBalances(page, file) {
   await page.waitForSelector('#page-title');
 }
 const headline = page => page.textContent('#plan-headline').then(t => t.replace(/\s+/g, ' ').trim());
+/** Transactions as the page holds them (the decided data), by id: what a list line shows and its edit. */
+function txnsOf(page, ids) {
+  return page.evaluate(list => {
+    const all = new Map(window.HouseholdBudget.context().realTxns.map(t => [t.id, t]));
+    return list.map(id => {
+      const t = all.get(id);
+      return { id, date: t.date, description: t.description, merchant: t.merchant, accountLabel: t.accountLabel, category: t.category, amountCents: t.amountCents, kind: t.kind };
+    });
+  }, ids);
+}
+/** Every spending transaction from a place in the whole data set (what “All N from this place” changes). */
+function placeTxns(page, merchant) {
+  return page.evaluate(m => window.HouseholdBudget.context().realTxns
+    .filter(t => t.kind === 'spend' && (t.merchant || t.description) === m && !t.splitApplied && !(t.parts && t.parts.length > 1))
+    .map(t => ({ id: t.id, category: t.category, date: t.date })), merchant);
+}
+/** Lines of a row's transaction list: [txn id, date, description, its title, amount, account, selected category]. */
+function txnLines(page, rowId) {
+  return page.$$eval(`[id="plan-txns-${rowId}"] .plan-tx`, ls => ls.map(l => {
+    const sel = l.querySelector('select');
+    return {
+      id: l.dataset.txn, date: l.querySelector('.plan-tx-date').textContent.trim(), desc: l.querySelector('.plan-tx-desc').textContent.trim(),
+      title: l.querySelector('.plan-tx-desc').getAttribute('title'), amount: l.querySelector('.plan-tx-amt').textContent.trim(),
+      account: l.querySelector('.plan-tx-acct').textContent.trim(), category: sel ? sel.value : null, href: l.querySelector('.plan-tx-link').getAttribute('href'),
+    };
+  }));
+}
+const toastText = page => page.textContent('#toast').then(x => x.replace(/\s+/g, ' ').trim());
+/** “Sep 27” this year, “Sep 27, 2025” before (as the lists show dates). */
+const shortDate = date => {
+  const d = new Date(date + 'T12:00:00');
+  const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  return date.slice(0, 4) === String(new Date().getFullYear()) ? label.replace(/, \d{4}$/, '') : label;
+};
 
 module.exports = [
   {
@@ -619,6 +653,278 @@ module.exports = [
     },
   },
   {
+    name: 'a place’s transactions: hidden until asked for, newest first with the bank’s text, account and amount, each with its category; “Show all” draws the rest',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      const exp = await timeline(page);
+      const kroger = exp.essentials.rows.find(r => r.kind === 'merchant' && r.label === 'Kroger');
+      assert.ok(kroger && kroger.txnIds.length > 25, 'the sample’s grocer has more than a page of purchases');
+      assert.equal(kroger.txnIds.length, kroger.txnCount);
+      const list = `[id="plan-txns-${kroger.id}"]`;
+      // Calm: nothing new is visible until the row's own list is opened, and nothing is drawn before.
+      assert.equal(await page.isVisible(list), false);
+      await page.click('#plan-drill-essentials > summary');
+      await page.click(`#plan-drillrow-${kroger.parent} > summary`);
+      assert.equal(await page.isVisible(list), true);
+      assert.equal((await page.textContent(`${list} > summary`)).trim(), `Show ${kroger.txnIds.length} transactions`);
+      assert.equal(await page.$$eval(`${list} .plan-tx`, x => x.length), 0, 'no lines drawn while closed');
+      await page.click(`${list} > summary`);
+      await page.waitForSelector(`${list} .plan-tx`);
+      const lines = await txnLines(page, kroger.id);
+      assert.equal(lines.length, 25, 'the first 25');
+      assert.deepEqual(lines.map(l => l.id), kroger.txnIds.slice(0, 25), 'newest first');
+      const txns = await txnsOf(page, kroger.txnIds);
+      for (let i = 1; i < txns.length; i++) assert.ok(txns[i - 1].date >= txns[i].date, 'dates go back in time');
+      lines.forEach((l, i) => {
+        const x = txns[i];
+        assert.equal(l.date, shortDate(x.date));
+        assert.equal(l.desc, x.description, 'the bank’s own text');
+        assert.equal(l.title, x.description, 'in full in the title');
+        assert.equal(l.amount, money(-x.amountCents));
+        assert.equal(l.account, x.accountLabel);
+        assert.equal(l.category, x.category, 'the select shows its category');
+        assert.equal(l.href, `#/spending?period=${x.date.slice(0, 7)}&txn=${x.id}`, 'Details opens the transaction');
+      });
+      // The choices are the Transactions view's, grouped as the taxonomy groups them.
+      const first = `#plan-txcat-${lines[0].id}`;
+      const groups = await page.$$eval(`${first} optgroup`, gs => gs.map(g => g.label));
+      assert.deepEqual(groups.slice(0, 4), ['Housing', 'Utilities', 'Food', 'Shopping']);
+      assert.deepEqual(await page.$$eval(`${first} optgroup[label="Food"] option`, os => os.map(o => o.value)), ['Groceries', 'Dining & takeout']);
+      assert.equal(await page.getAttribute(first, 'data-action'), 'plan:txn-category');
+      assert.match(await page.textContent(`label[for="plan-txcat-${lines[0].id}"]`), new RegExp('^Category of ' + txns[0].description.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ', '));
+      // Show all: the rest drawn in place, focus on the first new line.
+      assert.equal((await page.textContent(`#plan-txns-${kroger.id}-all`)).trim(), `Show all ${kroger.txnIds.length}`);
+      await page.click(`#plan-txns-${kroger.id}-all`);
+      await page.waitForFunction(([sel, n]) => document.querySelectorAll(sel + ' .plan-tx').length === n, [list, kroger.txnIds.length]);
+      assert.deepEqual((await txnLines(page, kroger.id)).map(l => l.id), kroger.txnIds);
+      assert.ok(!(await page.$(`#plan-txns-${kroger.id}-all`)), 'no “Show all” once everything is shown');
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'plan-txcat-' + kroger.txnIds[25]);
+      // Nothing was saved for any of this.
+      assert.deepEqual((await state(page)).ledgerEdits, {});
+      // A category whose only row is “Everything in …” lists its transactions under the category itself.
+      const solo = exp.essentials.rows.find(r => r.level === 1 && exp.essentials.rows.filter(k => k.parent === r.id).every(k => k.kind === 'rest'));
+      assert.ok(solo, 'the sample has a category with no regular place');
+      assert.equal((await page.textContent(`[id="plan-txns-${solo.id}"] > summary`)).trim(), `Show ${solo.txnIds.length} transaction${solo.txnIds.length === 1 ? '' : 's'}`);
+    },
+  },
+  {
+    name: 'one transaction to another category: a ledger edit with a message; its row drops by its share, the new category’s row rises; Undo puts it back',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      const exp = await timeline(page);
+      const kroger = exp.essentials.rows.find(r => r.kind === 'merchant' && r.label === 'Kroger');
+      const [txn] = await txnsOf(page, kroger.txnIds.slice(0, 1));
+      const share = -txn.amountCents / exp.count;
+      const hh = exp.flexible.rows.find(r => r.level === 1 && r.label === 'Household & hardware');
+      const ess = dialOf(exp, 'essentials').planCents, flex = dialOf(exp, 'flexible').planCents;
+      await page.click('#plan-drill-essentials > summary');
+      await page.click(`#plan-drillrow-${kroger.parent} > summary`);
+      await page.click(`[id="plan-txns-${kroger.id}"] > summary`);
+      await page.waitForSelector(`#plan-txcat-${txn.id}`);
+      await page.focus(`#plan-txcat-${txn.id}`); // as a click or the keyboard would
+      await page.selectOption(`#plan-txcat-${txn.id}`, 'Household & hardware');
+      await page.waitForFunction(id => (window.HouseholdBudget.getState().ledgerEdits[id] || {}).category === 'Household & hardware', txn.id);
+      const edit = (await state(page)).ledgerEdits[txn.id];
+      assert.equal(edit.categoryReason, 'Set on the Plan page');
+      assert.deepEqual(edit.history.map(h => [h.field, h.to, h.reason]), [['category', 'Household & hardware', 'Set on the Plan page']]);
+      assert.match(await toastText(page), /^Kroger: now Household & hardware\./);
+      const after = await timeline(page);
+      const kroger2 = after.essentials.rows.find(r => r.id === kroger.id);
+      assert.ok(near(kroger.planCents - kroger2.planCents, share, 1), `Kroger −${kroger.planCents - kroger2.planCents}, its share ${share}`);
+      assert.ok(!kroger2.txnIds.includes(txn.id), 'no longer behind the Kroger row');
+      await page.waitForFunction(([id, v]) => document.getElementById(id).value === v, [`plan-row-${kroger.id}-amt`, boxText(kroger2.planCents)]);
+      const hh2 = after.flexible.rows.find(r => r.level === 1 && r.label === 'Household & hardware');
+      assert.ok(near(hh2.planCents - hh.planCents, share, 1), `Household & hardware +${hh2.planCents - hh.planCents}`);
+      assert.ok(hh2.txnIds.includes(txn.id), 'now behind Household & hardware');
+      assert.ok(after.flexible.rows.some(r => r.parent === hh2.id && r.label === 'Kroger' && r.txnIds.includes(txn.id)), 'as a Kroger row there');
+      assert.ok(near(ess - dialOf(after, 'essentials').planCents, share, 1) && near(dialOf(after, 'flexible').planCents - flex, share, 1), 'the dials follow');
+      // The list stays open without it; focus moves to the next line.
+      assert.ok(await page.$eval(`[id="plan-txns-${kroger.id}"]`, d => d.open), 'the list stays open');
+      assert.ok(!(await page.$(`#plan-txcat-${txn.id}`)), 'the line left this list');
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'plan-txcat-' + kroger.txnIds[1]);
+      // Undo from the toast: back where it was, with no edit left.
+      await page.click('#toast button[data-action="undo"]');
+      await page.waitForFunction(id => !window.HouseholdBudget.getState().ledgerEdits[id], txn.id);
+      await page.waitForSelector(`#plan-txcat-${txn.id}`);
+      assert.equal(await page.inputValue(`#plan-txcat-${txn.id}`), 'Groceries');
+      assert.equal(await page.inputValue(`#plan-row-${kroger.id}-amt`), boxText(kroger.planCents));
+      assert.equal(dialOf(await timeline(page), 'essentials').planCents, ess);
+    },
+  },
+  {
+    name: 'keyboard: arrow keys on a closed category list wait for Enter or leaving it; Escape takes the change back',
+    async run(t) {
+      const { page, assert } = t;
+      // On macOS an arrow key opens the list instead of changing it: nothing waits there.
+      if (t.isMac) return;
+      await t.open('#/overview');
+      const exp = await timeline(page);
+      const kroger = exp.essentials.rows.find(r => r.kind === 'merchant' && r.label === 'Kroger');
+      const [a, b] = kroger.txnIds;
+      await page.click('#plan-drill-essentials > summary');
+      await page.click(`#plan-drillrow-${kroger.parent} > summary`);
+      await page.click(`[id="plan-txns-${kroger.id}"] > summary`);
+      await page.waitForSelector(`#plan-txcat-${a}`);
+      const options = await page.$$eval(`#plan-txcat-${a} option`, os => os.map(o => o.value));
+      const after = options[options.indexOf('Groceries') + 1];
+      const before = options[options.indexOf('Groceries') - 1];
+      await page.focus(`#plan-txcat-${a}`);
+      await page.keyboard.press('ArrowDown');
+      assert.equal(await page.inputValue(`#plan-txcat-${a}`), after, 'the list shows the next category');
+      await t.settled();
+      assert.deepEqual((await state(page)).ledgerEdits, {}, 'nothing saved on an arrow key');
+      await page.keyboard.press('Escape');
+      assert.equal(await page.inputValue(`#plan-txcat-${a}`), 'Groceries', 'Escape takes it back');
+      await page.keyboard.press('ArrowDown');
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(([id, c]) => (window.HouseholdBudget.getState().ledgerEdits[id] || {}).category === c, [a, after]);
+      assert.match(await toastText(page), new RegExp(`^Kroger: now ${after}\\.`));
+      await page.waitForFunction(id => document.activeElement && document.activeElement.id === 'plan-txcat-' + id, b);
+      // Leaving the list applies it too; the line (and the Details link tabbed to) moves away, so the next line takes focus.
+      await page.keyboard.press('ArrowUp');
+      assert.equal(await page.inputValue(`#plan-txcat-${b}`), before);
+      await page.keyboard.press('Tab');
+      await page.waitForFunction(([id, c]) => (window.HouseholdBudget.getState().ledgerEdits[id] || {}).category === c, [b, before]);
+      await page.waitForFunction(id => document.activeElement && document.activeElement.id === 'plan-txcat-' + id, kroger.txnIds[2]);
+      assert.equal(Object.keys((await state(page)).ledgerEdits).length, 2, 'one edit per transaction changed');
+      // Leaving for a control elsewhere keeps focus there.
+      const c = kroger.txnIds[2];
+      await page.keyboard.press('ArrowDown');
+      await page.focus(`#plan-row-${kroger.id}-amt`);
+      await page.waitForFunction(id => (window.HouseholdBudget.getState().ledgerEdits[id] || {}).category, c);
+      await t.settled();
+      assert.equal(await page.evaluate(() => document.activeElement.id), `plan-row-${kroger.id}-amt`);
+    },
+  },
+  {
+    name: 'every transaction from a place to one category: one undoable change over the whole data; the place moves to that category, the dials follow; kept after a reload',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      const exp = await timeline(page);
+      const ess = dialOf(exp, 'essentials').planCents, flex = dialOf(exp, 'flexible').planCents;
+      // Same group (both flexible): the total does not move.
+      const target = exp.flexible.rows.find(r => r.kind === 'merchant' && r.label === 'Target');
+      const all = await placeTxns(page, 'Target');
+      assert.ok(all.length > target.txnIds.length, `the whole data (${all.length}), not only the baseline months (${target.txnIds.length})`);
+      assert.deepEqual([...new Set(all.map(x => x.category))], ['Mixed retail']);
+      await page.click('#plan-drill-flexible > summary');
+      await page.click(`#plan-drillrow-${target.parent} > summary`);
+      const bulk = `#plan-row-${target.id}-cat`;
+      assert.equal((await page.textContent(`label[for="plan-row-${target.id}-cat"]`)).trim(), `All ${all.length} from this place →`);
+      assert.equal(await page.inputValue(bulk), 'Mixed retail', 'preselected: they share one category');
+      assert.equal(await page.getAttribute(bulk, 'title'), `Applies to all ${all.length} transactions from this place in your data, in every month (not only the baseline); transactions you import later are not changed.`);
+      assert.ok(await page.$eval(`#plan-row-${target.id}-move`, (b, sel) => b.parentElement.contains(document.querySelector(sel)), bulk), 'next to Move to …');
+      // No bulk choice on an “Everything else” row: it holds many places.
+      const rest = exp.flexible.rows.find(r => r.kind === 'rest' && r.parent && exp.flexible.rows.some(k => k.parent === r.parent && k.kind === 'merchant'));
+      assert.ok(rest && !(await page.$(`#plan-row-${rest.id}-cat`)), 'no bulk select on ' + (rest && rest.label));
+      await page.focus(bulk);
+      await page.selectOption(bulk, 'Household & hardware');
+      await page.waitForFunction(ids => ids.every(id => (window.HouseholdBudget.getState().ledgerEdits[id] || {}).category === 'Household & hardware'), all.map(x => x.id));
+      assert.match(await toastText(page), new RegExp(`^Target: ${all.length} transactions now Household & hardware\\.`));
+      const after = await timeline(page);
+      assert.equal(dialOf(after, 'flexible').planCents, flex, 'flexible unchanged: both categories are flexible');
+      assert.equal(dialOf(after, 'essentials').planCents, ess);
+      const moved = after.flexible.rows.find(r => r.kind === 'merchant' && r.label === 'Target');
+      const hh = after.flexible.rows.find(r => r.id === moved.parent);
+      assert.equal(hh.label, 'Household & hardware', 'Target is under its new category');
+      assert.equal(moved.planCents, target.planCents);
+      assert.ok(!after.flexible.rows.some(r => r.label === 'Mixed retail' && after.flexible.rows.some(k => k.parent === r.id && k.label === 'Target')));
+      // The page follows it there: its new category is open and its control has focus.
+      await page.waitForFunction(id => document.activeElement && document.activeElement.id === id, `plan-row-${moved.id}-cat`);
+      assert.ok(await page.$eval(`#plan-drillrow-${hh.id}`, d => d.open), 'its new category is open');
+      assert.equal(await page.inputValue(`#plan-row-${moved.id}-cat`), 'Household & hardware');
+      // One Undo takes back every one of them.
+      await page.click('#undoBtn');
+      await page.waitForFunction(ids => ids.every(id => !window.HouseholdBudget.getState().ledgerEdits[id]), all.map(x => x.id));
+      assert.equal((await timeline(page)).flexible.rows.find(r => r.label === 'Target').parent, target.parent);
+
+      // Another group: Costco to Groceries moves its amount from flexible to essentials.
+      const costco = exp.flexible.rows.find(r => r.kind === 'merchant' && r.label === 'Costco');
+      const costcoAll = await placeTxns(page, 'Costco');
+      await page.waitForSelector(`#plan-row-${costco.id}-cat`, { state: 'attached' });
+      if (!(await page.isVisible(`#plan-row-${costco.id}-cat`))) await page.click(`#plan-drillrow-${costco.parent} > summary`);
+      await page.selectOption(`#plan-row-${costco.id}-cat`, 'Groceries');
+      await page.waitForFunction(ids => ids.every(id => (window.HouseholdBudget.getState().ledgerEdits[id] || {}).category === 'Groceries'), costcoAll.map(x => x.id));
+      const shifted = await timeline(page);
+      assert.equal(flex - dialOf(shifted, 'flexible').planCents, costco.planCents, 'flexible loses Costco');
+      assert.equal(dialOf(shifted, 'essentials').planCents - ess, costco.planCents, 'essentials gains it');
+      const inGroceries = shifted.essentials.rows.find(r => r.kind === 'merchant' && r.label === 'Costco');
+      assert.equal(shifted.essentials.rows.find(r => r.id === inGroceries.parent).label, 'Groceries');
+      assert.ok(await page.$eval('#plan-drill-essentials', d => d.open), 'the essentials list opens to show it');
+      await page.waitForFunction(v => document.querySelector('#plan-dial-essentials').value === v, boxText(ess + costco.planCents));
+      // Kept after a reload.
+      await page.reload();
+      await page.waitForSelector('#plan-dials');
+      const reloaded = await timeline(page);
+      assert.equal(reloaded.essentials.rows.find(r => r.id === inGroceries.id).planCents, costco.planCents);
+      assert.equal(await page.inputValue('#plan-dial-essentials'), boxText(ess + costco.planCents));
+      assert.equal((await state(page)).ledgerEdits[costcoAll[0].id].category, 'Groceries');
+    },
+  },
+  {
+    name: 'an irregular cost: “Show transaction” lists it with its category, which can be changed; it stays a one-time cost',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      const exp = await timeline(page);
+      const item = exp.irregular.rows[0];
+      assert.deepEqual(item.txnIds, [item.id]);
+      await page.click('#plan-drill-irregular > summary');
+      const list = `[id="plan-txns-${item.id}"]`;
+      assert.equal((await page.textContent(`${list} > summary`)).trim(), 'Show transaction');
+      assert.ok(await page.$(`#plan-irr-${item.id}-regular`), '“Count as regular” stays');
+      await page.click(`${list} > summary`);
+      await page.waitForSelector(`#plan-txcat-${item.id}`);
+      const [line] = await txnLines(page, item.id);
+      const [txn] = await txnsOf(page, [item.id]);
+      assert.deepEqual([line.desc, line.amount, line.account, line.category], [txn.description, money(-txn.amountCents), txn.accountLabel, item.category]);
+      const to = item.category === 'Medical & pharmacy' ? 'Dental' : 'Medical & pharmacy';
+      await page.selectOption(`#plan-txcat-${item.id}`, to);
+      await page.waitForFunction(([id, c]) => (window.HouseholdBudget.getState().ledgerEdits[id] || {}).category === c, [item.id, to]);
+      assert.match(await toastText(page), new RegExp(`^${item.label}: now ${to}\\.`));
+      await page.waitForFunction(([id, c]) => document.getElementById(`plan-irr-${id}-meta`).textContent.includes(c), [item.id, to]);
+      const after = await timeline(page);
+      assert.equal(after.irregular.count, exp.irregular.count, 'still a one-time cost');
+      assert.equal(after.irregular.rows.find(r => r.id === item.id).category, to);
+      assert.equal(dialOf(after, 'irregular').planCents, dialOf(exp, 'irregular').planCents, 'the irregular dial is unchanged');
+      assert.equal(await page.inputValue(`#plan-txcat-${item.id}`), to);
+      assert.equal(await page.evaluate(() => document.activeElement.id), `plan-txcat-${item.id}`, 'focus stays on the select');
+    },
+  },
+  {
+    name: 'phone: a row’s transactions fit without sideways scroll, every control in them at least 40px',
+    viewport: 'phone',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      const exp = await timeline(page);
+      const amazon = exp.flexible.rows.find(r => r.kind === 'merchant' && r.label === 'Amazon');
+      const item = exp.irregular.rows[0];
+      await page.evaluate(([parent]) => {
+        for (const id of ['plan-drill-flexible', 'plan-drill-irregular', 'plan-drillrow-' + parent]) document.getElementById(id).open = true;
+      }, [amazon.parent]);
+      await page.click(`[id="plan-txns-${amazon.id}"] > summary`);
+      await page.click(`[id="plan-txns-${item.id}"] > summary`);
+      await page.waitForSelector(`#plan-txcat-${item.id}`);
+      await page.click(`#plan-txns-${amazon.id}-all`);
+      await page.waitForFunction(([id, n]) => document.querySelectorAll(`[id="plan-txns-${id}"] .plan-tx`).length === n, [amazon.id, amazon.txnIds.length]);
+      assert.ok(await noHorizontalScroll(page), 'no sideways scroll with the lists open');
+      const small = await page.$$eval('.plan-txns > summary, .plan-txns select, .plan-txns a, .plan-txns button, .plan-bulkcat select', els => els
+        .filter(el => el.getBoundingClientRect().width > 0)
+        .map(el => ({ what: (el.id || el.textContent.trim()).slice(0, 40), h: Math.round(el.getBoundingClientRect().height) }))
+        .filter(x => x.h < 40));
+      assert.deepEqual(small, [], 'tap targets under 40px');
+      // Long bank text is cut short on the line (the whole of it is in the title), never wrapped wide.
+      const desc = await page.$eval(`[id="plan-txns-${amazon.id}"] .plan-tx-desc`, el => ({ w: el.getBoundingClientRect().right, vw: innerWidth, overflow: getComputedStyle(el).textOverflow }));
+      assert.ok(desc.w <= desc.vw, 'inside the screen');
+      assert.equal(desc.overflow, 'ellipsis');
+      await t.shot('plan-phone-transactions');
+    },
+  },
+  {
     name: 'switching Balance, Flows and Trends keeps the months; Ahead and Past change them',
     async run(t) {
       const { page, assert } = t;
@@ -725,7 +1031,7 @@ module.exports = [
     },
   },
   {
-    name: 'trends: a Balances group adds month-end balances; the axis title says what the lines measure',
+    name: 'trends: a Balances group adds month-end balances; the axis title, chart title, caption and spoken summary say what the lines measure',
     async run(t) {
       const { page, assert } = t;
       await t.open('#/overview');
@@ -743,7 +1049,10 @@ module.exports = [
       assert.ok(options.some(([key]) => key === 'balance-joint-savings'), 'the sample’s savings balance is listed');
       const axis = () => page.textContent('#plan-chart .cc-axis-title').then(x => x.trim());
       const caption = () => page.textContent('#plan-chart .cc-caption');
+      const title = () => page.textContent('#plan-chart-title').then(x => x.trim());
+      const spoken = () => page.getAttribute('#plan-chart-plot', 'aria-label');
       assert.equal(await axis(), 'Monthly, $ per month', 'card spending only');
+      assert.equal(await title(), 'Monthly amounts over time');
       // Picked: a line like the others (solid in actual months, dashed in the plan), next to card spending.
       await page.selectOption('#plan-trend-add', 'balance-joint-savings');
       await page.waitForFunction(() => window.HouseholdBudget.getState().ui.plan.trends.series.join() === 'card,balance-joint-savings');
@@ -753,7 +1062,12 @@ module.exports = [
       assert.ok(await page.$(line + '.is-projected'), 'plan months: dashed');
       assert.equal(await page.getAttribute('#plan-trend-balance-joint-savings', 'aria-label'), `Remove ${savings.name} from the chart`);
       assert.equal(await axis(), '$ — monthly amounts and month-end balances', 'card spending and a balance');
+      assert.equal(await title(), 'Monthly amounts and balances over time');
       assert.equal(await caption(), 'Monthly amounts from your data; dashed = this plan. Balance lines are month-end levels, not monthly amounts. Average = trailing 3 months. Trend = straight-line fit of the actual months.');
+      // The spoken summary averages the monthly amounts and reads the balance where it ended.
+      assert.match(await spoken(), new RegExp(series.find(x => x.key === 'card').name + ' averaged \\$[\\d,]+ a month'));
+      assert.match(await spoken(), new RegExp(savings.name + ' ended at \\$[\\d,]+ in [A-Z][a-z]{2} \\d{4}'));
+      assert.ok(!(await spoken()).includes(savings.name + ' averaged'), await spoken());
       // The same month-end figures as the savings line in the Balance view.
       const tb = await table(page);
       let compared = 0;
@@ -769,10 +1083,15 @@ module.exports = [
       await page.waitForFunction(() => window.HouseholdBudget.getState().ui.plan.trends.series.join() === 'balance-joint-savings');
       await page.waitForFunction(() => !document.querySelector('#plan-chart .cc-trend-series[data-cc-series="card"]'));
       assert.equal(await axis(), '$ at month end');
+      assert.equal(await title(), 'Balances over time');
+      assert.match(await caption(), /^Month-end balances from your data; dashed = this plan\./);
       assert.ok(!(await caption()).includes('Balance lines'), await caption());
+      assert.ok(!/averaged/.test(await spoken()), await spoken());
+      assert.equal((await page.textContent('#plan-chart-table caption')).trim(), 'Balances over time', 'the table twin says the same');
       await page.reload();
       await page.waitForSelector(line);
       assert.equal(await axis(), '$ at month end', 'the choice survives a reload');
+      assert.equal(await title(), 'Balances over time');
     },
   },
   {

@@ -11,11 +11,76 @@
   const P = UI._plan;
   const { isCents, exact, amt, plural, inputText, todayIso, model, showError } = P;
   const { pickedOf, shownTimeline, dataAnchorsOf, GROUP_NAME, dialLabel, signedDial, depositsOf, KIND_LABEL, CHANGE_GROUP_LABEL } = P;
+  const { txnMap, placeTxns, placeOf, fillTxns, TXN_REASON } = P;
 
   /** Set by a change made on this page: the next render announces the new headline. */
   let announceNext = false;
   /** An element to focus after the next render (a control that moved or disappeared). */
   let focusNext = null;
+
+  /**
+   * Focus after a change that may move the control it came from (a transaction that changes
+   * category leaves its row's list): the first of these elements still on the page, else the
+   * summary of the innermost list around it still there.
+   */
+  function focusAfterMove(el, ids) {
+    const lists = [];
+    for (let d = el.closest('details'); d; d = d.parentElement ? d.parentElement.closest('details') : null) if (d.id) lists.push(d.id);
+    return () => {
+      for (const id of ids) { const x = id && document.getElementById(id); if (x) return x; }
+      for (const id of lists) { const d = document.getElementById(id); if (d) return d.querySelector(':scope > summary'); }
+      return null;
+    };
+  }
+
+  /**
+   * The category selects (.plan-txcat): a change made with the keys of a closed list (an arrow, a
+   * letter: the browser changes the value at once) waits for Enter or for leaving the list, and
+   * Escape takes it back. Each change is a correction, and its line may move away, so the next key
+   * would otherwise change the next transaction. A choice made in the opened list applies at once.
+   * A browser fires that change inside the keydown, so `keying` (cleared once the keydown is over)
+   * tells the two apart.
+   */
+  function keyedCategory(rootEl) {
+    const commit = (el, goingTo) => {
+      delete el.dataset.pending;
+      el.goingTo = goingTo; // left for this control (undefined on Enter): see leftFor
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    rootEl.addEventListener('keydown', ev => {
+      const el = ev.target;
+      if (!el.matches || !el.matches('select.plan-txcat')) return;
+      if (el.dataset.pending && (ev.key === 'Enter' || ev.key === 'Escape')) {
+        ev.preventDefault();
+        if (ev.key === 'Enter') { commit(el, undefined); return; }
+        const was = Array.from(el.options).find(o => o.defaultSelected);
+        el.value = was ? was.value : '';
+        delete el.dataset.pending;
+        return;
+      }
+      el.dataset.keying = '1';
+      setTimeout(() => { delete el.dataset.keying; }, 0);
+    });
+    rootEl.addEventListener('focusout', ev => {
+      const el = ev.target;
+      if (el.matches && el.matches('select.plan-txcat') && el.dataset.pending) commit(el, ev.relatedTarget || null);
+    });
+  }
+  /**
+   * A change applied on leaving its list for another control outside `scope` (the line or row that
+   * may move): focus stays there (the render finds it again by its id). Read once.
+   */
+  function leftFor(el, scope) {
+    const to = el.goingTo;
+    delete el.goingTo;
+    return !!(to && to.id && !(scope && scope.contains(to)));
+  }
+  /** True when this category change waits for Enter or leaving the list (see keyedCategory). */
+  function waitsForKeys(el, ev) {
+    if (!ev || !ev.isTrusted || !el.dataset.keying) return false;
+    el.dataset.pending = '1';
+    return true;
+  }
 
   /** Typed amounts: commas and a typographic minus or dash are fine. */
   const typed = value => String(value || '').trim().replace(/[−–—]/g, '-');
@@ -214,6 +279,54 @@
       UI.shared.editLedger(ctx.app, el.dataset.txn, 'planningBaseline', null, 'Counted as one-time again on the Plan page',
         { message: `${el.dataset.name} is a one-time cost again, in the irregular allowance.` });
     },
+    // ---- the transactions behind a row, and their categories
+    /** “Show all N”: the rest of the list, drawn in place (nothing saved). */
+    'plan:txns-all': (ctx, el) => {
+      const details = el.closest('details.plan-txns');
+      if (!details) return;
+      const before = details.querySelectorAll('.plan-tx').length;
+      fillTxns(ctx, details, { all: true });
+      const next = details.querySelectorAll('.plan-tx')[before];
+      const target = next ? next.querySelector('select, a') : details.querySelector(':scope > summary');
+      if (target) target.focus();
+    },
+    /** One transaction's category: a ledger edit (undoable); the plan rows follow it. */
+    'plan:txn-category': (ctx, el, ev) => {
+      if (waitsForKeys(el, ev)) return;
+      const line = el.closest('.plan-tx');
+      const stay = leftFor(el, line);
+      const t = txnMap(ctx).get(el.dataset.txn);
+      const category = el.value;
+      if (!t || !category || category === t.category) return;
+      const name = el.dataset.name || placeOf(t);
+      // When it moves to another row, the next line in this list (or the one before) takes focus.
+      const near = x => (x && x.querySelector('select.plan-txcat') ? x.querySelector('select.plan-txcat').id : null);
+      if (!stay) focusNext = focusAfterMove(el, [el.id, near(line && line.nextElementSibling), near(line && line.previousElementSibling)]);
+      announceNext = true;
+      UI.shared.editLedger(ctx.app, t.id, 'category', category, TXN_REASON, { message: `${name}: now ${category}.` });
+    },
+    /** Every transaction from a place (the whole data set) to one category, in one undoable change. */
+    'plan:merchant-category': (ctx, el, ev) => {
+      if (waitsForKeys(el, ev)) return;
+      const stay = leftFor(el, el.closest('.drill-row'));
+      const name = el.dataset.merchant;
+      const category = el.value;
+      const list = name ? placeTxns(ctx).get(name) || [] : [];
+      if (!category || !list.length) return;
+      const changes = list.filter(t => !(t.edit && t.edit.category === category)).map(t => ({ txnId: t.id, field: 'category', value: category, reason: TXN_REASON }));
+      if (!changes.length) return;
+      // The place moves to its new category's row: open the lists around it and focus its control there.
+      const back = focusAfterMove(el, []);
+      if (!stay) focusNext = rootEl => {
+        const moved = Array.from(rootEl.querySelectorAll('select[data-action="plan:merchant-category"]')).find(x => x.dataset.merchant === name);
+        if (!moved) return back();
+        for (let d = moved.closest('details'); d; d = d.parentElement ? d.parentElement.closest('details') : null) d.open = true;
+        moved.scrollIntoView({ block: 'center' });
+        return moved;
+      };
+      announceNext = true;
+      UI.shared.editMany(ctx.app, changes, { message: `${name}: ${plural(list.length, 'transaction')} now ${category}.` });
+    },
     'plan:person': (ctx, el) => {
       const value = el.value === '' ? null : el.value;
       const tl = model(ctx);
@@ -368,5 +481,5 @@
     },
   };
 
-  Object.assign(P, { actions, takeNext });
+  Object.assign(P, { actions, takeNext, keyedCategory });
 })(typeof globalThis !== 'undefined' ? globalThis : this);

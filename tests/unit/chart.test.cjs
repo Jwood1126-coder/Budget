@@ -741,6 +741,24 @@ test('trends mode: average and trend are optional; nothing extra drawn without t
   assert.match(cashChart(trendSpec({ trends: null })), /Not enough known values/);
 });
 
+test('trends mode: a month-end series (unit atMonthEnd) is summarized by where it ended, a monthly one by its average', () => {
+  const savings = [500000, 510000, 515000, 530000, 540000, 550000, 565000, 575000, 590000, 600000];
+  const html = cashChart(trendSpec({ trends: { trend: true, series: [
+    { key: 'groc', name: 'Groceries', values: groceries },
+    { key: 'sav', name: 'Joint savings balance', unit: 'atMonthEnd', values: savings },
+  ] } }));
+  const planIdx = TREND_MONTHS.indexOf('2026-10');
+  const label = html.match(/role="img" aria-label="([^"]*)"/)[1];
+  const slope = linearTrend(savings.map((v, i) => (i < planIdx ? v : null))).slope;
+  const money = c => '$' + Math.round(c / 100).toLocaleString('en-US');
+  // September is the last actual month: the balance is read there, never averaged.
+  assert.ok(label.includes(`Joint savings balance ended at ${money(savings[planIdx - 1])} in Sep 2026 (trend +${money(Math.round(slope / 100) * 100)}/mo)`), label);
+  assert.ok(!/Joint savings balance averaged/.test(label), label);
+  assert.match(label, /In actual months, Groceries averaged \$[\d,]+ a month \(trend \+\$\d+\/mo\); Joint savings balance ended at /);
+  // Without a unit a series is a monthly amount, as before.
+  assert.match(cashChart(trendSpec({ trends: { series: [{ key: 'sav', name: 'Joint savings balance', values: savings }] } })), /Joint savings balance averaged \$[\d,]+ a month/);
+});
+
 test('new options never print NaN or undefined', () => {
   const cases = [
     cashChart(trendSpec({ markers: MARKERS })),

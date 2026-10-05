@@ -2,8 +2,9 @@
 /*
  * Plan (#/overview), 1. the chart card: one chart in three modes on one timeline (Balance: the
  * combined cash and each account at month end; Flows: money in and out each month; Trends: the
- * monthly series and month-end balances picked, with an average and a trend line, the y-axis
- * saying which kind it shows), Past and Ahead, Export CSV. Shared helpers come from
+ * monthly series and month-end balances picked, with an average and a trend line, the title,
+ * the y-axis, the caption and the spoken summary saying which kind it shows), Past and Ahead,
+ * Export CSV. Shared helpers come from
  * BudgetUI._plan (plan/common.js).
  */
 (function (root) {
@@ -60,6 +61,8 @@
   }
   /** The Trends y-axis title for what the picked lines measure. */
   const TREND_AXIS = { flows: 'Monthly, $ per month', balances: '$ at month end', mixed: '$ — monthly amounts and month-end balances' };
+  /** The Trends chart title (and its table's caption) for what the picked lines measure. */
+  const TREND_TITLE = { flows: 'Monthly amounts over time', balances: 'Balances over time', mixed: 'Monthly amounts and balances over time' };
 
   /** Colour per picked series: its preferred colour unless taken, else the first free one. */
   function trendColours(picked) {
@@ -80,7 +83,7 @@
     const rows = tl.months.slice(from);
     const months = rows.map(m => m.month);
     const mode = modeOf(tl);
-    const TITLE = { balance: 'Joint cash at the end of each month', flows: 'Money in and out of joint each month', trends: 'Monthly amounts over time' };
+    const TITLE = { balance: 'Joint cash at the end of each month', flows: 'Money in and out of joint each month', trends: TREND_TITLE[mode === 'trends' ? trendUnits(tl) : 'flows'] };
     const spec = {
       id: 'plan-chart', mode, months, todayMonth: tl.todayMonth, planStart: tl.planStart,
       hidden: mode === 'trends' ? [] : hiddenOf(ctx, tl),
@@ -132,7 +135,8 @@
       const cls = trendColours(picked);
       const on = new Set(picked);
       spec.trends = {
-        series: tl.series.filter(s => on.has(s.key)).map(s => ({ key: s.key, name: s.name, cls: cls[s.key], values: s.values.slice(from) })),
+        // unit: a balance is a month-end level (the chart's summary says where it ended, not an average).
+        series: tl.series.filter(s => on.has(s.key)).map(s => ({ key: s.key, name: s.name, cls: cls[s.key], unit: isBalanceSeries(s) ? 'atMonthEnd' : 'perMonth', values: s.values.slice(from) })),
         ma: tl.settings.trends.ma, trend: tl.settings.trends.trend,
       };
       spec.axisTitle = TREND_AXIS[trendUnits(tl)];
@@ -174,8 +178,9 @@
   function captionOf(tl, mode, spec) {
     if (mode === 'trends') {
       const t = tl.settings.trends;
-      return ['Monthly amounts from your data; dashed = this plan.',
-        trendUnits(tl) === 'mixed' ? 'Balance lines are month-end levels, not monthly amounts.' : '',
+      const units = trendUnits(tl);
+      return [units === 'balances' ? 'Month-end balances from your data; dashed = this plan.' : 'Monthly amounts from your data; dashed = this plan.',
+        units === 'mixed' ? 'Balance lines are month-end levels, not monthly amounts.' : '',
         t.ma ? `Average = trailing ${t.ma} months.` : '',
         t.trend ? 'Trend = straight-line fit of the actual months.' : ''].filter(Boolean).join(' ');
     }

@@ -6,8 +6,9 @@
  *                 lines). Actual months solid, plan months dashed, gaps dotted or broken.
  *   Flows mode    monthly money in stacked above the axis, money out stacked below it; plan months
  *                 striped. An optional net line on top.
- *   Trends mode   one line per series in dollars a month (actual solid, plan dashed), with an optional
- *                 trailing moving average and a least-squares trend line (stats helpers below).
+ *   Trends mode   one line per series in dollars a month, or a month-end level such as a balance
+ *                 (actual solid, plan dashed), with an optional trailing moving average and a
+ *                 least-squares trend line (stats helpers below).
  *
  * Presentation-only extras: a ghost "Baseline plan" line in balance mode, and change markers on the
  * bottom axis (one-time triangles, monthly ticks with a faint band to the right edge).
@@ -170,6 +171,7 @@
       key: String(s.key ?? 'trend-' + si),
       name: String(s.name ?? ''),
       cls: s.cls || (isOther(s) ? 'series-muted' : free.shift() || 'series-muted'),
+      unit: s.unit === 'atMonthEnd' ? 'atMonthEnd' : 'perMonth',
       values: Array.from({ length: n }, (_, i) => (s.values && known(s.values[i]) ? Math.round(s.values[i]) : null)),
     }));
   }
@@ -198,7 +200,9 @@
    *     'Baseline plan'; null points draw nothing; never the summary's line or its low point),
    *   columns { in: [{ key, name, cls?, values }], out: [...] (positive = money leaving), status?: [], notes?: [] },
    *   net { key, name, values } | null,
-   *   trends { series: [{ key, name, cls?, values: [cents|null per month] }], ma: 0|3|6, trend: bool },
+   *   trends { series: [{ key, name, cls?, unit?: 'perMonth'|'atMonthEnd', values: [cents|null per month] }], ma: 0|3|6, trend: bool }
+   *     (unit 'atMonthEnd': a month-end level such as a balance; the summary says where it ended
+   *     instead of what it averaged; anything else is a monthly amount),
    *   markers [{ month, label, cents?, kind 'oneTime'|'monthly' }] (presentation only, any mode),
    *   hidden [keys], format, caption, tableCaption, axisTitle (the y-axis title, when not the mode's own),
    *   controls (trusted HTML placed on the title row, e.g. the mode switch), titleHidden.
@@ -614,10 +618,16 @@
       summary = parts.length ? parts.join('; ') + '.' : '';
     } else if (mode === 'trends') {
       const parts = ts.map(s => {
-        const vals = s.values.filter((v, i) => known(v) && monthStatus[i] !== 'projected');
-        if (!vals.length) return '';
-        const avg = Math.round(vals.reduce((a, v) => a + v, 0) / vals.length);
-        return `${s.name} averaged ${money(avg)} a month${s.tr ? ' (trend ' + slopeText(s.tr.slope) + ')' : ''}`;
+        const trend = s.tr ? ' (trend ' + slopeText(s.tr.slope) + ')' : '';
+        const at = s.values.map((v, i) => (known(v) && monthStatus[i] !== 'projected' ? i : -1)).filter(i => i >= 0);
+        if (!at.length) return '';
+        // A month-end level (a balance) is read where it ended; a monthly amount by its average.
+        if (s.unit === 'atMonthEnd') {
+          const last = at[at.length - 1];
+          return `${s.name} ended at ${money(s.values[last])} in ${fmt.month(months[last])}${trend}`;
+        }
+        const avg = Math.round(at.reduce((a, i) => a + s.values[i], 0) / at.length);
+        return `${s.name} averaged ${money(avg)} a month${trend}`;
       }).filter(Boolean);
       summary = parts.length ? 'In actual months, ' + parts.join('; ') + '.' : '';
     }

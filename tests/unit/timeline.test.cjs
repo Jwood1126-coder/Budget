@@ -638,6 +638,54 @@ test('one-time items: in the irregular allowance by default (one-time costs ÷ m
   assert.equal(groceries(r3.dialsByKey.essentials.drill.rows), E.money.divide(groceries(r2.dialsByKey.essentials.drill.rows) * 9 + grocery.amountCents, 9));
 });
 
+test('drill rows and one-time items list the transactions behind them (txnIds, newest first, baseline months only); a category holds its rows’ ids', () => {
+  const big = spend('card', '2026-04-18', 129900, 'Summit Appliance', 'Electronics');
+  const ds = household({ extra: [big] });
+  const today = '2026-07-03';
+  const r = run(ds, { today });
+  const byId = new Map(ds.transactions.map(t => [t.id, t]));
+  const newestFirst = ids => ids.every((id, i) => i === 0 || byId.get(ids[i - 1]).date >= byId.get(id).date);
+  const sorted = ids => ids.slice().sort();
+  for (const key of ['essentials', 'flexible']) {
+    const rows = r.dialsByKey[key].drill.rows;
+    for (const row of rows) {
+      assert.ok(Array.isArray(row.txnIds) && row.txnIds.length > 0, row.label + ': ids');
+      assert.equal(new Set(row.txnIds).size, row.txnIds.length, row.label + ': each transaction once');
+      assert.equal(row.txnIds.length, row.txnCount, row.label + ': as many as it counts');
+      assert.ok(newestFirst(row.txnIds), row.label + ': newest first');
+    }
+    // The rows share out their category: together they hold exactly its ids.
+    for (const cat of rows.filter(x => x.level === 1)) {
+      const kids = rows.filter(x => x.parent === cat.id);
+      assert.deepEqual(sorted(kids.flatMap(k => k.txnIds)), sorted(cat.txnIds), cat.label);
+      assert.equal(kids.reduce((s, k) => s + k.txnIds.length, 0), cat.txnIds.length, cat.label + ': no transaction in two rows');
+    }
+  }
+  const grocer = r.dialsByKey.essentials.drill.rows.find(x => x.label === 'Harbor Grocer');
+  assert.deepEqual(grocer.txnIds, ds.transactions.filter(t => t.merchant === 'Harbor Grocer').sort((a, b) => (a.date < b.date ? 1 : -1)).map(t => t.id));
+  assert.equal(grocer.txnIds.length, 36, '4 a month over 9 months');
+  // The one-time cost is its own item, and in no category row.
+  assert.deepEqual(r.dialsByKey.irregular.drill.rows.map(i => i.txnIds), [[big.id]]);
+  const inRows = res => ['essentials', 'flexible'].flatMap(k => res.dialsByKey[k].drill.rows).filter(x => x.txnIds.includes(big.id));
+  assert.deepEqual(inRows(r), []);
+  // Counted as regular (planningBaseline 'include'): in its category's ids and one of its rows.
+  const include = { [big.id]: E.review.editRecord(null, 'planningBaseline', 'include', 'A planned replacement cycle') };
+  const r2 = run(ds, { edits: include, today });
+  assert.deepEqual(inRows(r2).map(x => [x.level, x.category]), [[1, 'Electronics'], [2, 'Electronics']]);
+  assert.ok(!r2.dialsByKey.irregular.drill.rows.some(i => i.txnIds.includes(big.id)));
+  // A recategorized purchase moves with its id: a Pine Cafe meal set to Groceries leaves Dining.
+  const meal = ds.transactions.find(t => t.merchant === 'Pine Cafe' && t.date.startsWith('2026-05'));
+  const r3 = run(ds, { edits: { [meal.id]: E.review.editRecord(null, 'category', 'Groceries', 'Checked the receipt') }, today });
+  const holders = res => ['essentials', 'flexible'].flatMap(k => res.dialsByKey[k].drill.rows).filter(x => x.txnIds.includes(meal.id)).map(x => [x.group, x.level, x.label]);
+  assert.deepEqual(holders(r), [['flexible', 1, 'Dining & takeout'], ['flexible', 2, 'Pine Cafe']]);
+  assert.deepEqual(holders(r3), [['essentials', 1, 'Groceries'], ['essentials', 2, 'Pine Cafe']]);
+  // Only the baseline months: with the last 3, each row lists what was bought in them.
+  const r4 = run(ds, { settings: { baselineMonths: 3 }, today });
+  const months = new Set(r4.baseline.months);
+  for (const row of r4.dialsByKey.essentials.drill.rows) assert.ok(row.txnIds.every(id => months.has(byId.get(id).date.slice(0, 7))), row.label);
+  assert.equal(r4.dialsByKey.essentials.drill.rows.find(x => x.label === 'Harbor Grocer').txnIds.length, 12);
+});
+
 test('the months: actual before planStart, partial for a partly covered month, plan after; a 5-year horizon has 60 plan months', () => {
   // Data runs a little into July: July is partial (what happened so far is kept apart).
   const ds0 = household();

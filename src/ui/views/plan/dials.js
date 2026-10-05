@@ -4,6 +4,9 @@
  * (essentials, flexible, irregular, net to savings, other). Essentials and flexible open into
  * categories and places (each can move to the other group), the irregular dial into its one-time
  * costs; "Who paid in" lists the deposits behind money in. The headline adds the dials up.
+ * Every place, "everything else" row and one-time item opens into the transactions behind it, each
+ * with its category to change (a ledger edit, undoable); a place's row changes every transaction
+ * from that place at once.
  */
 (function (root) {
   const UI = root.BudgetUI;
@@ -30,6 +33,9 @@
   const PAID = { card: 'card', bank: 'bank', mixed: 'both' };
   const PAID_TIP = { card: 'Paid by card', bank: 'Paid from the bank', mixed: 'Paid partly by card, partly from the bank' };
   const STEP_CENTS = 2500; // the sliders move in $25 steps; the exact box keeps cents
+
+  const TXN_PAGE = 25; // a list of transactions shows this many until “Show all” is pressed
+  const TXN_REASON = 'Set on the Plan page';
 
   const signedAmt = cents => (cents > 0 ? '+' : '') + amt(cents);
   const dialLabel = d => (d.group === 'in' && d.key !== 'inOther' ? d.label + ' → joint' : d.label);
@@ -115,7 +121,7 @@
     return c.button('Move to ' + (to === 'essentials' ? 'Essentials' : 'Flexible'), { action: 'plan:move-group', data: { key, to, name }, cls: 'btn-small btn-ghost drill-move', id: id + '-move', ariaLabel: `Move ${name} to ${GROUP_NAME[to]}` });
   }
 
-  function rowHtml(tl, r, { move = null } = {}) {
+  function rowHtml(tl, r, { move = null, bulk = '' } = {}) {
     const id = 'plan-row-' + r.id;
     const name = r.label;
     const usual = r.stable && isCents(r.latestCents) ? `usually ${amt(r.latestCents)}` : `avg ${whole(r.avgCents)}/mo`;
@@ -129,7 +135,7 @@
     return `<div class="drill-row level-${r.level}${r.included ? '' : ' is-out'}" data-row="${esc(r.id)}">
         <label class="drill-name" for="${esc(id)}-on"><input type="checkbox" id="${esc(id)}-on" data-action="plan:row-include" data-row="${esc(r.id)}" data-name="${esc(name)}"${r.included ? ' checked' : ''}><span>${esc(name)}</span></label>
         <span class="input-money drill-amt"><span aria-hidden="true">$</span><input id="${esc(id)}-amt" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" value="${esc(inputText(r.planCents))}" data-action="plan:row-cents" data-commit="1" data-row="${esc(r.id)}" data-name="${esc(name)}" aria-label="${esc(name)}, dollars a month in the plan" aria-describedby="${esc(id)}-meta ${esc(id)}-error"></span>
-        <p class="drill-meta" id="${esc(id)}-meta"><span>${esc(usual)} · ${esc(seen + ' of ' + of + ' mo')}</span>${pattern}${paid}${moved}${from}${edited}${move ? moveControl(r, move) : ''}</p>
+        <p class="drill-meta" id="${esc(id)}-meta"><span>${esc(usual)} · ${esc(seen + ' of ' + of + ' mo')}</span>${pattern}${paid}${moved}${from}${edited}${move ? moveControl(r, move) : ''}${bulk}</p>
         <p class="field-error drill-error" id="${esc(id)}-error" role="alert" hidden></p>
       </div>`;
   }
@@ -148,17 +154,19 @@
       const places = kids.filter(k => k.kind === 'merchant').length;
       const more = kids.some(k => k.kind === 'rest');
       const label = places ? `Show ${plural(places, 'place')}${more ? ' and everything else' : ''}` : 'Show everything in it';
-      const kidHtml = k => rowHtml(tl, k, { move: k.kind === 'merchant' && !cat.synthetic ? { key: E.timeline.MERCHANT_KEY + k.label, name: k.label, moved: false } : null });
+      const place = k => k.kind === 'merchant' && !cat.synthetic;
+      const kidHtml = k => rowHtml(tl, k, { move: place(k) ? { key: E.timeline.MERCHANT_KEY + k.label, name: k.label, moved: false } : null, bulk: place(k) ? bulkCategory(ctx, k) : '' })
+        + txnsDetails(ctx, tl, k.id, k.txnIds);
       const sub = kids.length && !only
         ? `<details class="drill-kids" id="plan-drillrow-${esc(cat.id)}"><summary>${esc(label)}</summary><div class="drill-kids-body">${kids.map(kidHtml).join('')}</div></details>`
-        : '';
+        : txnsDetails(ctx, tl, cat.id, cat.txnIds); // its rows are not listed: its transactions are, here
       const moved = cat.groupSource === 'override';
       const move = cat.groupKey ? { key: cat.groupKey, name: cat.label, moved, from: cat.synthetic && Array.isArray(cat.movedFrom) ? cat.movedFrom.join(', ') : '' } : null;
       return `<li class="drill-cat">${rowHtml(tl, cat, { move })}${sub}</li>`;
     }).join('');
     const summary = `What’s in this · ${plural(cats.length, 'category', 'categories')} · ${amt(d.planCents)}/mo${baselineNote(d)}`;
     const body = `${notice}<ul class="drill-list">${list}</ul>
-      <p class="fine">Untick what you would stop paying for, or type a new amount: the dial follows the rows. “Move to …” puts a category or a place in the other group; the total stays the same.</p>`;
+      <p class="fine">Untick what you would stop paying for, or type a new amount: the dial follows the rows. “Move to …” puts a category or a place in the other group; the total stays the same. “Show transactions” lists what is behind a row; a purchase in the wrong category can be moved there, one at a time or all from a place.</p>`;
     return c.disclosure(esc(summary), body, { id: 'plan-drill-' + d.key, cls: 'plan-drill' });
   }
 
@@ -178,6 +186,7 @@
           <label class="drill-name" for="${esc(id)}-on"><input type="checkbox" id="${esc(id)}-on" data-action="plan:irregular" data-txn="${esc(i.id)}" data-name="${esc(i.label)}"${i.included ? ' checked' : ''} aria-describedby="${esc(id)}-meta"><span>${esc(what)}</span></label>
           <span class="irr-monthly" id="${esc(id)}-monthly">${esc(amt(i.monthlyCents))}/mo</span>
           <p class="drill-meta" id="${esc(id)}-meta"><span>${esc(i.included ? 'in the allowance' : 'left out by you')}${i.category ? ' · ' + esc(i.category) : ''}</span><span class="drill-paid" title="${esc(PAID_TIP[i.paidBy] || '')}">${esc(PAID[i.paidBy] || '')}</span>${c.button('Count as regular', { action: 'plan:irregular-regular', data: { txn: i.id, name: i.label }, cls: 'btn-small btn-ghost drill-move', id: id + '-regular', ariaLabel: `Count ${i.label} on ${fmt.date(i.date)} as regular spending in ${i.category || 'its category'}` })}</p>
+          ${txnsDetails(ctx, tl, i.id, i.txnIds || [i.id], { label: 'Show transaction' })}
         </li>`;
     }).join('');
     const keptHtml = kept.length ? `<div class="irr-kept" id="plan-irr-kept"><p class="drill-h">Counted as regular spending (${kept.length})</p><ul class="drill-list">${kept.map(o => {
@@ -191,6 +200,120 @@
     const body = `${notice}${dr.count ? `<ul class="drill-list irr-list">${items}</ul>` : ''}${keptHtml}
       <p class="fine">Each cost is spread over the ${plural(n, 'baseline month')}. Untick one you don’t expect again; “Count as regular” moves it into its category instead. Past months always keep every cost.</p>`;
     return c.disclosure(esc(summary), body, { id: 'plan-drill-' + d.key, cls: 'plan-drill' });
+  }
+
+  // ---- the transactions behind a row, each with its category (and every one from a place at once)
+  /** The decided transactions (what the timeline is built from) by id, once per render. */
+  const txnMap = ctx => ctx.memo('plan-txn-map', () => new Map((ctx.realTxns || ctx.txns).map(t => [t.id, t])));
+  /** A transaction's place, as the timeline names it (its merchant, else the bank's text). */
+  const placeOf = t => t.merchant || t.description || 'Unknown place';
+  /** A purchase split over categories: its category is set in its details, not here. */
+  const isSplit = t => !!t.splitApplied || (Array.isArray(t.parts) && t.parts.length > 1);
+  /**
+   * Every spending transaction in the data by place: the whole data set, not only the baseline
+   * months (what “All N from this place” changes). Split purchases are left out.
+   */
+  const placeTxns = ctx => ctx.memo('plan-place-txns', () => {
+    const byPlace = new Map();
+    for (const t of ctx.realTxns || ctx.txns) {
+      if (t.kind !== 'spend' || isSplit(t)) continue;
+      const k = placeOf(t);
+      if (!byPlace.has(k)) byPlace.set(k, []);
+      byPlace.get(k).push(t);
+    }
+    return byPlace;
+  });
+  /** Every row that lists transactions, by id: the essentials and flexible rows and the one-time items. */
+  const rowsById = (ctx, tl) => ctx.memo('plan-rows-by-id', () => {
+    const byId = new Map();
+    for (const d of tl.dials) if (d.drill) for (const r of d.drill.rows) if (Array.isArray(r.txnIds)) byId.set(r.id, r);
+    return byId;
+  });
+
+  /**
+   * Category choices as the Transactions view offers them (the taxonomy plus every category in the
+   * data, in the same order), grouped under the taxonomy's groups; `value` is added when missing.
+   */
+  function categoryOptionsHtml(ctx, value) {
+    const names = ctx.memo('plan-categories', () => UI.shared.categoryOptions(ctx));
+    const list = value && !names.includes(value) ? E.categories.sortNames(names.concat([value])) : names;
+    let html = '', group = null;
+    for (const n of list) {
+      const g = E.categories.groupOf(n);
+      if (g !== group) { html += (group === null ? '' : '</optgroup>') + `<optgroup label="${esc(g)}">`; group = g; }
+      html += `<option value="${esc(n)}"${n === value ? ' selected' : ''}>${esc(n)}</option>`;
+    }
+    return html + (group === null ? '' : '</optgroup>');
+  }
+
+  /** One transaction: date, the bank's text, account, amount; its category (a select) and a link to its details. */
+  function txnLine(ctx, t) {
+    const name = placeOf(t);
+    const when = fmt.date(t.date);
+    const desc = t.description || name;
+    const sid = 'plan-txcat-' + t.id;
+    const parts = Array.isArray(t.parts) && t.parts.length ? t.parts : t.edit && Array.isArray(t.edit.splits) ? t.edit.splits : [];
+    const cat = isSplit(t)
+      ? `<span class="plan-tx-split" title="Split over categories: change the parts in its details">Split: ${esc(parts.map(p => p.category).join(', '))}</span>`
+      : `<label class="sr-only" for="${esc(sid)}">${esc(`Category of ${desc}, ${when}`)}</label><select id="${esc(sid)}" class="plan-txcat" data-action="plan:txn-category" data-txn="${esc(t.id)}" data-name="${esc(name)}">${categoryOptionsHtml(ctx, t.category)}</select>`;
+    const href = ctx.href('spending', { period: t.date.slice(0, 7), txn: t.id });
+    return `<li class="plan-tx" data-txn="${esc(t.id)}">
+        <span class="plan-tx-line"><span class="plan-tx-date">${esc(shortDate(t.date))}</span><span class="plan-tx-desc" title="${esc(desc)}">${esc(desc)}</span><span class="plan-tx-amt">${esc(UI.shared.amountText(t))}</span></span>
+        <span class="plan-tx-meta"><span class="plan-tx-acct">${esc(t.accountLabel || t.accountId || '')}</span>${cat}<a class="plan-tx-link" href="${esc(href)}" title="Open this transaction: the bank’s category, its history, splits and notes">Details<span class="sr-only">${esc(`: ${desc}, ${when}`)}</span></a></span>
+      </li>`;
+  }
+
+  /** The lines of a list: newest first, the first TXN_PAGE until “Show all” (all = true). */
+  function txnsBody(ctx, rowId, ids, all) {
+    const map = txnMap(ctx);
+    const list = ids.map(id => map.get(id)).filter(Boolean);
+    const shown = all ? list : list.slice(0, TXN_PAGE);
+    const more = list.length > shown.length
+      ? c.button(`Show all ${list.length}`, { action: 'plan:txns-all', variant: 'ghost', data: { row: rowId }, cls: 'btn-small plan-txns-all', id: 'plan-txns-' + rowId + '-all' })
+      : '';
+    return `<ul class="plan-tx-list">${shown.map(t => txnLine(ctx, t)).join('')}</ul>${more}`;
+  }
+
+  /**
+   * “Show N transactions” under a row (closed at first). Its lines are drawn only while it is open:
+   * a list open in the page being replaced (with “Show all” pressed or not) is drawn open again;
+   * one opened later is filled when it opens (fillTxns).
+   */
+  function txnsDetails(ctx, tl, rowId, ids, { label } = {}) {
+    if (!Array.isArray(ids) || !ids.length) return '';
+    const id = 'plan-txns-' + rowId;
+    const prev = typeof document !== 'undefined' ? document.getElementById(id) : null;
+    const open = !!(prev && prev.open), all = !!(prev && prev.dataset.all === '1');
+    const range = tl.baseline.start === tl.baseline.end ? fmt.month(tl.baseline.start) : fmt.month(tl.baseline.start) + '–' + fmt.month(tl.baseline.end);
+    return `<details class="plan-txns" id="${esc(id)}" data-row="${esc(rowId)}"${all ? ' data-all="1"' : ''}${open ? ' open' : ''}>
+        <summary title="${esc('In the baseline months, ' + range)}">${esc(label || `Show ${plural(ids.length, 'transaction')}`)}</summary>
+        <div class="plan-txns-body">${open ? txnsBody(ctx, rowId, ids, all) : ''}</div>
+      </details>`;
+  }
+
+  /** Draw a list's lines (when it opens, or all of them after “Show all”). */
+  function fillTxns(ctx, details, { all = false } = {}) {
+    if (!details || !details.dataset.row) return;
+    if (all) details.dataset.all = '1';
+    const row = rowsById(ctx, P.model(ctx)).get(details.dataset.row);
+    const body = details.querySelector('.plan-txns-body');
+    if (!row || !body) return;
+    body.innerHTML = txnsBody(ctx, row.id, row.txnIds, details.dataset.all === '1');
+  }
+
+  /**
+   * On a place's row: “All N from this place → [category]”, every transaction from it in the data
+   * (preselected when they share one category).
+   */
+  function bulkCategory(ctx, r) {
+    const list = placeTxns(ctx).get(r.label) || [];
+    if (!list.length) return '';
+    const n = list.length;
+    const cats = new Set(list.map(t => t.category));
+    const current = cats.size === 1 ? list[0].category : '';
+    const id = 'plan-row-' + r.id + '-cat';
+    const title = `Applies to ${n === 1 ? 'the 1 transaction' : `all ${n} transactions`} from this place in your data, in every month (not only the baseline); transactions you import later are not changed.`;
+    return `<span class="plan-bulkcat"><label for="${esc(id)}">${esc(n === 1 ? '1 from this place →' : `All ${n} from this place →`)}</label><select id="${esc(id)}" class="plan-txcat" data-action="plan:merchant-category" data-merchant="${esc(r.label)}" title="${esc(title)}">${current ? '' : '<option value="" selected>Mixed categories</option>'}${categoryOptionsHtml(ctx, current)}</select></span>`;
   }
 
   // ---- who paid in: the baseline window's deposits and whose money each one is
@@ -302,5 +425,5 @@
       </section>`;
   }
 
-  Object.assign(P, { GROUP_NAME, dialLabel, signedDial, depositsOf, valuesOf, sumOf, dialsCard });
+  Object.assign(P, { GROUP_NAME, dialLabel, signedDial, depositsOf, valuesOf, sumOf, dialsCard, txnMap, placeTxns, placeOf, fillTxns, TXN_REASON });
 })(typeof globalThis !== 'undefined' ? globalThis : this);

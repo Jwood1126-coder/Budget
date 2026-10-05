@@ -11,7 +11,9 @@
  *   3. Dials     money in by person; money out by how adjustable it is: essentials, flexible,
  *                irregular (one-time costs spread per month), net to savings, other. Essentials and
  *                flexible open into categories and places (each can move to the other group), the
- *                irregular dial into its one-time costs. The headline adds the dials up. plan/dials.js
+ *                irregular dial into its one-time costs; each place, "everything else" row and item
+ *                into its transactions, whose categories can be changed there. The headline adds
+ *                the dials up.                                                       plan/dials.js
  *   4. Planned changes   dated one-time or monthly changes (and templates), applied once accepted
  *                                                                                    plan/changes.js
  *   5. More      baseline window, cover-from-savings, links to the detail views     this file
@@ -28,7 +30,7 @@
   const fmt = UI.fmt;
   const c = UI.c;
   const P = UI._plan;
-  const { amt, inputText, model, showError, chartCard, balancesCard, dialsCard, sumOf, valuesOf, changesHtml, actions, takeNext } = P;
+  const { amt, inputText, model, showError, chartCard, balancesCard, dialsCard, sumOf, valuesOf, changesHtml, actions, takeNext, fillTxns, keyedCategory } = P;
 
   const BASELINES = [{ value: 3, label: 'Last 3' }, { value: 6, label: 'Last 6' }, { value: 12, label: 'Last 12' }, { value: 'all', label: 'All' }];
 
@@ -109,6 +111,13 @@
       ev.preventDefault();
       el.dispatchEvent(new Event('change', { bubbles: true }));
     });
+    // A row's transactions are drawn when their list opens (lists open before a re-render come back drawn).
+    rootEl.addEventListener('toggle', ev => {
+      const d = ev.target;
+      if (d.matches && d.matches('details.plan-txns') && d.open && !d.querySelector('.plan-tx-list')) fillTxns(ctx, d);
+    }, true);
+    // Category selects: a change made with the keys of a closed list waits for Enter or leaving it.
+    keyedCategory(rootEl);
     // Legend toggles are drawn by the chart itself; only the choice is saved (no re-render).
     const card = rootEl.querySelector('#plan-chart-card');
     if (card) {

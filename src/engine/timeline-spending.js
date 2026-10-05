@@ -98,6 +98,8 @@
    * exactly; otherwise planCents × cardShare, rounded).
    * Rows changed under the earlier card/bank dials ('card-…', 'bank-…') still apply to the same
    * row when it is paid only that way (returned in `legacy` for migrateRows).
+   * Every row lists the transactions behind it in the baseline months (txnIds, newest first; a
+   * category: all of its rows'), so the screen can show them and have them recategorized.
    */
   function drillFor(group, base, byId, cfg) {
     const n = base.count;
@@ -154,6 +156,15 @@
       const cardAvg = E.money.divide(card, n), bankAvg = E.money.divide(bank, n);
       return { total: card + bank, card, bank, cardAbs, bankAbs, cardAvg, bankAvg, avg: cardAvg + bankAvg, months: new Set(items.map(i => i.month)).size, txnCount: new Set(items.map(i => i.id)).size };
     };
+    /** The transactions behind a row's items, newest first: one id per transaction, however many parts it has here. */
+    const idsOf = items => {
+      const dateOf = new Map();
+      for (const i of items) if (!dateOf.has(i.id)) dateOf.set(i.id, i.date);
+      return Array.from(dateOf.keys()).sort((a, b) => {
+        const da = dateOf.get(a), db = dateOf.get(b);
+        return da < db ? 1 : da > db ? -1 : a < b ? 1 : a > b ? -1 : 0;
+      });
+    };
     const paidByOf = st => (st.cardAbs && st.bankAbs ? 'mixed' : st.cardAbs ? 'card' : 'bank');
     const shareOf = st => (st.cardAbs + st.bankAbs ? st.cardAbs / (st.cardAbs + st.bankAbs) : 0);
     const patternOf = (regular, stable, seen) => (regular && stable ? 'bill' : seen >= regularAt ? 'everyday' : 'occasional');
@@ -199,7 +210,7 @@
         for (const m of c.regular) {
           const rec = recency(m.items, m.regular);
           kids.push(Object.assign({ id: rowIdOf(group, 'm', c.synthetic ? MERCHANT_KEY + c.category : c.category, m.merchant), level: 2, parent: catId, label: m.merchant, kind: 'merchant', category: g.label, sourceCategory: c.synthetic ? null : c.category,
-            avgCents: m.avg, months: m.months, txnCount: m.txnCount, regular: m.regular }, rec.facts, {
+            avgCents: m.avg, months: m.months, txnCount: m.txnCount, txnIds: idsOf(m.items), regular: m.regular }, rec.facts, {
             group, synthetic: c.synthetic, paidBy: paidByOf(m), cardShare: shareOf(m), pattern: patternOf(m.regular, rec.facts.stable, rec.facts.seenMonths),
             defaultCard: rec.facts.stable ? (rec.route === 'card' ? rec.facts.latestCents : 0) : m.cardAvg }));
         }
@@ -211,7 +222,7 @@
         const st = stats(restItems);
         const rec = recency(restItems, false);
         kids.push(Object.assign({ id: rowIdOf(group, 'r', g.label), level: 2, parent: catId, label: (kids.length ? 'Everything else in ' : 'Everything in ') + g.label, kind: 'rest', category: g.label, sourceCategory: null,
-          avgCents: withRest.reduce((s, c) => s + c.rest.avg, 0), months: st.months, txnCount: st.txnCount, regular: false }, rec.facts, {
+          avgCents: withRest.reduce((s, c) => s + c.rest.avg, 0), months: st.months, txnCount: st.txnCount, txnIds: idsOf(restItems), regular: false }, rec.facts, {
           group, synthetic: false, paidBy: paidByOf(st), cardShare: shareOf(st), pattern: patternOf(false, false, rec.facts.seenMonths),
           defaultCard: withRest.reduce((s, c) => s + c.rest.cardAvg, 0) }));
       }
@@ -235,7 +246,9 @@
       const seen = new Set(chargesOf(allItems).map(c => c.month)).size;
       const single = g.members.length === 1 ? g.members[0] : null;
       const row = { id: catId, level: 1, parent: null, label: g.label, kind: 'category', category: g.label, sourceCategory: null,
-        members: g.synthetic ? [] : g.members.map(c => c.category), avgCents: g.members.reduce((s, c) => s + c.avg, 0), months: st.months, txnCount: st.txnCount, regular: false,
+        members: g.synthetic ? [] : g.members.map(c => c.category), avgCents: g.members.reduce((s, c) => s + c.avg, 0), months: st.months, txnCount: st.txnCount,
+        // Every transaction of its rows (they share out the category's items): the union of theirs.
+        txnIds: idsOf(allItems), regular: false,
         defaultCents: kids.reduce((s, k) => s + k.defaultCents, 0),
         group, synthetic: g.synthetic, merchant: g.synthetic ? g.label : null,
         movedFrom: g.synthetic ? Array.from(new Set(allItems.map(i => i.category))).sort() : [],
@@ -283,14 +296,14 @@
    * or marked by the household), in the allowance unless the household left it out
    * (ui.plan.irregularOff). baselineCents = Σ one-time costs ÷ months; rowsCents = Σ those still
    * in ÷ months. One the household counts as regular (planningBaseline 'include') is in its
-   * category instead and not listed here.
+   * category instead and not listed here. Each item's txnIds is [its own id], like a drill row's.
    */
   function irregularFor(base, byId, cfg) {
     const n = base.count;
     const items = (base.oneTime || []).map(o => {
       const t = byId.get(o.id);
       return {
-        id: o.id, label: o.merchant, date: o.date, month: o.date.slice(0, 7), cents: o.cents, monthlyCents: n ? E.money.divide(o.cents, n) : null,
+        id: o.id, txnIds: [o.id], label: o.merchant, date: o.date, month: o.date.slice(0, 7), cents: o.cents, monthlyCents: n ? E.money.divide(o.cents, n) : null,
         included: own(cfg.irregularOff, o.id) !== true, auto: !!o.auto, paidBy: o.role === 'card' ? 'card' : 'bank',
         category: t && typeof t.category === 'string' ? t.category : null, description: o.description, accountLabel: o.accountLabel,
       };
