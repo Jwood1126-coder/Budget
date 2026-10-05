@@ -10,9 +10,12 @@
  *   - per unit (a list item's field, a map entry, a field of a group, a single value):
  *     S equal to B: the household left it alone here, so the profile's value is taken;
  *     S different from B: the household changed it here, so S is kept;
- *   - a list item (by id) or map entry new in the profile is added; one in B but gone from the
- *     profile is removed when unchanged since B, otherwise kept; items the household added (not
- *     in B) and items it removed (in B, not in S) stay as they are;
+ *   - a list item (by id) or map entry new in the profile is added; items the household added
+ *     (not in B) and items it removed (in B, not in S) stay as they are;
+ *   - the setup file never erases: a part of the plan it leaves out is not merged at all; an item,
+ *     entry or field it no longer has, or now has as unknown (null) where B had a value, keeps the
+ *     saved value (P takes B's value there, so a later file that has it again still flows); items
+ *     and entries it dropped are named in a note, and only the household removes them, in the app;
  *   - first run on a budget without meta.setup: B := P, so nothing saved changes (values that
  *     differ from the profile are the household's) and later profile changes flow from there;
  *   - strict: a profile value the normal checks would change is not applied, and a merged item,
@@ -125,6 +128,48 @@
   const uiField = row => (row.path.startsWith('ui.plan.') ? row.path.slice('ui.plan.'.length) : null);
   const profilePath = row => (uiField(row) === null ? row.path : 'planUi.' + uiField(row));
   const itemOf = (list, id) => (Array.isArray(list) ? list.find(x => isObj(x) && x.id === id) : undefined);
+
+  const known = v => v !== null && v !== undefined;
+
+  /**
+   * The setup file adds and changes values; it never erases one. Where the file is silent (an item,
+   * entry or field it does not have) or says "unknown" (null) about something the last file gave a
+   * value (B), P takes B's value there, so the merge leaves the saved value as it is. Items and
+   * entries the file no longer has, that the budget still holds, are named in `gone`.
+   * (A part of the plan the file leaves out entirely is not merged at all: see apply.)
+   */
+  function keepKnown(row, s, b, p, raw, gone, names) {
+    if (row.kind === 'value') return p;
+    if (row.kind === 'map' || row.kind === 'fields') {
+      const out = isObj(p) ? clone(p) : {};
+      const r = isObj(raw) ? raw : {};
+      for (const [k, bv] of Object.entries(isObj(b) ? b : {})) {
+        if (bv === undefined) continue;
+        const silent = r[k] === undefined && !Object.keys(r).some(x => x.trim() === k && r[x] !== undefined);
+        if (!silent && (known(out[k]) || !known(bv))) continue;
+        if (silent && has(s, k) && !has(out, k)) gone.push(unitLabel(row, k, null, null, names));
+        out[k] = clone(bv);
+      }
+      return out;
+    }
+    const out = Array.isArray(p) ? clone(p) : [];
+    const rawItems = Array.isArray(raw) ? raw : [];
+    for (const bItem of Array.isArray(b) ? b : []) {
+      if (!isObj(bItem)) continue;
+      const pItem = itemOf(out, bItem.id);
+      const rawItem = rawItems.find(x => isObj(x) && x.id === bItem.id);
+      if (!pItem) {
+        if (itemOf(s, bItem.id)) gone.push(unitLabel(row, bItem.id, null, bItem, names));
+        out.push(clone(bItem));
+        continue;
+      }
+      for (const [k, bv] of Object.entries(bItem)) {
+        if (k === 'id' || bv === undefined) continue;
+        if ((isObj(rawItem) && rawItem[k] === undefined) || (!known(pItem[k]) && known(bv))) pItem[k] = clone(bv);
+      }
+    }
+    return out;
+  }
 
   /** The rows this version can use: plan rows always, ui.plan rows when ui.plan has the field. */
   function activeRows() {
@@ -347,7 +392,7 @@
    * @param {object|null} profile the household profile (§3), with its optional planUi
    * @param {{now?: string}} [opts] now: ISO time recorded as meta.setup.appliedAt (and meta.updatedAt when values changed)
    * @returns {{state: object, notes: string[], changed: boolean,
-   *   report: null|{first: boolean, updated: string[], kept: string[], invalid: string[]}}}
+   *   report: null|{first: boolean, updated: string[], kept: string[], invalid: string[], gone: string[]}}}
    *   changed: whether any saved value changed; report: the labels behind the notes (null when nothing ran)
    */
   function apply(state, profile, opts) {
@@ -373,6 +418,12 @@
     const B = first ? {} : checked({ plan: isObj(get(setup.base, 'plan')) ? setup.base.plan : {} }, get(setup.base, 'ui.plan'), rows);
     const prof = profileValues(profile, rows, clean, S, B, names);
     const P = prof.values;
+    // Parts of the plan the file leaves out entirely are not merged this time (nothing saved there
+    // changes, and B keeps what it had); elsewhere the file never erases a value (keepKnown).
+    const rawAll = { plan: profile.plan, planUi: profile.planUi };
+    const skip = new Set(rows.filter(row => get(rawAll, profilePath(row)) === undefined).map(row => row.path));
+    const gone = [];
+    if (!first) for (const row of rows) if (!skip.has(row.path)) P[row.path] = keepKnown(row, S[row.path], B[row.path], P[row.path], get(rawAll, profilePath(row)), gone, names);
     // First run: the plan came from the profile (E.state.defaults), so B := P and nothing saved
     // changes. ui.plan never came from it (profile.planUi is newer than every saved budget; a new
     // budget starts from the ui.plan defaults), so its B is those defaults: a setting still at its
@@ -380,10 +431,11 @@
     const uiDefaults = first ? checked({ plan: {} }, {}, rows) : null;
     const firstRow = row => first && uiField(row) === null;
     const base = {};
-    for (const row of rows) base[row.path] = !first ? B[row.path] : firstRow(row) ? P[row.path] : uiDefaults[row.path];
+    for (const row of rows) base[row.path] = skip.has(row.path) ? (first ? undefined : B[row.path]) : !first ? B[row.path] : firstRow(row) ? P[row.path] : uiDefaults[row.path];
 
     const merged = {}, units = {};
     for (const row of rows) {
+      if (skip.has(row.path)) { merged[row.path] = clone(S[row.path]); units[row.path] = []; continue; }
       const m = mergeRow(row, S[row.path], base[row.path], P[row.path]);
       merged[row.path] = m.value;
       units[row.path] = m.units;
@@ -400,6 +452,7 @@
     const rejected = [];
     const newBase = {};
     for (const row of rows) {
+      if (skip.has(row.path)) { newBase[row.path] = clone(base[row.path]); continue; }
       let value = merged[row.path];
       let baseValue = clone(P[row.path]);
       for (const unit of rejectedUnits(row, units[row.path], merged[row.path], cleaned[row.path])) {
@@ -445,9 +498,10 @@
     } else if (keptHere.length) {
       notes.push('Your setup file changed ' + settingsCount(keptHere.length) + ' you changed here; kept yours (' + shortList(keptHere) + ').');
     }
+    if (gone.length) notes.push(gone.length + (gone.length === 1 ? ' entry is' : ' entries are') + ' no longer in your setup file and ' + (gone.length === 1 ? 'was' : 'were') + ' kept here (' + shortList(gone) + '); remove ' + (gone.length === 1 ? 'it' : 'them') + ' in the app if ' + (gone.length === 1 ? 'it is' : 'they are') + ' not needed.');
     const invalid = prof.invalid.concat(rejected);
     if (invalid.length) notes.push('Your setup file has ' + invalid.length + ' value' + (invalid.length === 1 ? '' : 's') + ' this version could not use (' + shortList(invalid) + '); kept what was here.');
-    return { state: next, notes, changed, report: { first, updated, kept: keptHere, invalid } };
+    return { state: next, notes, changed, report: { first, updated, kept: keptHere, invalid, gone } };
   }
 
   // ------------------------------------------------------------------ load paths

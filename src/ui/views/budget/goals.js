@@ -118,6 +118,7 @@
       const tone = x.kind === 'goal' ? 'goal' : x.cents === null ? 'unset' : (income ? x.cents >= 0 : x.cents < 0) ? 'in' : 'out';
       const tags = [];
       if (x.source === 'bill') tags.push(c.badge('Bill', 'neutral'));
+      if (x.source === 'income') tags.push(c.badge('Pay', 'neutral'));
       if (x.source === 'goal' && x.kind !== 'goal') tags.push(c.badge('Goal', 'neutral'));
       if (x.status === 'notAccepted') tags.push(c.badge('Idea', 'info'));
       if (x.scenario) tags.push(c.badge(x.scenario, 'neutral'));

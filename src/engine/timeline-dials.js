@@ -425,5 +425,5 @@
     return { from, to, parts, skipped, note };
   }
 
-  Object.assign(T, { depositHint, buildDials, planMonth, legacyDialsPlan });
+  Object.assign(T, { depositHint, buildDials, planMonth, legacyDialsPlan, budgetFor });
 })(typeof globalThis !== 'undefined' ? globalThis : this);

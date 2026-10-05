@@ -211,6 +211,75 @@
     return out;
   }
 
+  /**
+   * Pay saved in Budget that starts or ends after the first plan month, as read-only changes
+   * { …a planned change, source: 'income', group 'income', personId, readOnly: true, accepted: true }.
+   * A person's money-in dial is their Budget pay in the first plan month; in every later plan month
+   * their money in follows their Budget pay in that month (a stream whose startMonth comes later
+   * joins, one whose endMonth has passed leaves; annual-average timing, as the dial). Consecutive
+   * months with the same difference from the dial make one change ('pay-<person>-<month>'); the
+   * last runs to the end of the plan (endMonth null). A month whose Budget pay is not known (a
+   * stream joining without an amount) gives a change with no amount: listed, never applied as $0.
+   * Only for a person whose dial has a known Budget amount for the first plan month (set from
+   * Budget, or set directly: the dated change still applies on top); worked out only when some
+   * stream starts or ends inside the plan.
+   * @param {{ plan: object, dials: object[], planStart: string, lastMonth: string }} input
+   */
+  function incomeChanges({ plan, dials, planStart, lastMonth }) {
+    const incomes = Array.isArray(plan.incomes) ? plan.incomes.filter(isObj) : [];
+    const inside = m => E.months.isMonth(m) && m >= planStart && m <= lastMonth;
+    if (!E.months.isMonth(planStart) || !incomes.some(s => (s.startMonth && s.startMonth > planStart && inside(s.startMonth)) || (s.endMonth && inside(s.endMonth) && s.endMonth < lastMonth))) return [];
+    const fundingAt = new Map();
+    // A person's Budget pay streams running in month m (those reaching joint through another stream left out).
+    const streamsAt = (m, pid) => {
+      if (!fundingAt.has(m)) { let f = null; try { f = E.flows.planFunding(plan, { month: m, timing: 'average' }); } catch (err) { f = null; } fundingAt.set(m, f); }
+      const f = fundingAt.get(m);
+      return f && f.people[pid] ? f.people[pid].streams.filter(st => !st.viaTransfers) : null;
+    };
+    const out = [];
+    for (const d of dials) {
+      if (d.group !== 'in' || d.key === 'inOther' || !isCents(d.budgetCents) || d.basisKind === 'average') continue;
+      const pid = d.key;
+      const start0 = streamsAt(planStart, pid) || [];
+      const runs = [];
+      const unknown = new Map(); // stream id -> { label, start, end }: a stream running without an amount
+      for (let m = E.months.add(planStart, 1); m <= lastMonth; m = E.months.add(m, 1)) {
+        const list = streamsAt(m, pid);
+        if (list === null) continue;
+        // The streams with an amount count; one without is listed on its own, never added as $0.
+        const delta = list.filter(st => isCents(st.monthly.joint)).reduce((sum, st) => sum + st.monthly.joint, 0) - d.budgetCents;
+        for (const st of list.filter(x => !isCents(x.monthly.joint))) {
+          if (!unknown.has(st.id)) unknown.set(st.id, { label: st.label, start: m, end: m });
+          else unknown.get(st.id).end = m;
+        }
+        const last = runs[runs.length - 1];
+        if (last && last.delta === delta) last.end = m;
+        else runs.push({ start: m, end: m, delta, ids: list.map(st => ({ id: st.id, label: st.label })) });
+      }
+      const common = { kind: 'monthly', group: 'income', personId: pid, accepted: true, template: null, scenario: null, source: 'income', readOnly: true };
+      for (const r of runs) {
+        if (r.delta === 0) continue;
+        const joined = r.ids.filter(x => !start0.some(y => y.id === x.id) && !unknown.has(x.id)).map(x => x.label);
+        const left = start0.filter(x => !r.ids.some(y => y.id === x.id)).map(x => x.label);
+        const what = joined.length && left.length ? joined.join(', ') + ' replaces ' + left.join(', ')
+          : joined.length ? joined.join(', ') + ' starts' : left.length ? left.join(', ') + ' ends' : 'pay from Budget changes';
+        const end = r.end === lastMonth ? null : r.end;
+        out.push(Object.assign({}, common, {
+          id: 'pay-' + pid + '-' + r.start, label: d.label + ': ' + what, startMonth: r.start, endMonth: end, cents: r.delta,
+          note: 'From Budget: ' + d.label + '’s pay ' + (r.delta > 0 ? 'rises by ' : 'drops by ') + E.money.format(Math.abs(r.delta)) + ' a month from ' + E.months.label(r.start)
+            + (end ? ' through ' + E.months.label(end) : '') + '. Edit the pay dates in Budget.',
+        }));
+      }
+      for (const [id, u] of unknown) {
+        out.push(Object.assign({}, common, {
+          id: 'pay-' + pid + '-' + id, label: d.label + ': ' + u.label + ' (amount not set)', startMonth: u.start, endMonth: u.end === lastMonth ? null : u.end, cents: null,
+          note: 'From Budget: ' + u.label + ' runs from ' + E.months.label(u.start) + ' but its amount to joint is not set, so nothing is added for it. Enter it in Budget.',
+        }));
+      }
+    }
+    return out;
+  }
+
   // ------------------------------------------------------------------ templates
 
   const ESTIMATE = 'A generic estimate: adjust it to your own quotes and plans.';
@@ -293,5 +362,5 @@
   };
 
 
-  Object.assign(T, { readChanges, changeActiveIn, applyChange, summarizeChanges, billChanges, goalChanges, templates });
+  Object.assign(T, { readChanges, changeActiveIn, applyChange, summarizeChanges, billChanges, goalChanges, incomeChanges, templates });
 })(typeof globalThis !== 'undefined' ? globalThis : this);

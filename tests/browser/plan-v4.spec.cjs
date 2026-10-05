@@ -17,7 +17,8 @@ function timeline(page, compare) {
     const now = E.months.add(tl.planStart, -1), then = E.months.add(tl.planStart, Math.min(12, tl.horizon) - 1);
     const sav = tl.balances.accounts.filter(a => a.group === 'savings');
     return {
-      planStart: tl.planStart, now, then, combinedChange: tl.plan.combinedChange, net: tl.plan.net, savings: tl.plan.savings,
+      // The month's figures as Budget shows them: the dials plus what the month adds (a bill Budget adds, accepted changes).
+      planStart: tl.planStart, now, then, combinedChange: tl.summary.inCents - tl.summary.outCents, net: tl.summary.leftCents, savings: tl.summary.savingsCents,
       cashNow: at(tl.balances.combined.points, now), cashThen: at(tl.balances.combined.points, then),
       savNow: sav.reduce((s, a) => s + at(a.points, now), 0), savThen: sav.reduce((s, a) => s + at(a.points, then), 0),
       combinedLast: tl.balances.combined.points[tl.balances.combined.points.length - 1],
@@ -338,6 +339,45 @@ module.exports = [
       const line = await page.$eval('.dial[data-dial="essentials"] .dial-foot', el => el.getBoundingClientRect().height);
       assert.ok(line <= 44, 'one line under the slider');
       assert.ok(await noHorizontalScroll(page));
+    },
+  },
+  {
+    name: 'one monthly figure: Plan’s tile and headline equal Budget’s, bills Budget adds included',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      const tile = (await page.textContent('#plan-kpi-month-value')).trim();
+      const exp = await timeline(page);
+      assert.equal(tile, signedWhole(exp.combinedChange));
+      const addup = (await page.textContent('#plan-addup')).trim();
+      assert.match(addup, /− \$40 Life insurance/, 'the bill Budget adds is in the add-up: ' + addup);
+      await t.nav('budget');
+      await page.waitForSelector('#bud-net');
+      assert.equal((await page.textContent('#bud-net .bud-hero-net-value')).trim(), tile);
+    },
+  },
+  {
+    name: 'pay with an end date in Budget changes money in from the month after, listed read-only with a link to Budget',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      await page.evaluate(() => {
+        const H = window.HouseholdBudget, s = H.getState();
+        s.plan.incomes.find(i => i.id === 'p2-contribution').endMonth = '2027-01';
+        H.setState(s);
+      });
+      await t.settled();
+      const months = await page.evaluate(() => {
+        const H = window.HouseholdBudget, E = H.engine, ctx = H.context(), st = H.getState();
+        const tl = E.timeline.build({ txns: ctx.realTxns, dataset: ctx.dataset, plan: st.plan, settings: st.ui.plan, today: '2026-10-05', coverageMap: ctx.coverageMap });
+        const at = m => tl.months.find(x => x.month === m);
+        return { jan: at('2027-01').in.p2, feb: at('2027-02').in.p2, change: tl.changes.list.find(c => c.source === 'income') };
+      });
+      assert.equal(months.jan - months.feb, 265000, 'Sam’s transfers to joint stop after January');
+      assert.deepEqual([months.change.id, months.change.startMonth, months.change.cents, months.change.status], ['pay-p2-2027-02', '2027-02', -265000, 'applied']);
+      const link = page.locator('#plan-ch-pay-p2-2027-02-budget');
+      assert.match((await link.textContent()).trim(), /^Pay · Budget/);
+      assert.match(await link.getAttribute('href'), /^#\/budget\?section=income/);
     },
   },
 ];

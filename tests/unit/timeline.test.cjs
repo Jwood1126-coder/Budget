@@ -2050,7 +2050,14 @@ test('summary: the first plan month in one object, the numbers Budget and the Pl
     month: '2026-07', inCents: jul.in.total, inByPerson: { p1: jul.in.p1, p2: jul.in.p2, other: E.money.sumKnown([jul.in.unassigned, jul.in.other]) },
     outByGroup: { essentials: jul.out.essentials, flexible: jul.out.flexible, irregular: jul.out.irregular, other: jul.out.other },
     outCents: jul.out.total, savingsCents: jul.savings, investingCents: 20000, leftCents: jul.net,
+    changes: { inCents: 0, outCents: 8000, savingsCents: 0, items: [
+      { id: 'gym', label: 'gym', group: 'flexible', cents: 5000, source: 'plan' },
+      { id: 'bill-gym2', label: 'Climbing', group: 'essentials', cents: 3000, source: 'bill' },
+    ] },
   });
+  // What the month adds to the dials: the dials plus these are the month's totals (Plan's headline adds them up so).
+  assert.equal(r.summary.inCents, r.plan.in.total + r.summary.changes.inCents);
+  assert.equal(r.summary.outCents, r.plan.out.total + r.summary.changes.outCents);
   assert.equal(r.summary.outByGroup.flexible, r.plan.out.flexible + 5000, 'accepted changes are in it');
   assert.equal(r.summary.outByGroup.essentials, r.plan.out.essentials + 3000, 'and the bills Budget adds');
   assert.equal(r.summary.leftCents, r.summary.inCents - r.summary.outCents - r.summary.savingsCents);
@@ -2119,4 +2126,42 @@ test('category budgets are for the whole category: rows changed under it move it
   // Never below $0: a budget smaller than what moved out plans at $0.
   const small2 = ipRun(ds, { plan: ipPlan({ targets: { 'Dining & takeout': 15000 } }), settings: { groups: { 'merchant:Pine Cafe': 'essentials' } } });
   assert.deepEqual([catRow(small2, 'flexible', 'Dining & takeout').planCents, catRow(small2, 'flexible', 'Dining & takeout').budgetMovedCents], [0, 15000]);
+});
+
+test('pay in Budget that starts or ends later moves that person’s money in from then on (read-only changes, listed and on the chart)', () => {
+  const ds = integrated({ invest: false });
+  const stream = (id, personId, fields) => Object.assign({ id, label: id, personId, kind: 'paycheck', netPerPaycheckCents: null, frequency: 'monthly', frequencyStatus: 'confirmed', status: 'confirmed', monthlyDay: 1 }, fields);
+  const incomes = [
+    stream('Old job', 'p1', { jointPerPaycheckCents: 300000, endMonth: '2026-09' }),            // ends: Sep is its last month
+    stream('New job', 'p1', { jointPerPaycheckCents: 340000, startMonth: '2026-10' }),          // replaces it
+    stream('Contract', 'p2', { jointPerPaycheckCents: 100000, endMonth: '2026-11' }),
+    stream('Part-time', 'p2', { jointPerPaycheckCents: null, startMonth: '2027-01' }),          // no amount yet
+  ];
+  const r = ipRun(ds, { plan: ipPlan({ incomes }) });
+  assert.equal(r.planStart, '2026-07');
+  const p1 = r.dialsByKey.p1, p2 = r.dialsByKey.p2;
+  assert.deepEqual([p1.basisKind, p1.budgetCents, p2.basisKind, p2.budgetCents], ['budget', 300000, 'budget', 100000], 'the dials: the first plan month’s pay');
+  const pay = r.changes.list.filter(c => c.source === 'income');
+  assert.deepEqual(pay.map(c => [c.id, c.label, c.personId, c.startMonth, c.endMonth, c.cents, c.status, c.readOnly]), [
+    ['pay-p1-2026-10', 'Morgan: New job replaces Old job', 'p1', '2026-10', null, 40000, 'applied', true],
+    ['pay-p2-2026-12', 'Ellis: Contract ends', 'p2', '2026-12', null, -100000, 'applied', true],
+    ['pay-p2-Part-time', 'Ellis: Part-time (amount not set)', 'p2', '2027-01', null, null, 'unset', true],
+  ]);
+  const inOf = m => [monthOf(r, m).in.p1, monthOf(r, m).in.p2];
+  assert.deepEqual(inOf('2026-09'), [300000, 100000]);
+  assert.deepEqual(inOf('2026-10'), [340000, 100000], 'the new job from its first month');
+  assert.deepEqual(inOf('2026-12'), [340000, 0], 'the contract ended in November');
+  assert.deepEqual(inOf('2027-02'), [340000, 0], 'an unknown amount is never added as $0 — and never invented either');
+  // The combined line follows: December's change is 1,000.00 lower than September's.
+  assert.equal(monthOf(r, '2026-12').combinedChange - monthOf(r, '2026-09').combinedChange, 40000 - 100000);
+  // Set directly, the dated change still applies on top of the household's own figure.
+  const set = ipRun(ds, { plan: ipPlan({ incomes }), settings: { dials: { p1: 310000 } } });
+  assert.deepEqual([monthOf(set, '2026-09').in.p1, monthOf(set, '2026-10').in.p1], [310000, 350000]);
+  // Nothing dated inside the plan: no changes worked out.
+  const flat = ipRun(ds, { plan: ipPlan({ incomes: [stream('Steady', 'p1', { jointPerPaycheckCents: 300000 })] }) });
+  assert.equal(flat.changes.list.filter(c => c.source === 'income').length, 0);
+  // Deposit-average dials (no pay in Budget for the first month) are left alone.
+  const later = ipRun(ds, { plan: ipPlan({ incomes: [stream('Starts later', 'p1', { jointPerPaycheckCents: 300000, startMonth: '2026-11' })] }) });
+  assert.equal(later.dialsByKey.p1.basisKind, 'average');
+  assert.equal(later.changes.list.filter(c => c.source === 'income').length, 0);
 });

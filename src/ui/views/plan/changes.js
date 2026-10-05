@@ -46,7 +46,7 @@
   const whenText = ch => (ch.kind === 'monthly' ? (ch.endMonth ? fmt.month(ch.startMonth) + '–' + fmt.month(ch.endMonth) : 'from ' + fmt.month(ch.startMonth)) : fmt.month(ch.startMonth));
   const groupText = ch => CHANGE_GROUP_LABEL[ch.group] || DERIVED_GROUP_LABEL[ch.group] || ch.group;
   /** The colour of a change: its pack's, Budget's quiet one, a goal's green, else the household's own blue. */
-  const clsOf = ch => (packOf(ch) ? packOf(ch).cls : ch.scenario && !ch.readOnly ? SCENARIO_CLS : ch.source === 'bill' ? 'series-muted' : ch.source === 'goal' ? 'series-3' : 'series-1');
+  const clsOf = ch => (packOf(ch) ? packOf(ch).cls : ch.scenario && !ch.readOnly ? SCENARIO_CLS : ch.source === 'bill' ? 'series-muted' : ch.source === 'goal' ? 'series-3' : ch.source === 'income' ? 'series-2' : 'series-1');
   /** A group's totals in a few words: "$4.8k once + $320/mo" (spending and savings; income changes are their own story). */
   function totalsText(list) {
     const spend = list.filter(ch => ch.group !== 'income' && isCents(ch.cents));
@@ -176,17 +176,17 @@
   }
 
   // ------------------------------------------------------------------ the list
-  /** A change worked out from Budget (a bill or a savings goal): shown, edited in Budget. */
+  /** A change worked out from Budget (a bill, a savings goal or pay that starts or ends): shown, edited in Budget. */
   function derivedRow(ctx, ch) {
     const id = 'plan-ch-' + ch.id;
     const [statusText, tone] = STATUS_BADGE[ch.status] || ['', 'neutral'];
-    const href = ctx.href('budget', { section: ch.source === 'goal' ? 'savings' : 'bills' });
+    const href = ctx.href('budget', { section: ch.source === 'goal' ? 'savings' : ch.source === 'income' ? 'income' : 'bills' });
     return `<li class="plan-ch-item is-${esc(ch.status)} is-derived" data-change="${esc(ch.id)}">
         <div class="plan-ch-main">
           <span class="plan-ch-swatch key key-swatch ${esc(clsOf(ch))}" aria-hidden="true"></span>
           <span class="plan-ch-accept plan-ch-noaccept" aria-hidden="true"></span>
           <span class="plan-ch-label plan-ch-text" title="${esc(ch.note || '')}">${esc(ch.label)}</span>
-          <a class="plan-ch-budget" id="${esc(id)}-budget" href="${esc(href)}" title="${esc(ch.note || '')}">${esc(ch.source === 'goal' ? 'Goal' : 'Bill')} · Budget<span class="sr-only">: edit ${esc(ch.label)} in Budget</span> →</a>
+          <a class="plan-ch-budget" id="${esc(id)}-budget" href="${esc(href)}" title="${esc(ch.note || '')}">${esc(ch.source === 'goal' ? 'Goal' : ch.source === 'income' ? 'Pay' : 'Bill')} · Budget<span class="sr-only">: edit ${esc(ch.label)} in Budget</span> →</a>
           <span class="plan-ch-when-text">${esc(whenText(ch))}</span>
           <span class="plan-ch-amt plan-ch-figure">${esc(amt(ch.cents))}${ch.kind === 'monthly' ? '/mo' : ''}</span>
           <span class="plan-ch-status">${badgeWithId(id + '-status', statusText, tone)}</span>

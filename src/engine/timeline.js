@@ -83,7 +83,7 @@
   const spendGroups = late('spendGroups');
   const buildDials = late('buildDials'), planMonth = late('planMonth'), legacyDialsPlan = late('legacyDialsPlan');
   const readChanges = late('readChanges'), changeActiveIn = late('changeActiveIn'), applyChange = late('applyChange'), summarizeChanges = late('summarizeChanges');
-  const billChanges = late('billChanges'), goalChanges = late('goalChanges');
+  const billChanges = late('billChanges'), goalChanges = late('goalChanges'), incomeChanges = late('incomeChanges');
 
   /** The money-out dials, in the order the screen shows them ('investing' and 'other' only when they have an amount). */
   const OUT_DIALS = ['essentials', 'flexible', 'irregular', 'savings', 'investing', 'other'];
@@ -223,14 +223,21 @@
    * "This month's plan": the first plan month's amounts (dials, accepted changes and what Budget
    * adds), the numbers the Budget screen and the Plan tiles share. null when there is no such month.
    */
-  function summaryOf(r, people) {
+  function summaryOf(r, people, dialMonth) {
     if (!r) return null;
     const inByPerson = Object.fromEntries(people.map(p => [p.id, r.in[p.id]]));
     inByPerson.other = sumKnown([r.in.unassigned, r.in.other]);
+    // What the month adds to the dials (accepted changes, bills and goals from Budget), so a screen
+    // that adds up the dials (Plan's headline) reaches exactly these totals.
+    const diff = (a, b) => (a === null || a === undefined || b === null || b === undefined ? null : a - b);
     return {
       month: r.month, inCents: r.in.total, inByPerson,
       outByGroup: { essentials: r.out.essentials, flexible: r.out.flexible, irregular: r.out.irregular, other: r.out.other },
       outCents: r.out.total, savingsCents: r.savings, investingCents: r.out.invest, leftCents: r.net,
+      changes: {
+        inCents: diff(r.in.total, dialMonth.in.total), outCents: diff(r.out.total, dialMonth.out.total), savingsCents: diff(r.savings, dialMonth.savings),
+        items: r.changesApplied.map(a => ({ id: a.id, label: a.label, group: a.group, cents: a.cents, source: a.source || 'plan' })),
+      },
     };
   }
 
@@ -300,7 +307,8 @@
     // Worked out from Budget: bills that start or end, savings goals spent at their target. Part
     // of the plan as it stands (the ghost has them too), read-only on the screen.
     const fromBills = billChanges({ plan, base, byId, planStart, targets });
-    const derived = fromBills.changes.concat(goalChanges(plan, planStart));
+    // Pay in Budget that starts or ends later in the plan moves that person's money in from then on.
+    const derived = fromBills.changes.concat(goalChanges(plan, planStart), incomeChanges({ plan, dials, planStart, lastMonth }));
     // A change worked out for a dial's baseline (a spent goal's monthly saving that stops) is not
     // applied while the household set that dial directly; the plan at baseline (the ghost) has it.
     const setDirectly = new Set(dials.filter(d => d.source === 'direct').map(d => d.key));
@@ -472,7 +480,7 @@
       markers: goals.filter(g => g.reachMonth).map(g => ({ kind: 'goal', id: g.id, month: g.reachMonth, label: g.label + ' reached', cents: g.targetCents })),
       scenarios: scenarioNames.map(name => ({ name, count: changes.filter(c => c.scenario === name).length, accepted: changes.filter(c => c.scenario === name && c.accepted).length })),
       compare,
-      summary: summaryOf(firstPlan, people),
+      summary: summaryOf(firstPlan, people, planValues),
       baseline: {
         setting: requested, count: base.count, months: base.months, start: base.start, end: base.end, label: windowText,
         oneTime, oneTimeCents: spendCentsOf(oneTime),

@@ -418,9 +418,14 @@ nothing and says nothing).
   `personalSpending`, scenarios, references, ledger corrections and every other setting.
 - Per unit (an item's field, a map entry, a field, a value): **S = B → P** (the household left it
   alone); **S ≠ B → S** (changed here, kept). An item or entry new in P is added (lists: at the
-  end, checked like a new budget's, never `accepted`); one in B but not in P is removed when
-  unchanged since B (compared on the fields B has), otherwise kept; one the household added (not
-  in B) or removed (in B, not in S) stays as it is. Deep equality over JSON values, so fields added
+  end, checked like a new budget's, never `accepted`); one the household added (not in B) or
+  removed (in B, not in S) stays as it is.
+- **Never erases.** A part of the plan the profile leaves out entirely is not merged at all (S
+  stays, B keeps what it had; on a first run B stays empty there). Elsewhere, where the profile is
+  silent (an item, entry or field it does not have) or says `null` where B has a value, P takes
+  B's value (`keepKnown`), so the merge leaves S alone and a later profile that has it again still
+  flows. Items and entries the profile dropped that S still holds are named in a note
+  (`report.gone`); only the household removes them. Deep equality over JSON values, so fields added
   to the format later need no change: B is read through the same checks first, so a field B does
   not have yet counts as its default.
 - **First run** (no `meta.setup`, or an unreadable base): B := P for the plan, so nothing saved
@@ -1325,7 +1330,7 @@ files, split by section and loaded in this order (`src/manifest.json`):
 | `engine/timeline-balances.js` | known balances (`anchors`), mirrored savings (`mirrorPlan`), the balance lines with their assumed and illustrative points (`balancesFor`), the investments line (`investmentsFor`), `prorate`; `RULE`, `SIMPLE_RULE`, `SIMPLE_LABEL`, `ILLUSTRATIVE`, `INVEST_RULE` |
 | `engine/timeline-spending.js` | spending by group (`spendGroups`, row ids: `rowIdOf`), the essentials and flexible drill-down with its pattern badges (`drillFor`), the irregular items (`irregularFor`); `TINY_CATEGORY_CENTS`, `STABLE_MIN_CHARGES`, `STABLE_SPREAD`, `OTHER_CATEGORY` |
 | `engine/timeline-dials.js` | observed deposits (`depositHint`), the dials and `carriedOver` (`buildDials`), one plan month (`planMonth`), the carry-over of the earlier card/bank dials (`legacyDialsPlan`) |
-| `engine/timeline-changes.js` | planned changes (`readChanges`, `changeActiveIn`, `applyChange`, `summarizeChanges`), the changes worked out from Budget (`billChanges`, `goalChanges`) and `templates` (the packs) |
+| `engine/timeline-changes.js` | planned changes (`readChanges`, `changeActiveIn`, `applyChange`, `summarizeChanges`), the changes worked out from Budget (`billChanges`, `goalChanges`, `incomeChanges`) and `templates` (the packs) |
 | `engine/timeline-export.js` | `toCSV` |
 | `engine/timeline-writes.js` | the state writes (below), `migrateRows`, `migrateDials`, `splitOther`, `pendingUpgrade`, `acceptCarriedOver` |
 | `engine/timeline.js` | `build`, the Trends series catalogue, and `BudgetEngine.timeline`, assembled from the parts |
@@ -1507,6 +1512,16 @@ naming what is missing, when a public name has not been added), the parts in bet
     savings dial's baseline (the goals' monthly amounts), so while net to savings is set directly it is
     not applied (status `'overridden'`); the plan at baseline (the ghost) always has it. (A goal spent
     at its target with no `targetCents` gets only the stop.)
+    Pay in Budget that starts or ends inside the plan (`incomeChanges`, `source: 'income'`,
+    group `income`, `personId`): a person's money-in dial is their Budget pay in the first plan
+    month; in each later plan month their money in follows their Budget pay in that month
+    (`flows.planFunding`, annual-average timing; a stream whose `startMonth` comes later joins, one
+    past its `endMonth` leaves, a month with none of their streams is $0). Consecutive months with
+    the same difference from the dial make one change `'pay-<person>-<month>'` (the last one
+    open-ended); a stream running without an amount is listed on its own as
+    `'pay-<person>-<stream id>'` with no amount (never $0). Only for a person whose dial has a known
+    Budget amount for the first plan month (set from Budget, or set directly: the dated change still
+    applies on top); none for a deposit-average dial.
     Accepted changes with an amount add to plan months from `startMonth` (one-time: that month only;
     monthly: through `endMonth` when set): income to `in[personId]` (`in.other` without a person),
     spending groups to that group, `out.bank` and `out.total`, savings to `savings`. Totals count
@@ -1852,7 +1867,10 @@ UI rules that cut across views:
   effective ledgers: the real one (no what-if) for Plan, Budget, Review and Data, and
   the what-if one only for Spending, which shows a notice while a switch is on. Actual totals
   elsewhere never change because of an unconfirmed reimbursement or business flag.
-- **Plan reference month:** Plan and Budget show the timeline's first plan month (`tl.summary`);
+- **Plan reference month:** Plan and Budget show the timeline's first plan month (`tl.summary`):
+  the dials plus what that month adds (`tl.summary.changes`: `inCents`, `outCents`,
+  `savingsCents` and the `items` behind them: accepted changes, bills and goals and pay from
+  Budget). Plan's headline, tile and add-up count `changes` too, so both screens show one figure;
   pay is counted at the annual average there (`flows.planFunding`). Other plan summaries (Budget's
   setup details, debts) use `month = forecastStart` and name their pay-timing basis.
 - **Parental leave (the New baby pack):** one monthly income change with no amount until one is

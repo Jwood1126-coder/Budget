@@ -405,15 +405,23 @@
       const text = 'Your money, all accounts: not known yet (no complete month to start from).';
       return { html: `<p class="plan-headline" id="plan-headline">${esc(text)}</p>${carried}`, text };
     }
-    const inTotal = inKeys.reduce((s, k) => s + vals[k], 0);
+    // What the first plan month adds to the dials (bills and goals from Budget, accepted changes):
+    // counted here too, so this figure is the one Budget shows for the month.
+    const ch = tl.summary && tl.summary.changes ? tl.summary.changes : null;
+    const chIn = ch && isCents(ch.inCents) ? ch.inCents : 0, chOut = ch && isCents(ch.outCents) ? ch.outCents : 0;
+    const chSav = ch && isCents(ch.savingsCents) ? ch.savingsCents : 0;
+    const chName = !ch || !ch.items.length ? '' : ch.items.length === 1 ? ch.items[0].label
+      : ch.items.every(i => i.source === 'bill') ? 'bills Budget adds' : 'planned changes this month';
+    const inTotal = inKeys.reduce((s, k) => s + vals[k], 0) + chIn;
     const terms = [[1, inTotal, 'in']].concat(outKeys.map(k => [-1, vals[k], SUM_NAME[k] || k]));
+    if (chOut) terms.push([-1, chOut, chName]);
     const combined = terms.reduce((s, [sign, v]) => s + sign * v, 0);
     const words = terms.map(([sign, v, name], i) => {
       const op = (sign < 0) !== (v < 0) ? '−' : '+';
       const text = amt(Math.abs(v)) + ' ' + name;
       return i === 0 ? (v < 0 ? '−' : '') + text : op + ' ' + text;
     });
-    const sav = tl.dialsByKey.savings ? vals.savings : 0;
+    const sav = tl.dialsByKey.savings ? (isCents(vals.savings) ? vals.savings + chSav : vals.savings) : chSav;
     let checking;
     if (!isCents(sav)) checking = 'Checking: not known yet (net to savings is unknown)';
     else {

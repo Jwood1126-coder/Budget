@@ -214,26 +214,72 @@ test('items new in the profile are added, at the end, as the profile has them', 
   assert.match(r.notes[0], /Your setup file updated 3 settings \(Water \(new\), Trip \(new\), Fuel target\)\./);
 });
 
-test('items gone from the profile are removed only when unchanged since the base', () => {
+test('the setup file never erases: items and entries it no longer has stay, are named, and are only removed in the app', () => {
   let st = opened();
   st = reload(S.setPath(st, 'plan.savings[id=cushion].savedCents', 12000), profile());
   const p2 = profile();
-  p2.plan.bills = p2.plan.bills.filter(b => b.id !== 'stream'); // unchanged here: removed
-  p2.plan.savings = [];                                          // changed here: kept
-  delete p2.plan.targets['Dining & takeout'];                    // unchanged here: removed
+  p2.plan.bills = p2.plan.bills.filter(b => b.id !== 'stream');
+  p2.plan.savings = [];
+  delete p2.plan.targets['Dining & takeout'];
+  p2.plan.targets.Groceries = 61000; // a real change still flows
   const r = Y.apply(st, p2, { now: T1 });
-  assert.ok(!byId(r.state.plan.bills, 'stream'));
-  assert.equal(byId(r.state.plan.savings, 'cushion').savedCents, 12000);
-  assert.ok(!('Dining & takeout' in r.state.plan.targets));
-  assert.deepEqual(r.report.updated, ['Streaming (removed)', 'Dining & takeout target']);
-  assert.deepEqual(r.report.kept, ['Cushion']);
-  assert.ok(!byId(r.state.meta.setup.base.plan.savings, 'cushion'), 'the base follows the profile');
-  // Kept as the household's own from now on: a later profile never removes it.
+  assert.deepEqual(byId(r.state.plan.bills, 'stream'), byId(st.plan.bills, 'stream'));
+  assert.deepEqual(byId(r.state.plan.savings, 'cushion'), byId(st.plan.savings, 'cushion'));
+  assert.equal(r.state.plan.targets['Dining & takeout'], 30000);
+  assert.equal(r.state.plan.targets.Groceries, 61000);
+  assert.deepEqual(r.report.updated, ['Groceries target']);
+  assert.deepEqual(r.report.gone, ['Streaming', 'Cushion', 'Dining & takeout target']);
+  assert.ok(r.notes.some(n => /^3 entries are no longer in your setup file and were kept here \(Streaming, Cushion, Dining & takeout target\); remove them in the app/.test(n)), r.notes.join(' | '));
+  // B keeps them, so a later file that has one again (with a new value) still reaches it.
+  assert.ok(byId(r.state.meta.setup.base.plan.bills, 'stream'));
   const p3 = copy(p2);
-  p3.plan.targets.Groceries = 59000;
-  const r2 = Y.apply(reload(r.state, p2), p3, { now: T2 });
-  assert.equal(r2.state.plan.targets.Groceries, 59000, 'the merge ran');
-  assert.ok(byId(r2.state.plan.savings, 'cushion'));
+  p3.plan.bills.push({ id: 'stream', label: 'Streaming', category: 'Subscriptions', monthlyCents: 1800, fundedFrom: 'joint', type: 'subscription' });
+  const r3 = Y.apply(reload(r.state, p2), p3, { now: T2 });
+  assert.equal(byId(r3.state.plan.bills, 'stream').monthlyCents, 1800);
+  // The household removes one in the app: it stays removed, whatever the file says.
+  const removed = reload(S.removeItem(r3.state, 'bills', 'stream'), p3);
+  const p4 = copy(p3);
+  byId(p4.plan.bills, 'stream').monthlyCents = 1900;
+  assert.ok(!byId(Y.apply(removed, p4, { now: T2 }).state.plan.bills, 'stream'));
+});
+
+test('an incomplete setup file erases nothing: missing parts, items, fields and unknown values keep what is saved', () => {
+  let st = opened();
+  st = reload(S.setPath(st, 'plan.incomes[id=pay-r].netPerPaycheckCents', 155000), profile()); // the household's own value
+  const before = managed(st);
+  // No plan at all, then no planUi either: nothing changes, nothing is noted.
+  for (const p of [{ schemaVersion: 1, household: profile().household }, Object.assign(profile(), { plan: undefined, planUi: undefined })]) {
+    const r = Y.apply(st, p, { now: T1 });
+    assert.deepEqual(managed(r.state), before);
+    assert.deepEqual([r.changed, r.notes], [false, []]);
+  }
+  // Whole lists, maps and groups left out: kept as they are.
+  const partial = profile();
+  for (const k of ['incomes', 'bills', 'debts', 'savings', 'changes', 'targets', 'settings', 'balances']) delete partial.plan[k];
+  delete partial.planUi.dials;
+  let r = Y.apply(st, partial, { now: T1 });
+  assert.deepEqual(managed(r.state), before);
+  assert.equal(r.changed, false);
+  // Items without some of their fields, and fields set to null (unknown): the saved values stay.
+  const thin = profile();
+  thin.plan.bills = [{ id: 'rent', label: 'Rent' }, { id: 'stream', label: 'Streaming', category: 'Subscriptions', monthlyCents: null, fundedFrom: 'joint', type: 'subscription' }];
+  thin.plan.incomes = [{ id: 'pay-r', label: 'Robin pay', personId: 'p1', kind: 'paycheck', netPerPaycheckCents: null, jointPerPaycheckCents: 125000 }];
+  thin.plan.targets = { Groceries: null };
+  thin.plan.balances = { jointCashCents: null };
+  thin.plan.settings = {};
+  r = Y.apply(st, thin, { now: T1 });
+  const out = r.state.plan;
+  assert.deepEqual(byId(out.bills, 'rent'), byId(st.plan.bills, 'rent'));
+  assert.equal(byId(out.bills, 'stream').monthlyCents, 1500);
+  assert.equal(byId(out.incomes, 'pay-r').netPerPaycheckCents, 155000, 'the household’s value');
+  assert.equal(byId(out.incomes, 'pay-r').jointPerPaycheckCents, 125000, 'a real change still flows');
+  assert.equal(byId(out.incomes, 'pay-r').frequency, 'biweekly');
+  assert.deepEqual(out.targets, st.plan.targets);
+  assert.deepEqual(out.balances, st.plan.balances);
+  assert.deepEqual(out.settings, st.plan.settings);
+  assert.deepEqual(r.report.updated, ['Robin pay amount to joint']);
+  // Running again with the same file changes nothing more.
+  assert.deepEqual(Y.apply(r.state, thin, { now: T2 }).state, r.state);
 });
 
 test('items and entries the household added are never touched', () => {
@@ -282,15 +328,16 @@ test('maps merge key by key (targets, dials, groups, rows, one-time costs left o
   assert.deepEqual(ui.dials, { flexible: 50000, essentials: 210000 });
   assert.ok(r.report.updated.includes('Corner Gym grouping'));
   assert.ok(r.report.updated.includes('Essentials on the plan'));
-  // Removing a key from the profile removes it here only while unchanged.
+  // A key gone from the profile is never removed here (the setup file does not erase).
   let st2 = reload(r.state, p2);
   st2 = reload(S.setPath(st2, 'ui.plan.dials.essentials', 220000), p2);
   const p3 = copy(p2);
   p3.planUi.dials = {};
   p3.planUi.groups = { Pets: 'essentials' };
   const r3 = Y.apply(st2, p3, { now: T2 });
-  assert.deepEqual(r3.state.ui.plan.dials, { essentials: 220000 });
-  assert.deepEqual(r3.state.ui.plan.groups, { Pets: 'flexible' });
+  assert.deepEqual(r3.state.ui.plan.dials, { flexible: 50000, essentials: 220000 });
+  assert.deepEqual(r3.state.ui.plan.groups, { Pets: 'flexible', 'merchant:Corner Gym': 'flexible' });
+  assert.deepEqual(r3.report.gone, ['Flexible on the plan', 'Essentials on the plan', 'Corner Gym grouping']);
 });
 
 test('profile.planUi: plan-screen settings merge like the plan, checked with the ui.plan rules', () => {
@@ -492,8 +539,8 @@ test('fields kept as saved from a newer copy of the app survive the merge', () =
   assert.deepEqual(byId(r.state.plan.bills, 'rent').futureField, { x: 1 });
   assert.equal(byId(r.state.plan.bills, 'rent').monthlyCents, 150000);
   assert.deepEqual(r.state.plan.futureList, [1]);
-  // An item gone from the profile with an extra field of its own is still "unchanged since the base".
-  assert.ok(!byId(r.state.plan.bills, 'stream'));
+  // An item gone from the profile is kept, with its extra field.
+  assert.ok(byId(r.state.plan.bills, 'stream'));
 });
 
 test('meta.setup is part of the saved format: sanitize keeps it, a workbook carries it, problems are noted', () => {

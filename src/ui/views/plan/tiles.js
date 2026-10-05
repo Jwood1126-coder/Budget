@@ -51,7 +51,8 @@
   function monthParts(tl, vals) {
     const sum = P.sumOf(tl, vals);
     const cents = isCents(sum.combined) ? sum.combined : null;
-    const sav = tl.dialsByKey.savings ? vals.savings : 0;
+    const ch = tl.summary && tl.summary.changes && isCents(tl.summary.changes.savingsCents) ? tl.summary.changes.savingsCents : 0;
+    const sav = tl.dialsByKey.savings ? (isCents(vals.savings) ? vals.savings + ch : vals.savings) : ch;
     const sub = !isCents(sav) || !sav ? '' : sav > 0 ? `${amt(sav)} a month to savings` : `${amt(0 - sav)} a month from savings`;
     return { value: cents === null ? 'Not known yet' : signedWhole(cents), sub, tone: cents !== null && cents < 0 ? 'warn' : '' };
   }

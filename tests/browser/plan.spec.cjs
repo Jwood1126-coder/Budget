@@ -16,7 +16,7 @@ function timeline(page) {
     const label = m => E.months.label(m);
     const drill = k => (tl.dialsByKey[k] && tl.dialsByKey[k].drill) || null;
     return {
-      today, todayMonth: tl.todayMonth, todayLabel: label(tl.todayMonth), firstLabel: label(tl.firstMonth), planStart: tl.planStart, planLabel: label(tl.planStart), plan: tl.plan,
+      today, todayMonth: tl.todayMonth, todayLabel: label(tl.todayMonth), firstLabel: label(tl.firstMonth), planStart: tl.planStart, planLabel: label(tl.planStart), plan: tl.plan, summary: tl.summary,
       count: tl.baseline.count, changed: tl.changed, groupsOut: tl.groups.out,
       dials: tl.dials.map(x => ({ key: x.key, label: x.label, baselineCents: x.baselineCents, planCents: x.planCents, source: x.source, budgetCents: x.budgetCents, averageCents: x.averageCents, cardCents: x.cardCents, bankCents: x.bankCents })),
       essentials: drill('essentials'), flexible: drill('flexible'), irregular: drill('irregular'),
@@ -189,13 +189,19 @@ module.exports = [
         // The sample invests (a balance-only brokerage account): investing is a dial of its own.
         const out = v('essentials') + v('flexible') + v('irregular') + v('investing') + v('other');
         assert.equal(exp.plan.combinedChange, inn - out, 'the engine agrees: in − out');
-        assert.equal(await headline(page), `Your money, all accounts: ${signedAmt(inn - out)} a month on this plan`);
-        const sav = v('savings');
+        // What the first plan month adds to the dials (the sample's planned life insurance, a bill
+        // Budget adds) is counted too, so the headline is Budget's figure for the month.
+        const ch = exp.summary.changes;
+        assert.deepEqual([ch.inCents, ch.outCents, ch.items.map(i => i.source)], [0, 4000, ['bill']]);
+        const all = inn + ch.inCents - out - ch.outCents;
+        assert.equal(all, exp.summary.inCents - exp.summary.outCents, 'the same as Budget’s');
+        assert.equal(await headline(page), `Your money, all accounts: ${signedAmt(all)} a month on this plan`);
+        const sav = v('savings') + ch.savingsCents;
         const checking = (await page.textContent('#plan-checking')).trim();
-        assert.equal(exp.plan.net, inn - out - sav);
-        assert.equal(checking, `Checking: ${signedAmt(exp.plan.net)}` + (sav > 0 ? ` after ${amt(sav)} moved to savings` : sav < 0 ? ` after ${amt(-sav)} moved from savings` : ', with nothing moved to or from savings'));
+        assert.equal(exp.summary.leftCents, all - sav);
+        assert.equal(checking, `Checking: ${signedAmt(all - sav)}` + (sav > 0 ? ` after ${amt(sav)} moved to savings` : sav < 0 ? ` after ${amt(-sav)} moved from savings` : ', with nothing moved to or from savings'));
         const addup = (await page.textContent('#plan-addup')).trim();
-        assert.equal(addup, `${amt(inn)} in − ${amt(v('essentials'))} essentials − ${amt(v('flexible'))} flexible − ${amt(v('irregular'))} irregular − ${amt(v('investing'))} investing − ${amt(v('other'))} other = ${signedAmt(inn - out)}`);
+        assert.equal(addup, `${amt(inn)} in − ${amt(v('essentials'))} essentials − ${amt(v('flexible'))} flexible − ${amt(v('irregular'))} irregular − ${amt(v('investing'))} investing − ${amt(v('other'))} other − ${amt(ch.outCents)} ${ch.items[0].label} = ${signedAmt(all)}`);
         return exp;
       };
       await check();
@@ -473,7 +479,7 @@ module.exports = [
       assert.equal(await page.inputValue('#plan-dial-essentials'), '3,456.78');
       assert.ok(Math.abs(Number(await page.inputValue('#plan-dial-essentials-range')) - 3456.78) <= 12.5, 'slider follows (to its $25 step)');
       const exp = await timeline(page);
-      assert.equal(await headline(page), `Your money, all accounts: ${signedAmt(exp.plan.combinedChange)} a month on this plan`);
+      assert.equal(await headline(page), `Your money, all accounts: ${signedAmt(exp.summary.inCents - exp.summary.outCents)} a month on this plan`);
       assert.match(await page.textContent('#plan-dial-essentials-base'), /set by you/);
       const after = await table(page);
       const last = exp.balances.combined.points[exp.balances.combined.points.length - 1];

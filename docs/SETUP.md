@@ -281,8 +281,15 @@ changes the next time the page opens (and when a workbook is imported). For each
 | is what the setup file said last time (they left it alone) | **the setup file's new value is taken** |
 | differs from what the setup file said last time (they changed it in the app) | **theirs is kept** |
 | an item new in the setup file | added |
-| an item removed from the setup file | removed, unless they changed it in the app (then kept) |
 | an item they added in the app, or removed there | left as they have it |
+| anything the setup file leaves out (a whole section, an item, a field, a target) or gives as `null` | **left as saved**: the setup file never erases |
+
+**The setup file adds and changes; it never erases.** A setup file that is missing a section, an
+item or a field, or says `null` (unknown) where it used to have a value, changes nothing saved
+there, so a partial or half-finished file is safe to deploy. An item or target dropped from the
+file stays in the budget and the page names it once ("2 entries are no longer in your setup file
+and were kept here…"); only the household removes it, in the app. If the file has it again later,
+its new values flow as usual.
 
 - Managed: `plan.incomes`, `bills`, `debts`, `savings`, `changes` (by id, field by field),
   `plan.people` (names), `plan.targets` (per category), `plan.settings` and `plan.balances` (per
