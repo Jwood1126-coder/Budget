@@ -671,7 +671,7 @@ module.exports = [
       assert.deepEqual(none.slice(1), ['Unknown', 'Unknown']);
       assert.ok(!(await page.textContent('#rv-rec')).includes('$0.00'), 'no $0 shown for unknown spending');
       assert.match(await page.textContent('#rv-rec'), /unknown, not \$0/);
-      assert.equal(await page.$('#rv-rec-breakdown'), null);
+      assert.equal(!!(await page.$('#rv-rec-breakdown')), false);
       await t.shot('review-reconcile-nodata');
 
       // Partly covered dates: the missing and partial months are named.
@@ -699,7 +699,7 @@ module.exports = [
       await page.click('#rv-tab-uncertain');
       await page.waitForFunction(() => location.hash === '#/review?queue=uncertain');
       await page.waitForSelector('#rv-list');
-      assert.equal(await page.$('#rv-item-' + r.depositId), null, 'the deposit no longer asks where it came from');
+      assert.equal(!!(await page.$('#rv-item-' + r.depositId)), false, 'the deposit no longer asks where it came from');
       assert.match(await page.textContent('#rv-tab-uncertain'), /Uncertain\s*1/);
 
       await page.click('#rv-tab-transfers');
@@ -764,7 +764,7 @@ module.exports = [
       assert.ok(!text.includes('Every month is complete'), 'coverage is not called complete');
       assert.ok(!text.includes('Nothing waiting'), 'queues are not called clear');
       assert.match(text, /No data yet/);
-      assert.equal(await page.$('.rv-metrics'), null, 'no $0 headline figures');
+      assert.equal(!!(await page.$('.rv-metrics')), false, 'no $0 headline figures');
       assert.ok(text.includes('Missing information'), 'budget inputs still listed');
     },
   },

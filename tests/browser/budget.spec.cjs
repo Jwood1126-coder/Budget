@@ -163,7 +163,7 @@ module.exports = [
       for (const id of ['#bud-hero', '#bud-month', '#bud-goals', '#bud-coming', '#bud-setup']) t.assert.ok(await t.page.$(id), id);
       for (const a of AREAS) t.assert.equal(await t.page.$eval('#bud-area-' + a, d => d.open), false, a + ' starts folded');
       // What went away: no Targets table, no Remaining, no scope toggle.
-      for (const gone of ['.bud-tt', '#bud-sum-remaining', '#bud-fill', 'input[name="scope"]', '.bud-summary']) t.assert.equal(await t.page.$(gone), null, gone);
+      for (const gone of ['.bud-tt', '#bud-sum-remaining', '#bud-fill', 'input[name="scope"]', '.bud-summary']) t.assert.equal(!!(await t.page.$(gone)), false, gone);
       t.assert.ok(await noHorizontalScroll(t.page), 'no horizontal page scroll');
       const st = await structure(t.page);
       t.assert.equal(st.first, 1);
@@ -270,7 +270,7 @@ module.exports = [
       const sep = view.months.find(m => m.month === view.lastComplete);
       t.assert.equal(await text(t.page, '#bud-grp-essentials .bud-row-spent'), whole(sep.out.essentials), 'group spending is the timeline’s');
       t.assert.equal(await text(t.page, '#bud-grp-essentials .bud-plan-ro'), whole(view.summary.outByGroup.essentials));
-      t.assert.equal(await t.page.$('.bud-meter-pace'), null, 'a whole month has no pace marker');
+      t.assert.equal(!!(await t.page.$('.bud-meter-pace')), false, 'a whole month has no pace marker');
       // Categories over their plan stand out.
       const over = await t.page.$$eval('.bud-cat.is-over', els => els.map(el => el.querySelector('.bud-row-label').textContent));
       t.assert.ok(over.includes('Household & hardware'), over.join(', '));
@@ -638,7 +638,7 @@ module.exports = [
       await t.page.waitForSelector('#bud-root');
       await settled(t);
       t.assert.ok(await t.page.$('#bud-empty'));
-      t.assert.equal(await t.page.$('#bud-hero'), null);
+      t.assert.equal(!!(await t.page.$('#bud-hero')), false);
       await t.page.evaluate(() => document.querySelectorAll('#view details').forEach(d => { d.open = true; }));
       t.assert.doesNotMatch(await text(t.page, '#view'), /NaN|undefined|\bnull\b/, 'no broken values');
       // Goals keep their monthly amount in the setup list while there are no goal cards.

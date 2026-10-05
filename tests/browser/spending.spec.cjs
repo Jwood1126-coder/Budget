@@ -444,7 +444,7 @@ module.exports = [
       assert.equal(cents(await page.textContent('#sp-txns tfoot td:last-child')), groceriesTotal);
       // The split row no longer appears under Mixed retail.
       await open(t, '#/spending?period=2026-09&cat=Mixed%20retail&list=1', { clear: false });
-      assert.equal(await page.$(`#sp-txns a[href*="${id}"]`), null, 'split row left Mixed retail');
+      assert.equal(!!(await page.$(`#sp-txns a[href*="${id}"]`)), false, 'split row left Mixed retail');
     },
   },
   {
@@ -459,9 +459,9 @@ module.exports = [
       assert.match(await page.textContent('.sp-months-table tfoot td:nth-child(2)'), /3 months unknown/);
       await open(t, '#/spending?acct=joint-card&period=2024-10');
       assert.equal(await page.textContent('.sp-metrics .metric:first-child .metric-value'), 'Unknown');
-      assert.equal(await page.$('.sp-cmp'), null, 'no category table of zeros');
+      assert.equal(!!(await page.$('.sp-cmp')), false, 'no category table of zeros');
       await open(t, '#/spending?acct=joint-card&period=2024-10&cat=Groceries');
-      assert.equal(await page.$('#sp-cat-compare'), null, 'no $0 "typical" comparison for an unknown month');
+      assert.equal(!!(await page.$('#sp-cat-compare')), false, 'no $0 "typical" comparison for an unknown month');
       assert.match(await page.textContent('.sp-notes'), /Oct 2024: spending unknown for Joint rewards card/);
       // A range averages over the months with data only, and says so.
       await open(t, '#/spending?acct=joint-card&period=2024-10..2025-03');

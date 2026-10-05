@@ -179,8 +179,8 @@ module.exports = [
       await t.page.click('#dp-importlog > summary');
       t.assert.ok((await text(t.page, '#dp-importlog')).includes('checking-2025-11-to-2026-09.csv'));
       for (const id of ['#dp-load', '#dp-save', '#dp-privacy', '#dp-reset-card']) t.assert.ok(await t.page.isVisible(id), id + ' visible');
-      t.assert.equal(await t.page.$('#dp-upgrade'), null, 'no upgrade notes for a fresh budget');
-      t.assert.equal(await t.page.$('#dp-forget'), null, 'nothing loaded, nothing to forget');
+      t.assert.equal(!!(await t.page.$('#dp-upgrade')), false, 'no upgrade notes for a fresh budget');
+      t.assert.equal(!!(await t.page.$('#dp-forget')), false, 'nothing loaded, nothing to forget');
       const privacy = await text(t.page, '#dp-privacy');
       for (const phrase of ['No network requests', 'No analytics', 'repository is public', 'Needs approval', 'Paid hosting', 'Free', 'end-to-end encrypted', 'Proposal only']) {
         t.assert.ok(privacy.includes(phrase), 'privacy card mentions: ' + phrase);
@@ -236,7 +236,7 @@ module.exports = [
       await page.waitForSelector('#page-title');
       t.assert.equal(await datasetId(page), 'sample', 'Forget goes back to the built-in sample');
       t.assert.ok((await text(page, '#view')).includes('were forgotten'));
-      t.assert.equal(await page.$('#dp-forget'), null);
+      t.assert.equal(!!(await page.$('#dp-forget')), false);
     },
   },
   {
@@ -575,7 +575,7 @@ module.exports = [
       const [empty, quiet, dmy] = await page.$$eval('.dp-fileblock', els => els.map(e => e.id));
       for (const id of [empty, quiet, dmy]) {
         t.assert.ok((await text(page, '#' + id)).includes('No transactions could be read'), 'flagged: ' + id);
-        t.assert.equal(await page.$(`#${id} .dp-fstatus .badge-good`), null, 'no green "Read" badge for ' + id);
+        t.assert.equal(!!(await page.$(`#${id} .dp-fstatus .badge-good`)), false, 'no green "Read" badge for ' + id);
       }
       t.assert.ok((await text(page, '#' + empty)).includes('The file has no rows.'));
       t.assert.ok((await text(page, '#' + quiet)).includes('It has column names but no transactions.'));
@@ -652,7 +652,7 @@ module.exports = [
       await page.waitForSelector('#dp-report-none');
       const msg = await text(page, '#dp-report-none');
       t.assert.ok(msg.includes('Report out of date') && msg.includes('Go back to the 4 files'), 'explains why there is no report');
-      t.assert.equal(await page.$('#dp-csv-use'), null, 'nothing can be used from a stale report');
+      t.assert.equal(!!(await page.$('#dp-csv-use')), false, 'nothing can be used from a stale report');
       await page.click('#dp-report-none a.btn');
       await page.waitForFunction(() => location.hash === '#/data?load=csv' && document.querySelectorAll('.dp-fileblock').length === 4);
     },
@@ -768,7 +768,7 @@ module.exports = [
         await page.setInputFiles('#dp-pick-workbook', textFile(path.basename(rel), fs.readFileSync(path.join(ROOT, rel), 'utf8')));
         await page.waitForSelector('#dp-workbook-result');
         t.assert.ok((await text(page, '#dp-workbook-result')).includes(phrase), rel + ' is explained');
-        t.assert.equal(await page.$('#dp-wb-apply'), null, 'nothing to replace with');
+        t.assert.equal(!!(await page.$('#dp-wb-apply')), false, 'nothing to replace with');
       }
     },
   },
@@ -847,7 +847,7 @@ module.exports = [
       t.assert.ok(await page.isChecked('#dp-csv-mode-replace'), 'the sample is replaced by default');
       await waitForRender(page, () => page.check('#dp-csv-mode-add'));
       t.assert.ok(await page.isChecked('#dp-csv-mode-add'));
-      t.assert.equal(await page.$('#dp-csv-dsid'), null, 'adding keeps the data set name: no name to choose');
+      t.assert.equal(!!(await page.$('#dp-csv-dsid')), false, 'adding keeps the data set name: no name to choose');
       t.assert.ok((await text(page, '#dp-csv-dsid-status')).includes('every transaction keeps its id'));
       await page.fill(`#${block}-cs`, '2026-09-01');
       await page.fill(`#${block}-ce`, '2026-10-31');
@@ -998,7 +998,7 @@ module.exports = [
       await page.click('#dp-csv-check-btn');
       await page.waitForSelector('#dp-merge-apply');
       t.assert.equal(await text(page, '#dp-merge-line'), '0 new, 0 already present, coverage now to Sep 30, 2026, 2 balances added.');
-      t.assert.equal(await page.$('#dp-merge-replace'), null, 'nothing to replace the data with');
+      t.assert.equal(!!(await page.$('#dp-merge-replace')), false, 'nothing to replace the data with');
       await page.click('#dp-merge-balskipped > summary');
       t.assert.ok((await text(page, '#dp-merge-balances')).includes('balances.csv, line 4: unknown account "Other bank"'));
       await assertStructure(t, 'the balances summary');
