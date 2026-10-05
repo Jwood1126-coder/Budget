@@ -1823,7 +1823,7 @@ test('bills: joint bills the history does not hold are added, seen bills that en
   assert.equal(monthOf(r, '2026-09').out.essentials, base.out.essentials + 4000);
   assert.equal(monthOf(r, '2026-10').out.essentials, base.out.essentials + 4000 + 3000 - 7000);
   assert.equal(monthOf(r, '2026-10').out.bank, base.out.bank + 4000 + 3000 - 7000, 'bills are paid from the bank');
-  assert.deepEqual(['2026-08', '2026-09', '2027-02', '2027-03'].map(m => monthOf(r, m).out.debt), [base.out.debt, base.out.debt + 12000, base.out.debt + 12000, base.out.debt]);
+  assert.deepEqual(['2026-08', '2026-09', '2027-02', '2027-04'].map(m => monthOf(r, m).out.debt), [base.out.debt, base.out.debt + 12000, base.out.debt + 12000, base.out.debt]);
   assert.equal(base.out.debt, 5000, 'the store card is in the baseline once');
   assert.equal(monthOf(r, '2026-09').out.other, base.out.other + 12000);
   assert.equal(monthOf(r, '2026-09').out.total, base.out.total + 4000 + 12000);
@@ -1841,7 +1841,7 @@ test('savings goals: their monthly amounts are the savings baseline; each goal r
   const ds = integrated({ invest: false });
   const goal = (id, fields) => Object.assign({ id, label: id, targetCents: null, targetMonth: null, savedCents: null, monthlyCents: null, spendAtTarget: false, note: '' }, fields);
   const savings = [
-    goal('cushion', { label: 'Cushion', targetCents: 1100000, monthlyCents: 20000 }),
+    goal('cushion', { label: 'Cushion', targetCents: 1130000, monthlyCents: 20000 }),
     goal('trip', { label: 'Trip', targetCents: 100000, targetMonth: '2026-12', monthlyCents: 10000, spendAtTarget: true, savedCents: 0 }),
     goal('fund', { label: 'Fund', monthlyCents: 5000 }),
   ];
@@ -1851,11 +1851,11 @@ test('savings goals: their monthly amounts are the savings baseline; each goal r
   assert.equal(sav.basis, 'From Budget: 3 savings goals ($350.00 a month)');
   // The savings line: 10,000.00 on 30 June, + 350 a month, − 1,000 for the trip in December.
   const line = account(r, 'sav');
-  assert.deepEqual(['2026-07', '2026-09', '2026-11', '2026-12', '2027-01', '2027-03'].map(m => point(line, m).cents), [1035000, 1105000, 1175000, 1110000, 1145000, 1215000]);
+  assert.deepEqual(['2026-07', '2026-09', '2026-11', '2026-12', '2027-01', '2027-04'].map(m => point(line, m).cents), [1035000, 1105000, 1175000, 1110000, 1145000, 1250000]);
   // In list order, cumulatively: the cushion at 11,000; the trip at 11,000 + 1,000; no target, no month.
-  assert.deepEqual(r.goals.map(g => [g.id, g.cumulativeCents, g.reachMonth, g.already]), [['cushion', 1100000, '2026-09', false], ['trip', 1200000, '2027-03', false], ['fund', null, null, false]]);
-  assert.deepEqual(r.goals[1], { id: 'trip', label: 'Trip', targetCents: 100000, savedCents: 0, monthlyCents: 10000, targetMonth: '2026-12', spendAtTarget: true, cumulativeCents: 1200000, reachMonth: '2027-03', already: false });
-  assert.deepEqual(r.markers, [{ kind: 'goal', id: 'cushion', month: '2026-09', label: 'Cushion reached', cents: 1100000 }, { kind: 'goal', id: 'trip', month: '2027-03', label: 'Trip reached', cents: 100000 }]);
+  assert.deepEqual(r.goals.map(g => [g.id, g.cumulativeCents, g.reachMonth, g.already]), [['cushion', 1130000, '2026-10', false], ['trip', 1230000, '2027-04', false], ['fund', null, null, false]]);
+  assert.deepEqual(r.goals[1], { id: 'trip', label: 'Trip', targetCents: 100000, savedCents: 0, monthlyCents: 10000, targetMonth: '2026-12', spendAtTarget: true, cumulativeCents: 1230000, reachMonth: '2027-04', already: false });
+  assert.deepEqual(r.markers, [{ kind: 'goal', id: 'cushion', month: '2026-10', label: 'Cushion reached', cents: 1130000 }, { kind: 'goal', id: 'trip', month: '2027-04', label: 'Trip reached', cents: 100000 }]);
   // The trip is spent in December: out of savings, into irregular spending; checking is untouched.
   const dec = monthOf(r, '2026-12'), nov = monthOf(r, '2026-11');
   const spent = r.changes.list.find(c => c.id === 'goal-trip');
@@ -2030,43 +2030,43 @@ test('summary: the first plan month in one object, the numbers Budget and the Pl
 
 test('packs: new baby (first year), childcare and kid costs — editable estimates, timed from a date, never accepted for you', () => {
   assert.deepEqual(T.templates.list().map(t => [t.key, t.needs]), [['babyFirstYear', ['dueDate']], ['childcare', ['startMonth', 'monthlyCents']], ['kidCosts', ['dueDate']]]);
-  const baby = T.templates.babyFirstYear('2027-05-14');
+  const baby = T.templates.babyFirstYear('2027-06-14');
   assert.deepEqual(baby.map(i => [i.label, i.kind, i.group, i.startMonth, i.endMonth, i.cents]), [
-    ['Car seat and stroller', 'oneTime', 'irregular', '2027-03', null, 45000],
-    ['Nursery and sleep (crib, mattress, dresser)', 'oneTime', 'irregular', '2027-03', null, 80000],
-    ['Starter clothes, feeding gear and basics', 'oneTime', 'irregular', '2027-04', null, 50000],
-    ['Birth: out-of-pocket hospital costs', 'oneTime', 'irregular', '2027-06', null, 300000],
-    ['Diapers and wipes', 'monthly', 'essentials', '2027-05', '2028-04', 8000],
-    ['Formula and feeding', 'monthly', 'essentials', '2027-05', '2028-04', 15000],
-    ['Baby health: copays and medicines', 'monthly', 'essentials', '2027-05', '2028-04', 5000],
-    ['Baby clothes as they grow', 'monthly', 'flexible', '2027-05', '2028-04', 4000],
-    ['Parental leave: income change', 'monthly', 'income', '2027-05', '2027-07', null],
+    ['Car seat and stroller', 'oneTime', 'irregular', '2027-04', null, 45000],
+    ['Nursery and sleep (crib, mattress, dresser)', 'oneTime', 'irregular', '2027-04', null, 80000],
+    ['Starter clothes, feeding gear and basics', 'oneTime', 'irregular', '2027-05', null, 50000],
+    ['Birth: out-of-pocket hospital costs', 'oneTime', 'irregular', '2027-07', null, 300000],
+    ['Diapers and wipes', 'monthly', 'essentials', '2027-06', '2028-05', 8000],
+    ['Formula and feeding', 'monthly', 'essentials', '2027-06', '2028-05', 15000],
+    ['Baby health: copays and medicines', 'monthly', 'essentials', '2027-06', '2028-05', 5000],
+    ['Baby clothes as they grow', 'monthly', 'flexible', '2027-06', '2028-05', 4000],
+    ['Parental leave: income change', 'monthly', 'income', '2027-06', '2027-08', null],
   ]);
   const care = T.templates.childcare('2027-08');
   assert.deepEqual(care.map(i => [i.label, i.kind, i.group, i.startMonth, i.endMonth, i.cents, i.template]), [['Childcare', 'monthly', 'essentials', '2027-08', null, 120000, 'childcare']]);
   assert.equal(T.templates.childcare('2027-08', 95000)[0].cents, 95000);
   assert.throws(() => T.templates.childcare('soon'), err => err instanceof E.ValidationError && err.field === 'startMonth');
   assert.throws(() => T.templates.childcare('2027-08', -1), err => err instanceof E.ValidationError && err.field === 'monthlyCents');
-  const kid = T.templates.kidCosts('2027-05-14');
+  const kid = T.templates.kidCosts('2027-06-14');
   assert.deepEqual(kid.map(i => [i.label, i.group, i.startMonth, i.endMonth, i.cents]), [
-    ['Kid: food', 'essentials', '2028-05', null, 20000],
-    ['Kid: health (copays, dental, medicines)', 'essentials', '2028-05', null, 8000],
-    ['Kid: diapers until potty-trained', 'essentials', '2028-05', '2030-04', 7000],
-    ['Kid: clothes and shoes', 'flexible', '2028-05', null, 6000],
-    ['Kid: activities, toys and outings', 'flexible', '2028-05', null, 10000],
+    ['Kid: food', 'essentials', '2028-06', null, 20000],
+    ['Kid: health (copays, dental, medicines)', 'essentials', '2028-06', null, 8000],
+    ['Kid: diapers until potty-trained', 'essentials', '2028-06', '2030-05', 7000],
+    ['Kid: clothes and shoes', 'flexible', '2028-06', null, 6000],
+    ['Kid: activities, toys and outings', 'flexible', '2028-06', null, 10000],
   ]);
   const all = baby.concat(care, kid);
   assert.ok(all.every(i => i.accepted === false && i.personId === null && /generic estimate/i.test(i.note) && !('scenario' in i)));
   assert.deepEqual(Array.from(new Set(all.map(i => i.template))), ['babyFirstYear', 'childcare', 'kidCosts']);
   assert.throws(() => T.templates.kidCosts('2027-02-30'), err => err instanceof E.ValidationError && err.field === 'dueDate');
   // As a what-if: every item tagged; into a budget through addChange like any planned change.
-  const tagged = T.templates.babyFirstYear('2027-05-14', { scenario: 'Baby in May' });
+  const tagged = T.templates.babyFirstYear('2027-06-14', { scenario: 'Baby in May' });
   assert.ok(tagged.every(i => i.scenario === 'Baby in May'));
   const st = T.addChange(E.state.defaults(null, integrated()), tagged.concat(T.templates.childcare('2027-08', null, { scenario: 'Baby in May' })));
   assert.equal(st.plan.changes.length, 10);
   assert.ok(st.plan.changes.every(c => c.scenario === 'Baby in May' && c.accepted === false));
   // A scenario name longer than 60 characters is refused when saved; the packs shorten it.
-  assert.equal(T.templates.kidCosts('2027-05-14', { scenario: 'x'.repeat(70) })[0].scenario.length, 60);
+  assert.equal(T.templates.kidCosts('2027-06-14', { scenario: 'x'.repeat(70) })[0].scenario.length, 60);
   assert.throws(() => T.addChange(E.state.defaults(null, integrated()), Object.assign({}, kid[0], { scenario: 'x'.repeat(61) })), err => err instanceof E.ValidationError);
 });
 

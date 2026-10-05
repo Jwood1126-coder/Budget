@@ -2536,16 +2536,16 @@ function beforeWhatIfs() {
     id: 'move', name: 'Move to the coast', description: '', createdAt: NOW, updatedAt: NOW,
     assumptions: { incomeTiming: 'conservative', annualReturnPct: 0, costGrowthPct: 0, incomeGrowthPct: 0 },
     events: [
-      { id: 'movers', type: 'one_time', label: 'Movers', month: '2027-03', amountCents: 320000, direction: 'expense', category: 'Home maintenance & repairs', goalId: null, note: 'Two quotes.' },
+      { id: 'movers', type: 'one_time', label: 'Movers', month: '2027-04', amountCents: 320000, direction: 'expense', category: 'Home maintenance & repairs', goalId: null, note: 'Two quotes.' },
       { id: 'deposit-back', type: 'one_time', label: 'Deposit back', month: '2027-04', amountCents: 150000, direction: 'income', category: null, goalId: null, note: '' },
-      { id: 'rent', type: 'recurring', label: 'Rent', startMonth: '2027-03', endMonth: '2028-02', monthlyCents: 210000, direction: 'expense', category: 'Mortgage', note: '' },
-      { id: 'ferry', type: 'recurring', label: 'Ferry passes', startMonth: '2027-03', endMonth: null, monthlyCents: 9000, direction: 'expense', category: 'Travel', note: '' },
+      { id: 'rent', type: 'recurring', label: 'Rent', startMonth: '2027-04', endMonth: '2028-02', monthlyCents: 210000, direction: 'expense', category: 'Mortgage', note: '' },
+      { id: 'ferry', type: 'recurring', label: 'Ferry passes', startMonth: '2027-04', endMonth: null, monthlyCents: 9000, direction: 'expense', category: 'Travel', note: '' },
       { id: 'lodger', type: 'recurring', label: 'Lodger', startMonth: '2027-05', endMonth: null, monthlyCents: 60000, direction: 'income', category: null, note: '' },
       { id: 'parttime', type: 'recurring', label: 'Part-time', startMonth: '2027-06', endMonth: null, monthlyCents: 40000, direction: 'income_loss', category: null, note: '' },
-      { id: 'newjob', type: 'income_change', label: 'New job', streamId: 'pay-b', startMonth: '2027-03', endMonth: null, jointPerPaycheckCents: 162000, note: '' },
+      { id: 'newjob', type: 'income_change', label: 'New job', streamId: 'pay-b', startMonth: '2027-04', endMonth: null, jointPerPaycheckCents: 162000, note: '' },
       { id: 'leave', type: 'income_change', label: 'Leave', streamId: 'pay-b', startMonth: '2027-07', endMonth: '2027-09', jointPerPaycheckCents: null, note: '' },
-      { id: 'internet-up', type: 'bill_change', label: 'Faster internet', billId: 'internet', startMonth: '2027-03', endMonth: null, monthlyCents: 9500, note: '' },
-      { id: 'groceries-up', type: 'target_change', label: 'Groceries up', category: 'Groceries', startMonth: '2027-03', endMonth: null, monthlyCents: 70000, note: '' },
+      { id: 'internet-up', type: 'bill_change', label: 'Faster internet', billId: 'internet', startMonth: '2027-04', endMonth: null, monthlyCents: 9500, note: '' },
+      { id: 'groceries-up', type: 'target_change', label: 'Groceries up', category: 'Groceries', startMonth: '2027-04', endMonth: null, monthlyCents: 70000, note: '' },
       { id: 'boat', type: 'goal', label: 'Boat fund', goal: { id: 'boat', label: 'Boat', targetCents: 500000, targetMonth: null, savedCents: null, monthlyCents: 10000, spendAtTarget: false, note: '' } },
       { id: 'someday', type: 'recurring', label: 'Someday', startMonth: null, endMonth: null, monthlyCents: 100, direction: 'expense', category: null, note: '' },
       { id: 'mine', type: 'one_time', label: 'Same id as a change', month: '2027-01', amountCents: 1, direction: 'expense', category: null, goalId: null, note: '' },
@@ -2560,17 +2560,17 @@ test('scenarios to what-ifs: every dated event is copied once into plan.changes,
   const copied = r.state.plan.changes.filter(c => c.scenario);
   const pick = c => [c.id, c.kind, c.group, c.personId, c.startMonth, c.endMonth, c.cents, c.accepted, c.scenario];
   assert.deepEqual(copied.map(pick), [
-    ['sc-movers', 'oneTime', 'irregular', null, '2027-03', null, 320000, false, 'Move to the coast'],
+    ['sc-movers', 'oneTime', 'irregular', null, '2027-04', null, 320000, false, 'Move to the coast'],
     ['sc-deposit-back', 'oneTime', 'income', null, '2027-04', null, 150000, false, 'Move to the coast'],
-    ['sc-rent', 'monthly', 'essentials', null, '2027-03', '2028-02', 210000, false, 'Move to the coast'],
-    ['sc-ferry', 'monthly', 'flexible', null, '2027-03', null, 9000, false, 'Move to the coast'],
+    ['sc-rent', 'monthly', 'essentials', null, '2027-04', '2028-02', 210000, false, 'Move to the coast'],
+    ['sc-ferry', 'monthly', 'flexible', null, '2027-04', null, 9000, false, 'Move to the coast'],
     ['sc-lodger', 'monthly', 'income', null, '2027-05', null, 60000, false, 'Move to the coast'],
     ['sc-parttime', 'monthly', 'income', null, '2027-06', null, -40000, false, 'Move to the coast'],
     // The monthly difference to joint: (1,620 − 1,500) × 26 ÷ 12.
-    ['sc-newjob', 'monthly', 'income', 'p2', '2027-03', null, 26000, false, 'Move to the coast'],
+    ['sc-newjob', 'monthly', 'income', 'p2', '2027-04', null, 26000, false, 'Move to the coast'],
     ['sc-leave', 'monthly', 'income', 'p2', '2027-07', '2027-09', null, false, 'Move to the coast'],
-    ['sc-internet-up', 'monthly', 'essentials', null, '2027-03', null, null, false, 'Move to the coast'],
-    ['sc-groceries-up', 'monthly', 'essentials', null, '2027-03', null, null, false, 'Move to the coast'],
+    ['sc-internet-up', 'monthly', 'essentials', null, '2027-04', null, null, false, 'Move to the coast'],
+    ['sc-groceries-up', 'monthly', 'essentials', null, '2027-04', null, null, false, 'Move to the coast'],
     ['sc-mine', 'oneTime', 'irregular', null, '2027-01', null, 1, false, 'Move to the coast'],
   ].concat(r.state.plan.changes.filter(c => c.scenario && c.scenario !== 'Move to the coast').map(pick)));
   assert.equal(byId(r.state.plan.changes, 'sc-movers').note, 'Copied from the Forecast scenario “Move to the coast”. Two quotes.');
@@ -2592,7 +2592,7 @@ test('scenarios to what-ifs: every dated event is copied once into plan.changes,
   const once = S.upgrade(raw);
   assert.deepEqual(S.upgrade(once.raw).applied, []);
   const pre = JSON.parse(JSON.stringify(raw));
-  pre.plan.changes.push({ id: 'sc-rent', label: 'Rent (mine)', kind: 'monthly', group: 'essentials', startMonth: '2027-03', cents: 5 });
+  pre.plan.changes.push({ id: 'sc-rent', label: 'Rent (mine)', kind: 'monthly', group: 'essentials', startMonth: '2027-04', cents: 5 });
   const kept = S.sanitize(pre, profile(), DS).state.plan.changes;
   assert.deepEqual([kept.filter(c => c.id === 'sc-rent').length, byId(kept, 'sc-rent').label], [1, 'Rent (mine)']);
   // New budgets are marked already: their scenarios are not copied.
