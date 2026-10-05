@@ -7,6 +7,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { loadEngine } = require('../load-engine.cjs');
+const { noHorizontalScroll, state, money } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..', '..');
 const RAW = path.join(ROOT, 'fixtures', 'sample-raw');
@@ -20,10 +21,8 @@ const csvFile = name => ({ name, mimeType: 'text/csv', buffer: fs.readFileSync(p
 const textFile = (name, text, mimeType = 'application/json') => ({ name, mimeType, buffer: Buffer.from(text) });
 const readJSON = rel => JSON.parse(fs.readFileSync(path.join(ROOT, rel), 'utf8'));
 
-const state = page => page.evaluate(() => window.HouseholdBudget.getState());
 const datasetId = page => page.evaluate(() => window.HouseholdBudget.getDataset().datasetId);
 const text = (page, sel) => page.$eval(sel, el => el.textContent.replace(/\s+/g, ' ').trim());
-const noHorizontalScroll = page => page.evaluate(w => document.scrollingElement.scrollWidth <= w + 1, page.viewportSize().width);
 
 /** Run `change` (which re-renders the view) and wait until the view has been replaced. */
 async function waitForRender(page, change) {
@@ -108,7 +107,6 @@ async function importSample(t, { dsid = 'alex-sam-test', rules = true } = {}) {
 }
 
 const NEWER_NAME = 'checking-2026-09-to-2026-10.csv';
-const money = cents => '$' + (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 /**
  * An invented newer checking export, newest first like the sample's: the sample's September rows
  * again (already in the data) and new October rows, with a running balance that continues the

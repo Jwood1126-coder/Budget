@@ -1,57 +1,35 @@
 'use strict';
 // Tests for BudgetEngine.flows: spending by role and by how it was paid, money into joint by
-// person, savings in and out, the baseline (one-time, yearly, regular) and Home's plan.
+// person, savings in and out, the baseline (one-time, yearly, regular) and plan funding.
 // Every household, merchant, date and amount here is invented.
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { loadEngine } = require('../load-engine.cjs');
+const { E, rowMaker, pair, dataset, jointAccounts, plan: makePlan, paycheck, contribution, monthlyFlows } = require('../helpers/ledger.cjs');
 
-const E = loadEngine();
 const L = E.ledger;
 const F = E.flows;
 
-let seq = 0;
-function row(accountId, date, amountCents, fields = {}) {
-  seq += 1;
-  return Object.assign({ id: 'f' + String(seq).padStart(5, '0'), accountId, date, description: 'TEST ROW ' + seq, amountCents, kind: 'spend', category: 'Groceries' }, fields);
-}
+const row = rowMaker({ prefix: 'f', description: n => 'TEST ROW ' + n });
 const buy = (acct, date, cents, merchant, extra = {}) => row(acct, date, -cents, Object.assign({ merchant, description: merchant.toUpperCase() + ' 0042' }, extra));
 const refund = (acct, date, cents, merchant) => row(acct, date, cents, { merchant, description: merchant.toUpperCase() + ' CREDIT', flags: ['refund'] });
 const pay = (date, cents, extra = {}) => row('chk', date, cents, Object.assign({ kind: 'income', subtype: 'payroll', category: 'Income', description: 'NORTHWIND LTD PAYROLL' }, extra));
 const fromPartner = (date, cents, extra = {}) => row('chk', date, cents, Object.assign({ kind: 'transfer', subtype: 'contribution', category: 'Transfer', description: 'ONLINE XFER FROM 7781' }, extra));
-const cardPayment = (date, cents) => {
-  const out = row('chk', date, -cents, { kind: 'card_payment', category: 'Card payment', description: 'TEST CARD AUTOPAY' });
-  const inn = row('card', date, cents, { kind: 'card_payment', category: 'Card payment', description: 'PAYMENT THANK YOU', pairId: out.id });
-  out.pairId = inn.id;
-  return [out, inn];
-};
-const toSavings = (date, cents) => {
-  const out = row('chk', date, -cents, { kind: 'transfer', subtype: 'savings', category: 'Transfer', description: 'XFER TO SAV' });
-  const inn = row('sav', date, cents, { kind: 'transfer', subtype: 'savings', category: 'Transfer', description: 'XFER FROM CHK', pairId: out.id });
-  out.pairId = inn.id;
-  return [out, inn];
-};
+const cardPayment = (date, cents) => pair(
+  row('chk', date, -cents, { kind: 'card_payment', category: 'Card payment', description: 'TEST CARD AUTOPAY' }),
+  row('card', date, cents, { kind: 'card_payment', category: 'Card payment', description: 'PAYMENT THANK YOU' }));
+const toSavings = (date, cents) => pair(
+  row('chk', date, -cents, { kind: 'transfer', subtype: 'savings', category: 'Transfer', description: 'XFER TO SAV' }),
+  row('sav', date, cents, { kind: 'transfer', subtype: 'savings', category: 'Transfer', description: 'XFER FROM CHK' }));
 
 const FULL = [{ start: '2026-01-01', end: '2026-03-31' }];
-function build(txns, { months = FULL } = {}) {
-  return L.normalizeDataset({
-    schemaVersion: 2, datasetId: 'flows-test', isSynthetic: true,
-    accounts: [
-      { id: 'chk', label: 'Test checking', type: 'checking', scope: 'joint', coverage: months },
-      { id: 'sav', label: 'Test savings', type: 'savings', scope: 'joint', coverage: months },
-      { id: 'card', label: 'Test card', type: 'credit_card', scope: 'joint', coverage: months, paidInFull: true },
-    ],
-    transactions: txns,
-  });
-}
-const PLAN = {
+const build = (txns, { months = FULL } = {}) => dataset({ datasetId: 'flows-test', accounts: jointAccounts({ coverage: months, cardExtra: { paidInFull: true } }), transactions: txns });
+const PLAN = makePlan({
   people: [{ id: 'p1', name: 'Rowan' }, { id: 'p2', name: 'Quinn' }],
   incomes: [
-    { id: 'p1-pay', label: 'Rowan pay', personId: 'p1', kind: 'paycheck', grossPerPaycheckCents: 455500, netPerPaycheckCents: 310000, jointPerPaycheckCents: 260000, frequency: 'semimonthly', frequencyStatus: 'confirmed', semimonthlyDays: [15, 31], status: 'confirmed', startMonth: null, endMonth: null },
-    { id: 'p2-transfer', label: 'Quinn transfer', personId: 'p2', kind: 'contribution', netPerPaycheckCents: null, jointPerPaycheckCents: 175000, frequency: 'unknown', frequencyStatus: 'unknown', assumedPerMonthIfUnknown: 2, status: 'observed', startMonth: null, endMonth: null },
+    paycheck({ id: 'p1-pay', label: 'Rowan pay', personId: 'p1', grossPerPaycheckCents: 455500, netPerPaycheckCents: 310000, jointPerPaycheckCents: 260000 }),
+    contribution({ id: 'p2-transfer', label: 'Quinn transfer', personId: 'p2', jointPerPaycheckCents: 175000 }),
   ],
-  bills: [], targets: [], goals: [], debts: [], personalSpending: [], settings: { incomeTiming: 'conservative' },
-};
+});
 function run(txns, { edits = {}, plan = PLAN, count = 12 } = {}) {
   const ds = build(txns);
   const eff = L.applyEdits(ds, edits);
@@ -78,12 +56,9 @@ test('a refund reduces card spending once, also when it posts in a later month',
   assert.equal(r.base.total.actual.cardNet, 5000, 'over the months: once');
 });
 
-test('a refund-heavy baseline keeps its sign in history; planned card spending starts at $0 and says why', () => {
+test('a refund-heavy baseline keeps its sign in history', () => {
   const r = run([buy('card', '2026-01-10', 1000, 'Corner Grocer'), refund('card', '2026-01-11', 9000, 'Gear Barn')]);
   assert.equal(r.base.avg.actual.cardNet, E.money.divide(-8000, 3));
-  const sc = F.scenario({ base: r.base, funding: F.planFunding(PLAN, { month: '2026-04' }), home: {}, people: ['p1', 'p2'] });
-  assert.equal(sc.lines.card.baseline, 0);
-  assert.equal(sc.lines.card.signedBaseline, E.money.divide(-8000, 3), 'the signed figure is kept for the explanation');
 });
 
 test('bank-paid and card spending with the same category stay apart, by how they were paid', () => {
@@ -123,12 +98,12 @@ test('savings: gross in, gross out, net, interest and investments are kept apart
   assert.equal(jan.savingsNet, 65000 - 117300, 'a drawdown, not "saved"');
   assert.equal(jan.interest, 61);
   assert.equal(jan.investNet, 2500);
-  // The old single figure mixed both: net savings + investments.
-  const flows = E.balances.monthlyFlows(r.eff, r.ds, {});
+  // The ledger's single figure mixes both: net savings + investments.
+  const flows = monthlyFlows(r.eff, r.ds, {});
   assert.equal(flows.find(f => f.month === '2026-01').savedCents, jan.savingsNet + jan.investNet);
 });
 
-test('everything reconciles with the month-by-month flows, to the cent', () => {
+test('everything reconciles with the ledger’s month-by-month totals, to the cent', () => {
   const txns = [
     pay('2026-01-15', 260000), pay('2026-01-30', 260000), fromPartner('2026-01-10', 175000), fromPartner('2026-01-25', 175000),
     buy('card', '2026-01-04', 23456, 'Corner Grocer'), refund('card', '2026-01-09', 1234, 'Corner Grocer'), ...cardPayment('2026-01-28', 22222),
@@ -137,7 +112,7 @@ test('everything reconciles with the month-by-month flows, to the cent', () => {
   ];
   const r = run(txns);
   const a = r.month('2026-01').actual;
-  const f = E.balances.monthlyFlows(r.eff, r.ds, { attribute: E.balances.incomeAttribution(PLAN) }).find(x => x.month === '2026-01');
+  const f = monthlyFlows(r.eff, r.ds, { attribute: E.balances.incomeAttribution(PLAN) }).find(x => x.month === '2026-01');
   assert.equal(a.moneyIn, f.inCents);
   assert.equal(a.consumption + a.debt + a.business, f.outCents);
   assert.equal(a.left, f.leftCents);
@@ -146,6 +121,38 @@ test('everything reconciles with the month-by-month flows, to the cent', () => {
   assert.equal(a.unassigned + a.interest, f.bySource.other);
   assert.equal(a.cardNet, 23456 - 1234);
   assert.equal(a.bankNet, 131277);
+});
+
+test('month by month: full months only; a purchase marked as a business cost still left the account', () => {
+  const biz = buy('chk', '2026-02-11', 30000, 'Tool Depot', { category: 'Household & hardware' });
+  const txns = [pay('2026-01-05', 300000), buy('chk', '2026-01-10', 100000, 'Corner Grocer'), ...toSavings('2026-01-20', 25000),
+    pay('2026-02-05', 300000), biz, row('chk', '2026-02-20', -60000, { kind: 'debt_payment', subtype: 'loan', category: 'Debt', description: 'AUTO LOAN PMT' })];
+  const edits = { [biz.id]: { business: 'business', reason: 'work tools', history: [] } };
+  const partial = build(txns, { months: [{ start: '2026-01-01', end: '2026-02-14' }] });
+  const rows = F.breakdown(L.applyEdits(partial, edits), partial, { months: ['2026-01', '2026-02'], plan: PLAN });
+  const jan = rows[0].actual;
+  assert.deepEqual([jan.moneyIn, jan.consumption + jan.debt + jan.business, jan.savingsNet + jan.investNet, jan.left, jan.business], [300000, 100000, 25000, 175000, 0]);
+  assert.equal(rows[1].coverage, 'partial', 'the exports end mid-February');
+  assert.equal(rows[1].actual, null, 'a partial month is unknown, not small');
+  const full = build(txns, { months: [{ start: '2026-01-01', end: '2026-02-28' }] });
+  const eff = L.applyEdits(full, edits);
+  const feb = F.breakdown(eff, full, { months: ['2026-02'], plan: PLAN })[0].actual;
+  assert.equal(feb.debt + feb.business, 90000, 'debt payment + business purchase');
+  assert.equal(feb.business, 30000);
+  assert.equal(feb.consumption, 0, 'a business cost is not household spending');
+  const f = monthlyFlows(eff, full, { months: ['2026-02'] })[0];
+  assert.deepEqual([f.outCents, f.businessCents, f.leftCents], [feb.consumption + feb.debt + feb.business, feb.business, feb.left], 'agrees with the ledger’s totals');
+});
+
+test('month by month: a one-off left out of the plan still counts in the actual figures, not the planning ones', () => {
+  const big = buy('chk', '2026-01-15', 200000, 'Molar Bay Dental', { category: 'Dental' });
+  const ds = build([pay('2026-01-05', 300000), big]);
+  const eff = L.applyEdits(ds, { [big.id]: { planningBaseline: 'exclude', reason: 'one-off', history: [] } });
+  const jan = F.breakdown(eff, ds, { months: ['2026-01'], plan: PLAN })[0];
+  assert.equal(jan.actual.consumption, 200000);
+  assert.equal(jan.planning.consumption, 0);
+  assert.equal(monthlyFlows(eff, ds, { months: ['2026-01'] })[0].outCents, jan.actual.consumption);
+  assert.equal(monthlyFlows(eff, ds, { months: ['2026-01'], planning: true })[0].outCents, jan.planning.consumption);
 });
 
 test('money into joint by person: provisional matches are marked, can be corrected, and unassigned money stays unassigned', () => {
@@ -197,14 +204,6 @@ test('plan funding: biweekly pay uses its own cadence and leaves semimonthly alo
   assert.equal(avg.people.p1.jointCents, 520000, 'semimonthly unchanged');
 });
 
-test('the household plan counts joint contributions only: what is kept personally is not taken off again', () => {
-  const r = run([buy('chk', '2026-01-02', 100000, 'Hillside Mortgage', { category: 'Mortgage' }), buy('chk', '2026-02-02', 100000, 'Hillside Mortgage', { category: 'Mortgage' }), buy('chk', '2026-03-02', 100000, 'Hillside Mortgage', { category: 'Mortgage' })]);
-  const sc = F.scenario({ base: r.base, funding: F.planFunding(PLAN, { month: '2026-04' }), home: {}, people: ['p1', 'p2'] });
-  assert.equal(sc.lines.funding.value, 520000 + 350000, 'joint parts, not gross or full take-home');
-  assert.equal(sc.lines.bank.value, 100000);
-  assert.equal(sc.remainder, 870000 - 100000, 'the 1,000.00 kept personally each month is not subtracted');
-});
-
 test('editing the plan never changes past months; a pay stub never creates a deposit', () => {
   const txns = [pay('2026-01-15', 260000), pay('2026-02-15', 260000)];
   const before = run(txns).rows.map(r => r.actual && r.actual.p1);
@@ -216,30 +215,6 @@ test('editing the plan never changes past months; a pay stub never creates a dep
   assert.deepEqual(after.rows.map(r => r.actual && r.actual.p1), before);
   assert.equal(after.eff.length, txns.length, 'no row is created from the plan');
   assert.equal(F.planFunding(plan, { month: '2026-04' }).people.p1.jointCents, 600000);
-});
-
-test('Home plan: one card amount, separate from bank-paid bills; a drawdown raises the remainder; $0 is an amount', () => {
-  const txns = [];
-  for (const m of ['01', '02', '03']) {
-    txns.push(buy('card', `2026-${m}-05`, 200000, 'Corner Grocer'), buy('chk', `2026-${m}-01`, 137500, 'Hillside Mortgage', { category: 'Mortgage' }), ...cardPayment(`2026-${m}-25`, 200000));
-  }
-  const r = run(txns);
-  const funding = F.planFunding(PLAN, { month: '2026-04' });
-  const sc = home => F.scenario({ base: r.base, funding, home, people: ['p1', 'p2'] });
-  const base = sc({});
-  assert.equal(base.lines.card.value, 200000, 'card repayments are not added on top');
-  assert.equal(base.lines.bank.value, 137500);
-  const moreCards = sc({ cardCents: 260000 });
-  assert.equal(moreCards.lines.bank.value, 137500, 'bank-paid bills do not move with card spending');
-  assert.equal(moreCards.remainder, base.remainder - 60000, 'exactly the difference, once');
-  const drawdown = sc({ savedCents: -123648 });
-  assert.equal(drawdown.remainder, base.remainder - base.lines.savings.value + 123648);
-  const zero = sc({ savedCents: 0, bankCents: 0 });
-  assert.equal(zero.lines.savings.value, 0);
-  assert.equal(zero.lines.savings.changed, true, 'zero is the household’s setting, not the baseline');
-  assert.equal(zero.lines.bank.value, 0);
-  const people = sc({ p2InCents: 0 });
-  assert.equal(people.lines.funding.value, 520000);
 });
 
 test('baseline: a big purchase at a place that is not regular is one-time (left out of the plan, kept in history) unless counted as regular', () => {

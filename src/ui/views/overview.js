@@ -280,7 +280,6 @@
   function trendPicker(tl) {
     const picked = pickedOf(tl);
     const cls = trendColours(picked);
-    const byKey = new Map(tl.series.map(s => [s.key, s]));
     const on = new Set(picked);
     const chips = tl.series.filter(s => on.has(s.key)).map(s => {
       const key = `<span class="key key-line ${esc(cls[s.key])}" aria-hidden="true"></span>`;

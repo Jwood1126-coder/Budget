@@ -3,25 +3,15 @@
 // pairs and the edit-record audit trail. All data is invented.
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { loadEngine } = require('../load-engine.cjs');
+const H = require('../helpers/ledger.cjs');
 
-const E = loadEngine();
+const { E } = H;
 const L = E.ledger;
 const R = E.review;
 
-let seq = 0;
-function tx(date, amountCents, fields = {}) {
-  seq += 1;
-  return Object.assign({
-    id: 'r' + String(seq).padStart(4, '0'),
-    accountId: 'card',
-    date,
-    description: 'SAMPLE SHOP ' + seq,
-    amountCents,
-    kind: 'spend',
-    category: 'Groceries'
-  }, fields);
-}
+const row = H.rowMaker({ prefix: 'r', pad: 4, description: n => 'SAMPLE SHOP ' + n });
+/** A card purchase of groceries unless `fields` say otherwise. */
+const tx = (date, amountCents, fields) => row('card', date, amountCents, fields);
 
 const DEFAULT_ACCOUNTS = [
   { id: 'chk', label: 'Joint checking', type: 'checking', scope: 'joint', coverage: [{ start: '2026-01-01', end: '2026-09-30' }] },
@@ -29,9 +19,7 @@ const DEFAULT_ACCOUNTS = [
   { id: 'sav', label: 'Joint savings', type: 'savings', scope: 'joint', coverage: [{ start: '2026-01-01', end: '2026-09-30' }] }
 ];
 
-function build(transactions, accounts = DEFAULT_ACCOUNTS, extra = {}) {
-  return L.normalizeDataset(Object.assign({ schemaVersion: 2, datasetId: 'review-test', isSynthetic: true, accounts, transactions }, extra));
-}
+const build = (transactions, accounts = DEFAULT_ACCOUNTS, extra = {}) => H.dataset({ datasetId: 'review-test', accounts, transactions, ...extra });
 
 const AT = n => '2026-09-' + String(n).padStart(2, '0') + 'T12:00:00.000Z';
 

@@ -736,10 +736,12 @@ test('build needs today and the data set; settings fall back to the defaults', (
   const ds = small();
   assert.throws(() => T.build({ dataset: ds, plan: planWith() }), err => err instanceof E.ValidationError && err.field === 'today');
   assert.throws(() => T.build({ today: '2026-06-12' }), err => err instanceof E.ValidationError && err.field === 'dataset');
+  // Checked by the same rules as a saved budget (state.cleanPlanUi): a row change with a part this
+  // version does not know is left out whole, an empty one and a yes/no flag stay as saved.
   assert.deepEqual(T.settings({ horizon: 36, baselineMonths: 'all', dials: { essentials: 1.5, flexible: -4 }, rows: { a: { included: false, x: 1 }, b: {} },
     groups: { Pets: 'essentials', 'merchant:Bayside Club': 'flexible', Travel: 'sometimes' }, irregularOff: { t1: true, t2: false }, trends: { series: ['card', 'card', 'nope', 'in-p2'], ma: 4 } }),
-  { baselineMonths: 'all', horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: { flexible: -4 }, rows: { a: { included: false } }, hidden: null,
-    groups: { Pets: 'essentials', 'merchant:Bayside Club': 'flexible' }, irregularOff: { t1: true }, legacyDials: {}, cardSplit: {}, trends: { series: ['card', 'in-p2'], ma: 3, trend: true } });
+  { baselineMonths: 'all', horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: { flexible: -4 }, rows: { b: {} }, hidden: null,
+    groups: { Pets: 'essentials', 'merchant:Bayside Club': 'flexible' }, irregularOff: { t1: true, t2: false }, legacyDials: {}, cardSplit: {}, trends: { series: ['card', 'in-p2'], ma: 3, trend: true } });
   // A card or bank amount still among the dials (not yet checked by state.sanitize) waits to be carried over, and is newer.
   assert.deepEqual(T.settings({ dials: { card: 5000, essentials: 7 }, legacyDials: { card: 1, bank: 2, x: 3 }, cardSplit: { essentials: { cents: 7, card: 3 }, flexible: { cents: 1 }, card: { cents: 1, card: 1 } } }),
     Object.assign(T.settings({}), { dials: { essentials: 7 }, legacyDials: { card: 5000, bank: 2 }, cardSplit: { essentials: { cents: 7, card: 3 } } }));
@@ -1107,7 +1109,8 @@ test('series: every catalogue key is there, aligned with the months; incomplete 
   assert.ok(r.series.every(x => x.values[iFeb] === null), 'an incomplete month is unknown in every series');
   assert.deepEqual(['in-p1', 'card', 'bank', 'essentials', 'out-total', 'net', 'combined-change'].map(k => s(k)[iApr]), [200000, 16125, 120000, 136125, 136125, 63875, 63875]);
   assert.deepEqual(['in-total', 'essentials', 'flexible', 'out-total', 'net', 'to-savings', 'from-savings'].map(k => s(k)[iAug]), [200000, 150000, 95000, 245000, -45000, 0, 0]);
-  for (const k of T.SERIES.map(x => x.key)) assert.ok(E.state.TREND_SERIES.includes(k), k + ' can be saved in ui.plan.trends');
+  // Every series the chart draws (the person series too) can be chosen and saved in ui.plan.trends.
+  for (const k of r.series.map(x => x.key)) assert.ok(E.state.TREND_SERIES.includes(k), k + ' can be saved in ui.plan.trends');
 });
 
 /** A small RFC 4180 reader for the tests: rows of fields. */
@@ -1379,6 +1382,49 @@ test('row changes and dial amounts from the earlier card dial are carried over t
   assert.ok(next.meta.migrationNotes.includes(r.migration.rowsNote) && next.meta.migrationNotes.includes(r.migration.dials.note));
   assert.equal(build(next).migration, null);
   assert.equal(build(next).plan.out.card, 250000, 'the direct amounts win over the row change, as the card dial did');
+});
+
+test('pendingUpgrade names what the plan screen applies once (migrateRows, migrateDials), with the note to show; applying it twice changes nothing more', () => {
+  const ds = household();
+  const oldId = 'card-m-' + E.util.hash(['Subscriptions', 'Lumen Streaming'].join('\u0001'));
+  const { st: s0, build } = legacyRig(ds, { card: 250000 });
+  const st = E.state.setPath(s0, 'ui.plan.rows.' + oldId, { included: false });
+  const r = build(st);
+  const up = T.pendingUpgrade(r);
+  assert.deepEqual(up.steps, ['migrateRows', 'migrateDials']);
+  assert.equal(up.note, r.migration.note);
+  const next = up.apply(st);
+  assert.deepEqual(next, T.migrateDials(T.migrateRows(st, r), r), 'what the plan screen did by hand');
+  assert.deepEqual(up.apply(next), next, 'safe to run twice');
+  assert.equal(T.pendingUpgrade(build(next)), null, 'nothing left');
+  // Only one of the two waiting.
+  assert.deepEqual(T.pendingUpgrade(build(s0)).steps, ['migrateDials']);
+  const rowsOnly = E.state.setPath(E.state.defaults(null, ds), 'ui.plan.rows.' + oldId, { included: false });
+  const rr = build(rowsOnly);
+  assert.deepEqual(T.pendingUpgrade(rr).steps, ['migrateRows']);
+  assert.deepEqual(T.pendingUpgrade(rr).apply(rowsOnly), T.migrateRows(rowsOnly, rr));
+  // No timeline, or nothing waiting.
+  for (const tl of [undefined, null, {}, { migration: null }, build(E.state.defaults(null, ds))]) assert.equal(T.pendingUpgrade(tl), null);
+});
+
+test('settings: read through state.cleanPlanUi (the one ui.plan validator); its only addition is a card or bank amount still among the dials, which waits in legacyDials', () => {
+  const raw = Object.freeze({ horizon: 24, dials: Object.freeze({ card: 5000, bank: -20, essentials: 7, mystery: 1 }), legacyDials: Object.freeze({ card: 1, bank: 2 }), futureField: 1 });
+  const cfg = T.settings(raw);
+  assert.deepEqual(cfg, Object.assign(E.state.cleanPlanUi(raw), { legacyDials: { card: 5000, bank: -20 }, cardSplit: {} }), 'the dial amounts are newer and win');
+  assert.deepEqual(cfg.dials, { essentials: 7 }, 'card and bank are not dials; an unknown dial is left out');
+  assert.equal('futureField' in cfg, false, 'a key this version does not know is not read');
+  // A blank card dial or one that is not an amount is not moved; nothing waiting: legacyDials is {}.
+  assert.deepEqual(T.settings({ dials: { card: null, bank: 'x' }, legacyDials: { bank: 3 } }).legacyDials, { bank: 3 });
+  assert.deepEqual(T.settings({ dials: { essentials: 1 } }).legacyDials, {});
+  // For a saved budget (checked by sanitize) it is cleanPlanUi with legacyDials and cardSplit always present.
+  const ds = household();
+  let st = E.state.setPath(E.state.defaults(null, ds), 'ui.plan.cardSplit.essentials', { cents: 3, card: 1 });
+  st = E.state.setPath(st, 'ui.plan.legacyDials.bank', 9);
+  st = E.state.setPath(st, 'ui.plan.trends.series', ['in-p1', 'net']);
+  for (const p of [st.ui.plan, E.state.defaults(null, ds).ui.plan]) {
+    assert.deepEqual(T.settings(p), Object.assign({ legacyDials: {}, cardSplit: {} }, E.state.cleanPlanUi(p)));
+    assert.deepEqual(E.state.cleanPlanUi(p), p, 'a saved ui.plan is already clean');
+  }
 });
 
 test('a carried-over amount stays explained until it is kept or changed: per dial and once for the headline; it survives a save and a second upgrade', () => {

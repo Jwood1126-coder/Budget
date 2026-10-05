@@ -428,16 +428,16 @@ test('sanitize: an end month before the start month is cleared with a note', () 
   assert.ok(hasNote(r.notes, /p1-car\]\.endMonth: 2026-01 is before/));
 });
 
-test('sanitize: fields that are not part of the format are dropped with a note', () => {
+test('sanitize: fields that are not part of the format are kept as saved, with a note (a newer copy may have saved them)', () => {
   const raw = JSON.parse(JSON.stringify(base()));
   raw.extraTopLevel = { a: 1 };
   raw.plan.mystery = true;
   byId(raw.plan.bills, 'internet').colour = 'blue';
   const r = S.sanitize(raw, profile(), DS);
-  assert.equal('extraTopLevel' in r.state, false);
-  assert.equal('mystery' in r.state.plan, false);
-  assert.equal('colour' in byId(r.state.plan.bills, 'internet'), false);
-  for (const re of [/^extraTopLevel: not part/, /plan\.mystery: not part/, /internet\]\.colour: not part/]) assert.ok(hasNote(r.notes, re), String(re));
+  assert.deepEqual(r.state.extraTopLevel, { a: 1 });
+  assert.equal(r.state.plan.mystery, true);
+  assert.equal(byId(r.state.plan.bills, 'internet').colour, 'blue');
+  for (const re of [/^extraTopLevel: not part of this version’s saved budget format; kept as saved \(\{"a":1\}\)\.$/, /plan\.mystery: not part of this version’s saved budget format; kept as saved/, /internet\]\.colour: not part of this version’s saved budget format; kept as saved/]) assert.ok(hasNote(r.notes, re), String(re));
 });
 
 test('sanitize: a missing baseline is restored and a misplaced one moved first', () => {
@@ -2122,12 +2122,12 @@ test('Plan settings: card and bank amounts set before spending was grouped wait 
   assert.equal(bl.state.ui.plan.legacyDials, undefined);
   assert.deepEqual(bl.state.ui.plan.dials, {});
   assert.equal(bl.notes.find(n => /^ui\.plan\.dials: /.test(n)), 'ui.plan.dials: bank spending "lots" set on the plan screen was not an amount and was dropped.');
-  // A damaged legacyDials keeps its amounts only; none left: removed.
+  // A damaged legacyDials keeps its amounts only (and, as everywhere, a key this version does not know, as saved); none left: removed.
   const damaged = JSON.parse(JSON.stringify(base()));
   damaged.ui.plan.legacyDials = { card: 'x', bank: 5000, other: 1 };
   const d = S.sanitize(damaged, profile(), DS);
-  assert.deepEqual(d.state.ui.plan.legacyDials, { bank: 5000 });
-  for (const re of [/ui\.plan\.legacyDials\.card/, /ui\.plan\.legacyDials\.other: not part of the saved budget format/]) assert.ok(hasNote(d.notes, re), String(re));
+  assert.deepEqual(d.state.ui.plan.legacyDials, { bank: 5000, other: 1 });
+  for (const re of [/ui\.plan\.legacyDials\.card/, /ui\.plan\.legacyDials\.other: not part of this version’s saved budget format; kept as saved/]) assert.ok(hasNote(d.notes, re), String(re));
   damaged.ui.plan.legacyDials = 'x';
   assert.equal(S.sanitize(damaged, profile(), DS).state.ui.plan.legacyDials, undefined);
   // Written and removed through paths.
@@ -2179,15 +2179,16 @@ test('Plan settings: groups, one-time costs left out and the Trends chart are sa
   assert.throws(() => S.setPath(st, 'ui.plan.trends.ma', 4), isValidationError());
   assert.throws(() => S.setPath(st, 'ui.plan.irregularOff.' + 'x'.repeat(201), true), isValidationError(/1 to 200 characters/));
   assert.deepEqual(S.setPath(st, 'ui.plan.groups.Pets', undefined).ui.plan.groups, { 'merchant:Bayside Warehouse Club': 'essentials', 'Gas & heating': 'flexible' });
-  // A damaged copy: unknown series, groups and flags are dropped and named; the rest stays.
+  // A damaged copy: unknown series, groups and flags are dropped and named; the rest stays (a key
+  // this version does not know, trends.extra, is kept as saved).
   const raw = JSON.parse(JSON.stringify(st));
   raw.ui.plan.groups = { Pets: 'essentials', Travel: 'sometimes', '': 'flexible' };
   raw.ui.plan.irregularOff = { a1: true, a2: 'yes' };
   raw.ui.plan.trends = { series: ['card', 'weather', 'card', 7], ma: 5, extra: 1 };
   raw.ui.plan.mode = 'pie';
   const r = S.sanitize(raw, profile(), DS);
-  assert.deepEqual([r.state.ui.plan.groups, r.state.ui.plan.irregularOff, r.state.ui.plan.trends, r.state.ui.plan.mode], [{ Pets: 'essentials' }, { a1: true }, { series: ['card'], ma: 3, trend: true }, 'balance']);
-  for (const re of [/ui\.plan\.groups: dropped spending groups/, /ui\.plan\.irregularOff: dropped entries/, /ui\.plan\.trends\.series: cleaned/, /ui\.plan\.trends\.ma/, /ui\.plan\.trends\.extra: not part of the saved budget format/, /ui\.plan\.mode/]) assert.ok(hasNote(r.notes, re), String(re));
+  assert.deepEqual([r.state.ui.plan.groups, r.state.ui.plan.irregularOff, r.state.ui.plan.trends, r.state.ui.plan.mode], [{ Pets: 'essentials' }, { a1: true }, { series: ['card'], ma: 3, trend: true, extra: 1 }, 'balance']);
+  for (const re of [/ui\.plan\.groups: dropped spending groups/, /ui\.plan\.irregularOff: dropped entries/, /ui\.plan\.trends\.series: cleaned/, /ui\.plan\.trends\.ma/, /ui\.plan\.trends\.extra: not part of this version’s saved budget format; kept as saved/, /ui\.plan\.mode/]) assert.ok(hasNote(r.notes, re), String(re));
   // Saved before these existed: defaults, quietly.
   const older = JSON.parse(JSON.stringify(base()));
   delete older.ui.plan.groups; delete older.ui.plan.irregularOff; delete older.ui.plan.trends;
@@ -2257,4 +2258,251 @@ test('income streams take an optional gross pay per paycheck (whole cents, never
   st = S.setPath(st, `plan.incomes[id=${id}].grossPerPaycheckCents`, 412340);
   assert.equal(st.plan.incomes.find(i => i.id === id).grossPerPaycheckCents, 412340);
   assert.throws(() => S.setPath(st, `plan.incomes[id=${id}].grossPerPaycheckCents`, -1), isValidationError());
+});
+
+// ===================================================================== ui.plan descriptor (PLAN_UI)
+
+/** ui.plan's defaults and constants as they were written out before the descriptor table. */
+const PLAN_UI_DEFAULT_BEFORE = { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null,
+  groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true } };
+const TRENDS_DEFAULT_BEFORE = { series: ['card'], ma: 3, trend: true };
+
+test('ui.plan descriptor: the defaults derived from PLAN_UI are the ones written out before, and every field is documented', () => {
+  const fresh = S.defaults(null, DS).ui.plan;
+  assert.deepEqual(fresh, PLAN_UI_DEFAULT_BEFORE);
+  assert.deepEqual(Object.keys(fresh), Object.keys(PLAN_UI_DEFAULT_BEFORE), 'in the same order');
+  assert.deepEqual(base().ui.plan, PLAN_UI_DEFAULT_BEFORE);
+  for (const empty of [undefined, null, {}, 'x', []]) assert.deepEqual(S.cleanPlanUi(empty), PLAN_UI_DEFAULT_BEFORE, JSON.stringify(empty));
+  assert.deepEqual(S.cleanPlanUi({ trends: 'x' }).trends, TRENDS_DEFAULT_BEFORE);
+  assert.deepEqual(S.cleanPlanUi({ trends: {} }).trends, TRENDS_DEFAULT_BEFORE);
+  // The defaults are copies: changing one budget's never changes the next one's.
+  fresh.trends.series.push('bank');
+  fresh.dials.p1 = 1;
+  assert.deepEqual(S.defaults(null, DS).ui.plan, PLAN_UI_DEFAULT_BEFORE);
+  // One row per field, in the saved order; optional fields have no default.
+  assert.deepEqual(S.PLAN_UI.map(d => d.name), ['baselineMonths', 'horizon', 'past', 'mode', 'coverFromSavings', 'dials', 'rows', 'hidden', 'groups', 'irregularOff', 'trends', 'legacyDials', 'cardSplit']);
+  for (const d of S.PLAN_UI) {
+    assert.deepEqual(d.default, d.optional ? undefined : PLAN_UI_DEFAULT_BEFORE[d.name], d.name);
+    assert.equal(d.optional, d.name === 'legacyDials' || d.name === 'cardSplit', d.name);
+    assert.ok(typeof d.doc === 'string' && d.doc.length > 10, d.name + ' says what it holds');
+  }
+  // The timeline's exported defaults and choices are the same facts (one list each, plan-settings.js).
+  assert.deepEqual(Object.assign({}, E.timeline.DEFAULTS), { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(E.timeline.TREND_DEFAULTS)), TRENDS_DEFAULT_BEFORE);
+  assert.deepEqual([E.timeline.BASELINE_CHOICES, E.timeline.HORIZONS, E.timeline.PAST_CHOICES, E.timeline.MODES, E.timeline.TREND_MA],
+    [[3, 6, 12, 'all'], [6, 12, 24, 60], [6, 12, 'all'], ['balance', 'flows', 'trends'], [0, 3, 6]]);
+  // Every field is named in docs/ARCHITECTURE.md §7 (adding a field = a row in PLAN_UI + a line there).
+  const doc = fs.readFileSync(path.join(__dirname, '..', '..', 'docs', 'ARCHITECTURE.md'), 'utf8');
+  const section7 = doc.slice(doc.indexOf('## 7. Saved state'), doc.indexOf('## 8. Module APIs'));
+  for (const d of S.PLAN_UI) assert.match(section7, new RegExp('\\b' + d.name + (d.optional ? '\\?' : '') + ':'), d.name + ' is documented in §7');
+});
+
+test('plan vocabulary: one list each, shared by state and timeline, with the values written out before', () => {
+  const T = E.timeline;
+  const before = {
+    DIAL_KEYS: ['p1', 'p2', 'inOther', 'essentials', 'flexible', 'irregular', 'savings', 'other'],
+    RETIRED_DIALS: ['card', 'bank'],
+    SPEND_GROUPS: ['essentials', 'flexible'],
+    SPEND_DIALS: ['essentials', 'flexible', 'irregular'],
+    CHANGE_KINDS: ['oneTime', 'monthly'],
+    CHANGE_GROUPS: ['income', 'essentials', 'flexible', 'irregular', 'savings'],
+    TREND_SERIES: ['in-p1', 'in-p2', 'in-other', 'in-total', 'card', 'bank', 'essentials', 'flexible', 'irregular', 'other-out', 'out-total', 'to-savings', 'from-savings', 'net', 'combined-change']
+  };
+  for (const [k, v] of Object.entries(before)) {
+    assert.deepEqual(S[k], v, k);
+    assert.equal(S[k], E.planSettings[k], k + ' is the shared list');
+    assert.ok(Object.isFrozen(S[k]), k + ' cannot be changed by accident');
+  }
+  for (const k of ['SPEND_GROUPS', 'SPEND_DIALS', 'CHANGE_KINDS', 'CHANGE_GROUPS', 'SERIES']) assert.equal(T[k], E.planSettings[k], 'timeline.' + k);
+  assert.equal(T.LEGACY_DIALS, S.RETIRED_DIALS);
+  assert.deepEqual(T.SERIES.map(s => s.key), before.TREND_SERIES.slice(2));
+});
+
+// Each ui.plan field written through setPath: [path under ui.plan, accepted [value, stored], refused values].
+// These are the answers the paths gave before the SCHEMA's ui.plan children were derived from PLAN_UI.
+const PLAN_UI_PATHS = [
+  ['baselineMonths', [[3, 3], ['all', 'all'], ['6', 6]], [5, 'some', null, 12.5]],
+  ['horizon', [[6, 6], [60, 60], ['24', 24]], [36, 0, null]],
+  ['past', [[6, 6], [12, 12], ['all', 'all']], [24, 'some', null]],
+  ['mode', [['balance', 'balance'], ['flows', 'flows'], ['trends', 'trends']], ['chart', '', null]],
+  ['coverFromSavings', [[false, false], [true, true], ['false', false]], ['maybe', 0, null]],
+  ['dials', [[{ essentials: 5, savings: -1 }, { essentials: 5, savings: -1 }]], [{ card: 5 }, { essentials: 0.5 }, 'x']],
+  ['dials.essentials', [[234567, 234567], [-123648, -123648], [0, 0], [null, null]], [1.5, '5', 1e12, {}]],
+  ['dials.p2', [[1, 1]], []],
+  ['dials.card', [], [1000]],
+  ['dials.mystery', [], [1000]],
+  ['rows.essentials-m-x1y2', [[{ included: false }, { included: false }], [{ cents: -250 }, { cents: -250 }], [{ included: true, cents: 5 }, { included: true, cents: 5 }], [{}, {}]], [{ included: 'no' }, { cents: 0.5 }, 'x', null]],
+  ['hidden', [[['p2', 'combined'], ['p2', 'combined']], [[], []], [null, null]], [['ok', 'not ok!'], 'p1', [1]]],
+  ['groups.Pets', [['essentials', 'essentials'], ['flexible', 'flexible']], ['sometimes', null, true]],
+  ['groups.merchant:Bayside Warehouse Club', [['essentials', 'essentials']], []],
+  ['groups.' + 'g'.repeat(120), [['flexible', 'flexible']], []],
+  ['groups.' + 'g'.repeat(121), [], ['flexible']],
+  ['irregularOff.tx-abc123', [[true, true], [false, false], ['true', true]], ['yes', null]],
+  ['irregularOff.' + 't'.repeat(200), [[true, true]], []],
+  ['irregularOff.' + 't'.repeat(201), [], [true]],
+  ['trends', [[{ series: ['bank'], ma: 0, trend: false }, { series: ['bank'], ma: 0, trend: false }]], [{ series: ['weather'] }, 'x']],
+  ['trends.series', [[['essentials', 'in-p2', 'combined-change'], ['essentials', 'in-p2', 'combined-change']], [[], []]], [['card', 'weather'], ['card', 'card'], 'card', null]],
+  ['trends.ma', [[0, 0], ['6', 6]], [4, null]],
+  ['trends.trend', [[false, false]], ['x', null]],
+  ['trends.other', [], [1]],
+  ['legacyDials.card', [[420000, 420000], [-1500, -1500]], [1.5, null]],
+  ['legacyDials.other', [], [1]],
+  ['cardSplit.essentials', [[{ cents: 320000, card: 120000, fromCard: 420000 }, { cents: 320000, card: 120000, fromCard: 420000 }], [{ cents: -500, card: -500 }, { cents: -500, card: -500 }]],
+    [{ cents: 1 }, { cents: 1, card: 0.5 }, { cents: 1, card: 1, fromBank: 'x' }]],
+  ['cardSplit.card', [], [{ cents: 1, card: 1 }]],
+  ['futureField', [], [1]],
+  ['home', [], [{}]]
+];
+
+test('ui.plan paths: every field accepts and refuses the same values through setPath, and reads back through getPath', () => {
+  const st = deepFreeze(base());
+  for (const [p, accepted, refused] of PLAN_UI_PATHS) {
+    for (const [value, stored] of accepted) {
+      const next = S.setPath(st, 'ui.plan.' + p, value);
+      assert.deepEqual(S.getPath(next, 'ui.plan.' + p), stored, p + ' = ' + JSON.stringify(value));
+    }
+    for (const value of refused) assert.throws(() => S.setPath(st, 'ui.plan.' + p, value), isValidationError(), p + ' refuses ' + JSON.stringify(value));
+  }
+  // The messages that name what is allowed.
+  assert.throws(() => S.setPath(st, 'ui.plan.dials.card', 1000), isValidationError(/^Plan amounts can be set for: p1, p2, inOther, essentials, flexible, irregular, savings, other\. Card and bank spending are worked out/));
+  assert.throws(() => S.setPath(st, 'ui.plan.cardSplit.card', { cents: 1, card: 1 }), isValidationError(/^A card part can be kept for: essentials, flexible, irregular\.$/));
+  assert.throws(() => S.setPath(st, 'ui.plan.groups.' + 'g'.repeat(121), 'flexible'), isValidationError(/1 to 120 characters/));
+  assert.throws(() => S.setPath(st, 'ui.plan.futureField', 1), isValidationError(/no field "ui\.plan\.futureField"/));
+  // Optional fields and map entries are removed by writing undefined.
+  const full = S.setPath(S.setPath(S.setPath(st, 'ui.plan.legacyDials.card', 1), 'ui.plan.cardSplit.flexible', { cents: 2, card: 1 }), 'ui.plan.dials.p1', 3);
+  assert.equal('legacyDials' in S.setPath(full, 'ui.plan.legacyDials', undefined).ui.plan, false);
+  assert.deepEqual(S.setPath(full, 'ui.plan.cardSplit.flexible', undefined).ui.plan.cardSplit, {});
+  assert.deepEqual(S.setPath(full, 'ui.plan.dials.p1', undefined).ui.plan.dials, {});
+  // A map holds up to its limit.
+  let many = st;
+  for (const k of S.DIAL_KEYS) many = S.setPath(many, 'ui.plan.dials.' + k, 1);
+  assert.equal(Object.keys(many.ui.plan.dials).length, S.DIAL_KEYS.length);
+});
+
+// ===================================================================== upgrades inside version 5
+
+/** A saved budget from before both upgrades: the earlier Home settings, and a card dial in ui.plan. */
+function beforeUpgrades() {
+  const raw = JSON.parse(JSON.stringify(base()));
+  raw.ui.home = { p1InCents: 300000, savedCents: 2500, cardCents: 88000, bankCents: null, outCents: 450000, baselineMonths: 6, horizon: 24 };
+  raw.ui.plan.dials = { bank: -1500 };
+  return raw;
+}
+
+test('V5 upgrades: a registry run in order by sanitize; each entry runs once, and running again gives the same budget and no new notes', () => {
+  assert.deepEqual(S.V5_UPGRADES.map(u => u.id), ['ui.home', 'ui.plan.dials.card-bank']);
+  for (const u of S.V5_UPGRADES) assert.deepEqual(Object.keys(u).sort(), ['applies', 'apply', 'id']);
+  const raw = deepFreeze(beforeUpgrades());
+  const once = S.upgrade(raw);
+  assert.deepEqual(once.applied, ['ui.home', 'ui.plan.dials.card-bank']);
+  assert.equal(once.raw.ui.home, undefined);
+  assert.deepEqual(once.raw.ui.plan.dials, { p1: 300000, savings: 2500 });
+  assert.deepEqual(once.raw.ui.plan.legacyDials, { card: 88000, bank: -1500 }, 'the Home card amount and the bank dial both wait');
+  // The same notes, word for word, as sanitize gave before the registry existed.
+  assert.deepEqual(once.notes, [
+    'ui.home: the Home settings moved to the plan screen (ui.plan): p1 $3,000.00, card $880.00, savings $25.00. Not carried over: the earlier single spending amount ($4,500.00): spending is now planned as essentials, flexible and irregular.',
+    'ui.plan.dials: card spending $880.00 and bank spending −$15.00 set on the plan screen will be carried over to essentials, flexible and irregular spending the next time Plan opens (card and bank spending are now worked out from those).'
+  ]);
+  // Twice: nothing applies the second time, so the result and the notes are the same.
+  const twice = S.upgrade(once.raw);
+  assert.deepEqual(twice, { raw: once.raw, notes: [], applied: [] });
+  // Each entry alone: after it ran, it no longer applies (safe to run twice), and it left a note.
+  for (const u of S.V5_UPGRADES) {
+    let r = raw;
+    if (u.id !== 'ui.home') r = S.V5_UPGRADES[0].apply(r).raw;
+    assert.equal(u.applies(r), true, u.id);
+    const a = u.apply(r);
+    assert.ok(typeof a.note === 'string' && a.note.length, u.id + ' leaves a note');
+    assert.equal(u.applies(a.raw), false, u.id + ' does not apply twice');
+    assert.notEqual(a.raw, r, u.id + ' returns a new budget');
+  }
+  // Through sanitize: once and twice, the same budget; each note recorded in meta once.
+  const first = S.sanitize(raw, profile(), DS);
+  for (const n of once.notes) {
+    assert.ok(first.notes.includes(n), 'a note to show');
+    assert.equal(first.state.meta.migrationNotes.filter(x => x === n).length, 1, 'recorded once');
+  }
+  const second = S.sanitize(first.state, profile(), DS);
+  assert.deepEqual(second.state, first.state);
+  assert.deepEqual(second.notes, []);
+  // A blank retired dial is removed without a note; nothing earlier: nothing applies; never throws.
+  const blank = JSON.parse(JSON.stringify(base()));
+  blank.ui.plan.dials = { card: null, p1: 1 };
+  const b = S.upgrade(blank);
+  assert.deepEqual([b.applied, b.notes, b.raw.ui.plan.dials], [['ui.plan.dials.card-bank'], [], { p1: 1 }]);
+  assert.deepEqual(S.upgrade(base()).applied, []);
+  for (const odd of [null, 1, 'x', [], {}, { ui: 'x' }, { ui: { plan: 'x' } }, { ui: { plan: { dials: 'x' } } }]) assert.deepEqual(S.upgrade(odd).applied, [], JSON.stringify(odd));
+  assert.deepEqual(S.upgrade({ ui: { home: 'x' } }).notes, ['ui.home: the earlier Home settings were not readable ("x"); dropped.']);
+});
+
+// ===================================================================== forward compatibility
+
+test('forward compatibility: keys a newer copy of the app saved survive loading, the save on opening, edits, reloading and a workbook', () => {
+  const raw = JSON.parse(JSON.stringify(S.setPath(base(), 'ui.plan.dials.essentials', 5000)));
+  raw.ui.plan.futureField = { nested: [1, 2], on: true };
+  raw.futureSection = { a: 'b' };
+  raw.ui.plan.trends.smoothing = 'loess';
+  raw.ui.futureView = 'grid';
+  byId(raw.plan.bills, 'internet').futureFlag = true;
+  raw.meta.futureMeta = 1;
+  const key = S.storageKey('sample');
+  const storage = memoryStorage({ [key]: JSON.stringify(raw) });
+  const first = S.loadFromStorage(storage, 'sample', profile(), DS);
+  assert.equal(first.source, 'v5');
+  const kept = st => [st.ui.plan.futureField, st.futureSection, st.ui.plan.trends.smoothing, st.ui.futureView, byId(st.plan.bills, 'internet').futureFlag, st.meta.futureMeta];
+  const KEPT = [{ nested: [1, 2], on: true }, { a: 'b' }, 'loess', 'grid', true, 1];
+  assert.deepEqual(kept(first.state), KEPT);
+  assert.equal(first.state.ui.plan.dials.essentials, 5000, 'the rest reads as usual');
+  // One summary line first, then one line per key.
+  assert.equal(first.notes[0], 'This budget has 6 settings this version of the app does not use (meta.futureMeta, plan.bills[id=internet].futureFlag, ui.plan.trends.smoothing, ...), probably saved by a newer copy of the app; they are kept as saved.');
+  for (const p of ['ui.plan.futureField', 'futureSection', 'ui.plan.trends.smoothing', 'ui.futureView', 'plan.bills[id=internet].futureFlag', 'meta.futureMeta']) {
+    assert.ok(first.notes.some(n => n.startsWith(p + ': not part of this version’s saved budget format; kept as saved (')), p);
+  }
+  assert.equal(first.notes.filter(n => /kept as saved/.test(n)).length, 7, 'the summary and one line per key');
+  // What boot() does: save at once. Then reload: nothing lost, and the state reads the same.
+  assert.equal(S.saveToStorage(storage, first.state).ok, true);
+  const stored = JSON.parse(storage.getItem(key));
+  assert.deepEqual(kept(stored), KEPT);
+  const second = S.loadFromStorage(storage, 'sample', profile(), DS);
+  assert.deepEqual(second.state, first.state);
+  // An edit on the plan screen (path-copying writes), a scenario change and a list edit keep them too.
+  let edited = E.timeline.setDial(second.state, 'flexible', 100);
+  edited = S.addScenario(edited, 'Trial', { now: NOW });
+  edited = S.addItem(edited, 'changes', { label: 'Crib', kind: 'oneTime', group: 'irregular', startMonth: '2027-07', cents: 35000 });
+  assert.equal(S.saveToStorage(storage, edited).ok, true);
+  const third = S.loadFromStorage(storage, 'sample', profile(), DS);
+  assert.deepEqual(kept(third.state), KEPT);
+  assert.equal(third.state.ui.plan.dials.flexible, 100);
+  // Through a workbook export and import.
+  const wb = S.importWorkbook(S.exportWorkbook(third.state, { now: NOW }), profile(), DS);
+  assert.deepEqual(kept(wb.state), KEPT);
+  assert.ok(wb.notes.some(n => /saved by a newer copy of the app/.test(n)));
+  // The plan screen reads only what it knows; a budget with nothing unknown gets no such note.
+  assert.equal('futureField' in E.timeline.settings(third.state.ui.plan), false);
+  assert.equal('futureField' in S.cleanPlanUi(third.state.ui.plan), false);
+  assert.equal(S.sanitize(base(), profile(), DS).notes.some(n => /newer copy/.test(n)), false);
+  // Writes are as strict as before: a field this version does not know cannot be set.
+  assert.throws(() => S.setPath(third.state, 'ui.plan.futureField', 2), isValidationError(/no field/));
+});
+
+test('forward compatibility: a key that cannot be kept ("__proto__") is dropped and named; the household profile’s unknown keys never reach the budget', () => {
+  const text = JSON.stringify(base()).replace(/^\{/, '{"__proto__":{"polluted":true},').replace('"plan":{"baselineMonths"', '"plan":{"__proto__":{"polluted":true},"baselineMonths"');
+  const r = S.sanitize(text, profile(), DS);
+  assert.equal(Object.getPrototypeOf(r.state), Object.prototype);
+  assert.equal(Object.getPrototypeOf(r.state.ui.plan), Object.prototype);
+  assert.equal(r.state.polluted, undefined);
+  assert.equal({}.polluted, undefined);
+  assert.ok(hasNote(r.notes, /^__proto__: not part of the saved budget format; dropped/));
+  assert.ok(hasNote(r.notes, /^ui\.plan\.__proto__: not part of the saved budget format; dropped/));
+  assert.equal(r.notes.some(n => /newer copy/.test(n)), false);
+  // The profile is not a saved budget: its extra keys are left out of the defaults, quietly.
+  const prof = profile();
+  prof.plan.bills[0].privateMemo = 'x';
+  prof.plan.extraSection = 1;
+  const d = S.defaults(prof, DS);
+  assert.equal('privateMemo' in d.plan.bills[0], false);
+  assert.equal('extraSection' in d.plan, false);
+  const fromProfile = JSON.parse(JSON.stringify(base()));
+  delete fromProfile.plan;
+  assert.equal(S.sanitize(fromProfile, prof, DS).notes.some(n => /kept as saved/.test(n)), false);
 });

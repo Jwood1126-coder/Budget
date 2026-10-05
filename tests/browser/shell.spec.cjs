@@ -2,11 +2,7 @@
 // Shell and navigation checks in a real browser (the Plan screen has its own spec: plan.spec.cjs).
 const VIEWS = ['overview', 'spending', 'budget', 'forecast', 'review', 'data'];
 
-async function noHorizontalScroll(page) {
-  // Compare with the configured viewport: under mobile emulation innerWidth grows with overflow.
-  const width = page.viewportSize().width;
-  return page.evaluate(w => document.scrollingElement.scrollWidth <= w + 1, width);
-}
+const { noHorizontalScroll } = require('./helpers.cjs');
 
 module.exports = [
   {
@@ -20,6 +16,7 @@ module.exports = [
         await t.page.waitForSelector('#page-title');
         // aria-current is set by the render that follows the route change; wait for it rather than racing it.
         await t.page.waitForFunction(v => { const as = [...document.querySelectorAll(`.mainnav a[data-nav="${v}"]`)]; return as.length >= 1 && as.every(a => a.getAttribute('aria-current') === 'page'); }, view);
+        await t.settled();
         const focused = await t.page.evaluate(() => document.activeElement && document.activeElement.id);
         t.assert.equal(focused, 'page-title', 'heading receives focus after navigating to ' + view);
         t.assert.ok(await noHorizontalScroll(t.page), 'no horizontal page scroll on ' + view);

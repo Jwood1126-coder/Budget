@@ -11,13 +11,7 @@ const TITLES = {
 
 /** No sideways page scroll. Also catches mobile emulation zooming out to fit wide content
  *  (then innerWidth grows past the device width and scrollWidth alone looks fine). */
-async function noHorizontalScroll(page) {
-  return page.evaluate(() => {
-    const cw = document.documentElement.clientWidth;
-    return document.scrollingElement.scrollWidth <= cw + 1 && window.innerWidth <= cw + 1;
-  });
-}
-const state = page => page.evaluate(() => window.HouseholdBudget.getState());
+const { noHorizontalScroll, state, money: fmtMoney, cents } = require('./helpers.cjs');
 /** Ledger totals for one month, computed by the engine from the app's current effective rows. */
 const monthSummary = (page, month) => page.evaluate(m => {
   const ctx = window.HouseholdBudget.context();
@@ -53,13 +47,6 @@ async function openQueue(t, queue, extra = '') {
   await t.page.waitForSelector('.rv');
 }
 /** Money text like "$1,234.56" or "−$12.00" → integer cents. */
-function cents(text) {
-  const m = String(text).match(/([−-])?\$([\d,]+\.\d{2})/);
-  if (!m) throw new Error('No amount in: ' + text);
-  const v = Math.round(Number(m[2].replace(/,/g, '')) * 100);
-  return m[1] ? -v : v;
-}
-const fmtMoney = c => '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 /** When the real Spending view is built in (not a developer stub), it shows this amount. */
 async function spendingShows(t, hash, amountCents) {
   await t.page.goto(t.url + hash);

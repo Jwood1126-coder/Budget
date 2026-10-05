@@ -240,6 +240,17 @@
     };
     const lastDataMonth = d.months.length ? d.months[d.months.length - 1] : null;
     const forecastStart = lastDataMonth ? E.months.add(lastDataMonth, 1) : todayMonth();
+    // Starting cash is decided in one place: E.timeline.anchors (balances entered per account,
+    // then balances supplied with the data, then the export's running balance, else the single
+    // joint cash figure). The Plan page draws from it; cashPlan() hands the same figure to every
+    // projection, and balanceKnown() to every "is a balance known" check. Both once per derive.
+    const anchors = () => memo('anchors', () => E.timeline.anchors(st.plan, app.dataset, d.txns));
+    const cashPlan = () => memo('cash-plan', () => {
+      let start;
+      try { start = anchors().combined; } catch (err) { console.error(err); return st.plan; }
+      return Object.assign({}, st.plan, { balances: Object.assign({}, st.plan.balances, { jointCashCents: start ? start.cents : null, asOf: start ? start.asOf : null }) });
+    });
+    const balanceKnown = () => { const b = cashPlan().balances; return !!b && E.money.isCents(b.jointCashCents); };
     const ctx = {
       E, UI, app, route,
       build: app.build, profile: app.profile, dataset: app.dataset, state: st,
@@ -252,20 +263,24 @@
       href: UI.router.href,
       forecastStart,
       memo,
+      /** E.timeline.anchors for the saved plan and the real (decided) transactions. */
+      anchors,
+      /** The plan with balances.jointCashCents/asOf = anchors().combined (null when nothing is known). */
+      cashPlan,
       /** Plan summary for the current (or given) scope. */
       plan: (opts = {}) => memo('plan:' + JSON.stringify(opts), () => {
         const timing = opts.timing || st.plan.settings.incomeTiming;
         // The plan describes a reference month (the first forecast month): incomes and bills that
         // have ended or not started are left out, and actual paydays are counted for that month.
         const month = opts.month || forecastStart;
-        return E.plan.monthly(st.plan, { scope: opts.scope || st.ui.scope, timing, month });
+        return E.plan.monthly(st.plan, { scope: opts.scope || st.ui.scope, timing, month, balanceKnown: balanceKnown() });
       }),
-      /** Projection for a scenario id over the given horizon. */
+      /** Projection for a scenario id over the given horizon, starting from cashPlan()'s cash. */
       project: (scenarioId, opts = {}) => memo('proj:' + scenarioId + JSON.stringify(opts), () => {
         const scenario = st.scenarios.find(s => s.id === scenarioId) || st.scenarios[0];
-        return E.forecast.project(st.plan, scenario, { startMonth: opts.startMonth || forecastStart, months: opts.months || 24, scope: opts.scope || st.ui.scope });
+        return E.forecast.project(cashPlan(), scenario, { startMonth: opts.startMonth || forecastStart, months: opts.months || 24, scope: opts.scope || st.ui.scope });
       }),
-      attention: () => memo('attention', () => (E.attention ? E.attention.list({ dataset: app.dataset, txns: d.txns, state: st, ctx }) : [])),
+      attention: () => memo('attention', () => (E.attention ? E.attention.list({ dataset: app.dataset, txns: d.txns, state: st, ctx, balanceKnown: balanceKnown() }) : [])),
       reviewQueues: () => memo('queues', () => E.review.queues(app.dataset, d.txns, st.ledgerEdits)),
     };
     return ctx;
@@ -356,8 +371,9 @@
 
   function scheduleRender(opts) {
     clearTimeout(app.renderTimer);
+    app.renderPending = true; // until the scheduled render runs (the browser tests' t.settled() reads it)
     // setTimeout (not a microtask) so a Tab keypress finishes moving focus before we re-render.
-    app.renderTimer = setTimeout(() => render(opts), 0);
+    app.renderTimer = setTimeout(() => { app.renderPending = false; render(opts); }, 0);
   }
 
   function householdName() {
@@ -896,7 +912,7 @@
     }
   }
 
-  Object.assign(app, { update, undo, replaceState, readUnreadableCopy, forgetUnreadableCopy, unreadableKey, render: scheduleRender, renderNow: render, navigate, toast, confirm: confirmDialog, readFile, download, useLoadedDataset, useLoadedProfile, forgetLoadedFiles, derive, save, keys: { LOADED_DATASET_KEY, LOADED_PROFILE_KEY } });
+  Object.assign(app, { renderPending: false, update, undo, replaceState, readUnreadableCopy, forgetUnreadableCopy, unreadableKey, render: scheduleRender, renderNow: render, navigate, toast, confirm: confirmDialog, readFile, download, useLoadedDataset, useLoadedProfile, forgetLoadedFiles, derive, save, keys: { LOADED_DATASET_KEY, LOADED_PROFILE_KEY } });
   UI.app = app;
 
   // Test and debugging handle. Read-only snapshots; changes go through the UI or setState.

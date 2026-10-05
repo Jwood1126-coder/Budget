@@ -13,10 +13,9 @@ const GROCERIES = 'input[data-bind="plan.targets.Groceries"]';
 const FUEL = 'input[data-bind="plan.targets.Fuel"]';
 const XSS = '<img src=x onerror=alert(1)>';
 
-const state = page => page.evaluate(() => window.HouseholdBudget.getState());
+const { noHorizontalScroll, state } = require('./helpers.cjs');
+
 const text = (page, sel) => page.$eval(sel, el => el.textContent.replace(/\s+/g, ' ').trim());
-/** Compare with the configured viewport: under mobile emulation innerWidth grows with overflow. */
-const noHorizontalScroll = page => page.evaluate(w => document.scrollingElement.scrollWidth <= w + 1, page.viewportSize().width);
 
 /** Wait until the page shows the current plan and scope. */
 function settled(page) {
@@ -590,6 +589,59 @@ module.exports = [
       // the Plan page shows; the single joint-cash input only appears while no account balance is known.
       t.assert.match(await t.page.textContent('#bud-cash-card'), /Forecasts start from the account balances on the Plan page: \$73,965\.80 as of Sep 30, 2026/);
       t.assert.equal(await t.page.$('#bud-cash'), null, 'no single joint-cash input when account balances are known');
+    },
+  },
+  {
+    name: 'starting cash: goal projections and missing inputs read the balance the Plan page shows',
+    async run(t) {
+      await openSection(t, 'savings');
+      // Plan's combined anchor, Budget's projection (goal statuses) and Forecast's start, all in the page.
+      const starts = () => t.page.evaluate(() => {
+        const H = window.HouseholdBudget, ctx = H.context();
+        const anc = H.engine.timeline.anchors(ctx.state.plan, ctx.dataset, ctx.realTxns);
+        const proj = ctx.project(ctx.state.scenarios[0].id, { months: 60 });
+        return {
+          plan: anc.combined ? anc.combined.cents : null, asOf: anc.combined ? anc.combined.asOf : null,
+          budget: proj.startBalanceCents, cashPlan: ctx.cashPlan().balances.jointCashCents,
+          goals: Object.fromEntries(proj.goals.map(g => [g.id, g.status])),
+          missing: ctx.plan().missing.map(m => m.id), attention: ctx.attention().map(a => a.id),
+        };
+      });
+      const goalBadges = () => t.page.$$eval('.bud-goal', els => Object.fromEntries(els.map(e => [e.id, e.querySelector('.bud-badges').textContent.replace(/\s+/g, ' ').trim()])));
+      const BADGE = { funded: /On track/, short: /Short by/, unknown_start: /Starting amount unknown/, missing_amount: /Monthly amount not set/ };
+      const fidOf = id => t.page.evaluate(g => window.BudgetUI.dom.domId('bud-goal', g), id);
+
+      // The sample: a running balance on checking, a savings balance entered on the Plan page.
+      let s = await starts();
+      t.assert.equal(s.plan, 7396580);
+      t.assert.equal(s.budget, s.plan, 'Budget projections start from the Plan page balance');
+      t.assert.equal(s.cashPlan, s.plan);
+      const badges = await goalBadges();
+      for (const [id, status] of Object.entries(s.goals)) if (BADGE[status]) t.assert.match(badges[await fidOf(id)], BADGE[status], id);
+
+      // Nothing entered at all: the bank's running balance still carries a known balance.
+      await t.page.evaluate(() => {
+        const st = window.HouseholdBudget.getState();
+        st.plan.balances = { ...st.plan.balances, jointCashCents: null, asOf: null, accounts: {}, accountDates: {} };
+        window.HouseholdBudget.setState(st);
+      });
+      await settled(t.page);
+      s = await starts();
+      t.assert.equal(s.plan, 6990114, 'checking only, from the bank data');
+      t.assert.equal(s.budget, s.plan);
+      t.assert.equal(s.cashPlan, s.plan);
+      t.assert.ok(!s.missing.includes('jointCash'), 'the plan does not list the balance as missing: ' + s.missing.join(', '));
+      t.assert.ok(!s.attention.includes('balance'), 'no "Enter today’s balances" item: ' + s.attention.join(', '));
+      t.assert.match(await text(t.page, '#bud-cash-card'), /Forecasts start from the account balances on the Plan page: \$69,901\.14 as of Sep 30, 2026/);
+      const summary = await text(t.page, '.bud-summary');
+      t.assert.doesNotMatch(summary, /Joint cash balance not entered/);
+      t.assert.doesNotMatch(summary, /Enter today/);
+      // Review's missing information reads the same plan and attention list.
+      await t.open('#/review', { clear: false });
+      await t.page.waitForSelector('#rv-missing');
+      const review = await text(t.page, '#rv-missing');
+      t.assert.doesNotMatch(review, /Joint cash balance not entered/);
+      t.assert.doesNotMatch(review, /Enter today/);
     },
   },
   {

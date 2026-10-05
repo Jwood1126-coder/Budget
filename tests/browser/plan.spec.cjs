@@ -3,11 +3,7 @@
 // headline, planned changes, Trends and the CSV export. Synthetic sample only.
 const fs = require('node:fs');
 
-async function noHorizontalScroll(page) {
-  // Compare with the configured viewport: under mobile emulation innerWidth grows with overflow.
-  const width = page.viewportSize().width;
-  return page.evaluate(w => document.scrollingElement.scrollWidth <= w + 1, width);
-}
+const { noHorizontalScroll, state, whole, amt, signedAmt, boxText, centsOf } = require('./helpers.cjs');
 
 /** The engine's model for the current state, built the way the page builds it (real local today). */
 function timeline(page) {
@@ -32,16 +28,7 @@ function timeline(page) {
     };
   });
 }
-const state = page => page.evaluate(() => window.HouseholdBudget.getState());
 const dialOf = (exp, key) => exp.dials.find(d => d.key === key);
-/** Whole dollars as the chart shows them: $1,234 and −$1,234. */
-const whole = cents => (cents < 0 ? '−$' : '$') + Math.round(Math.abs(cents) / 100).toLocaleString('en-US');
-/** Dollars with cents only when there are any, as the dials and the headline show them. */
-const amt = cents => (cents < 0 ? '−$' : '$') + (Math.abs(cents) % 100 ? (Math.abs(cents) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : Math.round(Math.abs(cents) / 100).toLocaleString('en-US'));
-const signedAmt = cents => (cents > 0 ? '+' : '') + amt(cents);
-/** What an exact-entry box holds: 2,222.02 / -1,236.48 / 250. */
-const boxText = cents => (cents < 0 ? '-' : '') + Math.floor(Math.abs(cents) / 100).toLocaleString('en-US') + (Math.abs(cents) % 100 ? '.' + String(Math.abs(cents) % 100).padStart(2, '0') : '');
-const centsOf = text => { const m = /(−|-)?\$([\d,]+(?:\.\d\d)?)/.exec(text); return m ? (m[1] ? -1 : 1) * Math.round(Number(m[2].replace(/,/g, '')) * 100) : null; };
 const near = (a, b, tol) => Math.abs(a - b) <= tol;
 
 async function typeAmount(page, sel, text) {

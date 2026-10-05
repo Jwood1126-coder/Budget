@@ -29,7 +29,21 @@
     return plural(assumedPerMonth(s), noun) + ' a month';
   }
 
-  function planItems(state) {
+  /**
+   * Whether a starting cash balance is known. The caller passes it when it has worked it out
+   * (the app reads it through E.timeline.anchors, the accessor the Plan page and every projection
+   * use); otherwise the same accessor is asked here, so a balance that comes with the data (a
+   * statement, the bank's figure or the export's running balance) counts as known too.
+   */
+  function balanceIsKnown(state, dataset, txns, given) {
+    if (typeof given === 'boolean') return given;
+    const plan = state.plan;
+    if (E.timeline && typeof E.timeline.anchors === 'function') return !!E.timeline.anchors(plan, dataset, txns).combined;
+    const b = plan.balances || {};
+    return E.money.isCents(b.jointCashCents) || (!!b.accounts && Object.values(b.accounts).some(v => E.money.isCents(v)));
+  }
+
+  function planItems(state, balanceKnown) {
     const items = [];
     const plan = state.plan;
     const name = id => (plan.people || []).find(p => p.id === id)?.name || (id === 'joint' ? 'Joint' : 'Someone');
@@ -76,8 +90,7 @@
         items.push({ id: 'escrow-' + d.id, severity: 'info', title: `Does the ${d.label} payment include taxes and insurance?`, detail: 'If it does not, property tax and home insurance need their own budget lines.', route: '#/budget?section=debts', cta: 'Answer' });
       }
     }
-    const anyAccountBalance = plan.balances && plan.balances.accounts && Object.values(plan.balances.accounts).some(v => Number.isInteger(v));
-    if (plan.balances && plan.balances.jointCashCents === null && !anyAccountBalance) {
+    if (!balanceKnown) {
       items.push({ id: 'balance', severity: 'decision', title: 'Enter today’s balances', detail: 'Bank exports do not include balances. Until you add them on the Plan page, the chart shows money in and out, not how much you will have.', route: '#/overview', cta: 'Add balances' });
     }
     for (const g of plan.savings || []) {
@@ -164,11 +177,15 @@
     return items;
   }
 
-  function list({ dataset, txns, state, ctx } = {}) {
+  /**
+   * @param {{ dataset?, txns?, state, ctx?, balanceKnown?: boolean }} input balanceKnown: whether a
+   *   starting cash balance is known (see balanceIsKnown); worked out from the data when omitted.
+   */
+  function list({ dataset, txns, state, ctx, balanceKnown } = {}) {
     const items = [];
     const safe = (fn) => { try { items.push(...fn()); } catch (err) { items.push({ id: 'err-' + items.length, severity: 'info', title: 'Part of this list could not be calculated', detail: String(err && err.message || err), route: null }); } };
     safe(() => dataItems(dataset, txns || [], state));
-    safe(() => planItems(state));
+    safe(() => planItems(state, balanceIsKnown(state, dataset, txns, balanceKnown)));
     safe(() => forecastItems(state, ctx));
     const dismissed = state.ui?.dismissed || {};
     return items.filter(i => !dismissed['attention:' + i.id]).sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);

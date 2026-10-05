@@ -407,20 +407,33 @@
     const settingsTiming = plan.settings && plan.settings.incomeTiming;
     const timing = o.timing || (TIMINGS.includes(settingsTiming) ? settingsTiming : 'conservative');
     if (!TIMINGS.includes(timing)) fail('Timing must be "actual", "conservative" or "average".', 'timing');
-    return { scope, month, timing };
+    const balanceKnown = typeof o.balanceKnown === 'boolean' ? o.balanceKnown : null;
+    return { scope, month, timing, balanceKnown };
+  }
+
+  /** A starting balance the plan itself holds: the joint cash figure or any per-account balance entered. */
+  function enteredBalanceKnown(plan) {
+    const b = plan.balances;
+    if (!b) return false;
+    return isCents(b.jointCashCents) || (!!b.accounts && typeof b.accounts === 'object' && Object.values(b.accounts).some(isCents));
   }
 
   /**
    * Monthly budget summary for one scope (see PlanSummary in the contract).
    * @param {object} plan Plan
-   * @param {{scope?:'joint'|'household', month?:string, timing?:'actual'|'conservative'|'average'}} [opts]
+   * @param {{scope?:'joint'|'household', month?:string, timing?:'actual'|'conservative'|'average', balanceKnown?:boolean}} [opts]
+   *   balanceKnown: whether a starting cash balance is known, as E.timeline.anchors decides it
+   *   (entered per account, supplied with the data, the export's running balance, or the joint
+   *   cash figure). The plan alone cannot see balances that come with the data, so callers that
+   *   have the data pass it; without it only the balances entered in the plan count. When false,
+   *   `missing` lists { id: 'jointCash', area: 'balances' }.
    * @returns {object} PlanSummary, plus income.lowerBoundCents / income.notCounted,
    *   bills.excludedPersonal, personalSpendingCents, warnings, complete, and
    *   remainingUnknownReason (null | 'income' | 'personal_spending') with remainingUnknownNote
    *   (a sentence, or null) saying why remainingCents is null.
    */
   function monthly(plan, opts) {
-    const { scope, month, timing: requested } = normalizeOptions(plan, opts);
+    const { scope, month, timing: requested, balanceKnown } = normalizeOptions(plan, opts);
     const acc = { missing: [], assumptions: [], warnings: [] };
     let timing = requested;
     if (timing === 'actual' && !month) {
@@ -471,8 +484,7 @@
         ' while ' + (blocked.length === 1 ? 'their transfer' : 'their transfers') + ' to joint ' + (blocked.length === 1 ? 'is' : 'are') + ' unknown.';
     }
 
-    const anyAccountBalance = !!plan.balances && !!plan.balances.accounts && Object.values(plan.balances.accounts).some(isCents);
-    if (!plan.balances || (!isCents(plan.balances.jointCashCents) && !anyAccountBalance)) acc.missing.push({ id: 'jointCash', label: 'Joint cash balance not entered', area: 'balances' });
+    if (!(balanceKnown !== null ? balanceKnown : enteredBalanceKnown(plan))) acc.missing.push({ id: 'jointCash', label: 'Joint cash balance not entered', area: 'balances' });
     for (const debt of arr(plan.debts)) {
       if (debt && !isCents(debt.balanceCents)) acc.missing.push({ id: debt.id, label: (debt.label || debt.id) + ': balance not entered', area: 'debts' });
     }

@@ -289,6 +289,45 @@ test('reimbursements: more than three pending are summarised, not dropped', () =
   assert.equal(more.severity, 'decision');
 });
 
+// ======================================================================= starting balance
+
+/** The ACCOUNTS above with the bank's own checking balance for Sep 30 supplied with the data. */
+const withBankBalance = rows => L.normalizeDataset({ schemaVersion: 2, datasetId: 'attention-test', isSynthetic: true, accounts: ACCOUNTS, transactions: rows,
+  balances: [{ accountId: 'chk', date: '2026-09-30', cents: 512340, source: 'bank' }] });
+const NOTHING_ENTERED = { balances: { jointCashCents: null, asOf: null, note: '' } };
+
+test('balance: a balance supplied with the data counts as known, with or without an entered one', () => {
+  const ds = withBankBalance([tx('2026-09-12', -4200)]);
+  const st = deepFreeze(stateWith(NOTHING_ENTERED));
+  assert.equal(E.timeline.anchors(st.plan, ds).combined.cents, 512340, 'the Plan page starts from the bank figure');
+  // Worked out from the data when the caller does not say, and as the caller says otherwise.
+  assert.equal(item(A.list({ dataset: ds, txns: L.applyEdits(ds, {}), state: st }), 'balance'), undefined);
+  assert.equal(item(A.list({ dataset: ds, txns: L.applyEdits(ds, {}), state: st, balanceKnown: true }), 'balance'), undefined);
+});
+
+test('balance: with no balance anywhere, "Enter today’s balances" keeps its wording and route', () => {
+  const ds = dataset([tx('2026-09-12', -4200)]); // no supplied balance, no running balance
+  const st = deepFreeze(stateWith(NOTHING_ENTERED));
+  assert.equal(E.timeline.anchors(st.plan, ds).combined, null);
+  for (const extra of [{}, { balanceKnown: false }]) {
+    const b = item(A.list(Object.assign({ dataset: ds, txns: L.applyEdits(ds, {}), state: st }, extra)), 'balance');
+    assert.ok(b, 'listed: ' + JSON.stringify(extra));
+    assert.equal(b.title, 'Enter today’s balances');
+    assert.equal(b.detail, 'Bank exports do not include balances. Until you add them on the Plan page, the chart shows money in and out, not how much you will have.');
+    assert.equal(b.route, '#/overview');
+    assert.equal(b.severity, 'decision');
+  }
+});
+
+test('balance: on the sample, the bank running balance alone is enough (nothing entered at all)', () => {
+  const { ds, state, txns } = sampleState();
+  state.plan.balances = Object.assign({}, state.plan.balances, { jointCashCents: null, asOf: null, accounts: {}, accountDates: {} });
+  const anc = E.timeline.anchors(state.plan, ds, txns);
+  assert.ok(anc.combined && anc.accounts.every(a => a.source !== 'entered'), 'a balance comes with the data');
+  assert.equal(item(A.list({ dataset: ds, txns, state }), 'balance'), undefined);
+  assert.equal(item(A.list({ dataset: ds, txns, state, balanceKnown: !!anc.combined }), 'balance'), undefined);
+});
+
 // ======================================================================= forecast items
 
 test('forecast: negative months and scenario amounts not entered come from the projection', () => {

@@ -5,7 +5,10 @@
  *
  *   defaults    a complete, valid version-5 State built from the household profile
  *   sanitize    check a saved State field by field: keep what is valid, reset or drop what is
- *               not, and say so in a note that names the path
+ *               not, and say so in a note that names the path. Keys this version does not know
+ *               are kept as saved (a newer copy of the app may have saved them; §7)
+ *   upgrades    changes to the format inside version 5 (V5_UPGRADES), run by sanitize
+ *   ui.plan     one descriptor table (PLAN_UI) for the plan screen's settings; cleanPlanUi
  *   migrate     carry a budget saved by the earlier app (saved-state versions 1-4) over to v5
  *   workbooks   export/import the JSON file a household passes between devices
  *   scenarios   pure operations returning a new State; the baseline stays "the budget as is"
@@ -35,26 +38,14 @@
   const BASELINE_DESCRIPTION = 'Your budget as it is now, with no planned changes.';
   const EPOCH = '1970-01-01T00:00:00.000Z';
   const NO_DATA_ID = 'no-data';
-  const PEOPLE = ['p1', 'p2'];
   const DEFAULT_PEOPLE_NAMES = ['Partner A', 'Partner B'];
   const FREQUENCIES = ['weekly', 'biweekly', 'semimonthly', 'monthly'];
   const TXN_KINDS = ['spend', 'income', 'transfer', 'card_payment', 'debt_payment'];
-  /** The plan screen's dials (BudgetEngine.timeline): money in per person and other, money out by how adjustable it is. */
-  const DIAL_KEYS = ['p1', 'p2', 'inOther', 'essentials', 'flexible', 'irregular', 'savings', 'other'];
-  /**
-   * Card and bank spending were dials before spending was grouped by how adjustable it is; now
-   * they are derived. An amount saved for one is kept in ui.plan.legacyDials until the plan
-   * screen carries it over to the spending dials (BudgetEngine.timeline.migrateDials).
-   */
-  const RETIRED_DIALS = ['card', 'bank'];
-  const SPEND_GROUPS = ['essentials', 'flexible'];
-  /** The spending dials whose direct amount can carry its own card part (ui.plan.cardSplit). */
-  const SPEND_DIALS = ['essentials', 'flexible', 'irregular'];
-  const CHANGE_KINDS = ['oneTime', 'monthly'];
-  const CHANGE_GROUPS = ['income', 'essentials', 'flexible', 'irregular', 'savings'];
-  /** Monthly series the plan screen's Trends chart can draw (BudgetEngine.timeline series keys). */
-  const TREND_SERIES = ['in-p1', 'in-p2', 'in-other', 'in-total', 'card', 'bank', 'essentials', 'flexible', 'irregular',
-    'other-out', 'out-total', 'to-savings', 'from-savings', 'net', 'combined-change'];
+  // The plan screen's vocabulary (people, dial keys, the retired card/bank dials, spending groups
+  // and dials, planned-change kinds and groups, Trends series, the scalar choices and their
+  // defaults) is defined once in plan-settings.js and shared with BudgetEngine.timeline.
+  const PS = E.planSettings;
+  const { PEOPLE, DIAL_KEYS, RETIRED_DIALS, SPEND_GROUPS, SPEND_DIALS, CHANGE_KINDS, CHANGE_GROUPS, TREND_SERIES } = PS;
 
   const LIMITS = Object.freeze({
     label: 80, note: 500, categoryKey: 80, id: 80, txnId: 200, datasetId: 200, route: 1000,
@@ -104,10 +95,14 @@
     return joined.slice(0, LIMITS.note);
   }
 
-  /** Collects de-duplicated notes. */
-  function makeCtx() {
+  /**
+   * Collects de-duplicated notes, and the paths of keys kept although this version does not know
+   * them (keepUnknown). { dropUnknown: true }: leave such keys out instead, quietly — for input
+   * that is not a saved budget (the household profile) and for cleanPlanUi.
+   */
+  function makeCtx(opts) {
     const notes = [];
-    return { notes, note(message) { if (!notes.includes(message)) notes.push(message); } };
+    return { notes, kept: [], dropUnknown: !!(opts && opts.dropUnknown), note(message) { if (!notes.includes(message)) notes.push(message); } };
   }
 
   function datasetIdOf(dataset) {
@@ -358,57 +353,61 @@
   const WHATIF_FIELDS = [['excludePendingReimbursements', bool(false)], ['excludeBusinessCandidates', bool(false)]];
   const WHATIF_DEFAULT = { excludePendingReimbursements: false, excludeBusinessCandidates: false };
 
-  // The plan screen (BudgetEngine.timeline): what the household set, never derived data.
-  //   baselineMonths: how many recent complete months the dial baselines average ('all' = every one).
-  //   horizon: months planned ahead (from the first month without complete data).
-  //   past: months of history shown before the plan.
-  //   mode: the main chart shows balances, money in and out each month, or trends (chosen series as lines).
-  //   coverFromSavings: in projected months, move a checking shortfall from savings (per account only).
-  //   dials: { [dialKey]: signed cents } set directly (DIAL_KEYS: p1, p2, inOther, essentials,
-  //     flexible, irregular, savings, other). Signed on purpose: a savings drawdown is negative and
-  //     must survive every save. Card and bank spending are derived, never set (RETIRED_DIALS).
-  //   rows: { [rowId]: { included?, cents? } } changes to the essentials/flexible drill-down rows.
-  //   hidden: chart series the household switched off; null = never chosen (the screen picks).
-  //   groups: { [categoryName | 'merchant:' + merchant]: 'essentials'|'flexible' } the household's
-  //     own grouping (the taxonomy's `essential` flag otherwise).
-  //   irregularOff: { [txnId]: true } one-time costs left out of the irregular allowance.
-  //   trends: the Trends chart: which series (TREND_SERIES), a moving average of 0/3/6 months, and a trend line.
-  //   legacyDials (absent unless needed): { card?, bank? } signed cents set for the earlier card and
-  //     bank dials, waiting to be carried over to essentials, flexible and irregular.
-  //   cardSplit (absent unless needed): { [essentials|flexible|irregular]: { cents, card, fromCard?, fromBank? } }
-  //     the card part of a direct amount, used while the dial still holds exactly `cents`; fromCard /
-  //     fromBank mark it as carried over from the earlier card / bank amount until it is kept.
+  // ------------------------------------------------------------------ ui.plan: one descriptor table
+  // The plan screen's saved settings (BudgetEngine.timeline): what the household set, never derived
+  // data. PLAN_UI is the only description of ui.plan; everything else about it is derived from it:
+  //   PLAN_UI_FIELDS   the rules sanitize checks a saved ui.plan with (through UI_FIELDS)
+  //   PLAN_UI_DEFAULT  the defaults (a new budget's ui.plan; the trends row's own default included)
+  //   SCHEMA ui.plan   how setPath writes inside each field (planUiChildren)
+  //   cleanPlanUi      the silent cleaner BudgetEngine.timeline.settings reads ui.plan through
+  // One row per field:
+  //   name         the key under ui.plan
+  //   rule         how a saved value is checked: `def` is its default, `max` / `keyMax` its limits;
+  //                optional(...) = absent unless needed (no default)
+  //   keysMessage  a map with fixed keys: what setPath says when another key is written
+  //   doc          what it holds (docs/ARCHITECTURE.md §7 says the same for readers of the format)
+  // Adding a field is one row here plus one line in docs/ARCHITECTURE.md §7 (see "Adding a ui.plan
+  // field" there). The lists the rows use (dial keys, series, choices, defaults) are plan-settings.js.
   const PLAN_ROW_FIELDS = [['included', optional(rule('bool', {}))], ['cents', optional(rule('cents', { signed: true }))]];
-  const PLAN_ROW_RULE = rule('object', { fields: PLAN_ROW_FIELDS });
   const LEGACY_DIAL_FIELDS = RETIRED_DIALS.map(k => [k, optional(rule('cents', { signed: true }))]);
   // fromCard / fromBank: the earlier card / bank amount it was carried over from (until kept or changed).
   const CARD_SPLIT_FIELDS = [['cents', rule('cents', { signed: true, required: true })], ['card', rule('cents', { signed: true, required: true })],
     ['fromCard', optional(rule('cents', { signed: true }))], ['fromBank', optional(rule('cents', { signed: true }))]];
-  const CARD_SPLIT_RULE = rule('object', { fields: CARD_SPLIT_FIELDS });
-  const SPEND_GROUP_RULE = oneOf(SPEND_GROUPS, null);
   const TRENDS_FIELDS = [
-    ['series', rule('keylist', { max: LIMITS.planTrendSeries, def: ['card'], values: TREND_SERIES })],
-    ['ma', oneOf([0, 3, 6], 3)],
-    ['trend', bool(true)]
+    ['series', rule('keylist', { max: LIMITS.planTrendSeries, def: PS.TREND_DEFAULTS.series.slice(), values: TREND_SERIES })],
+    ['ma', oneOf(PS.TREND_MA, PS.TREND_DEFAULTS.ma)],
+    ['trend', bool(PS.TREND_DEFAULTS.trend)]
   ];
-  const TRENDS_DEFAULT = { series: ['card'], ma: 3, trend: true };
-  const PLAN_UI_FIELDS = [
-    ['baselineMonths', oneOf([3, 6, 12, 'all'], 12)],
-    ['horizon', oneOf([6, 12, 24, 60], 12)],
-    ['past', oneOf([6, 12, 'all'], 12)],
-    ['mode', oneOf(['balance', 'flows', 'trends'], 'balance')],
-    ['coverFromSavings', bool(true)],
-    ['dials', rule('centsmap', { max: LIMITS.planDials, def: {}, noun: 'plan amounts', keys: DIAL_KEYS })],
-    ['rows', rule('rowmap', { max: LIMITS.planRows, def: {} })],
-    ['hidden', rule('keylist', { max: LIMITS.planHidden, def: null, nullable: true })],
-    ['groups', rule('enummap', { max: LIMITS.planGroups, keyMax: LIMITS.groupKey, values: SPEND_GROUPS, def: {}, noun: 'spending groups' })],
-    ['irregularOff', rule('boolmap', { max: LIMITS.planIrregular, keyMax: LIMITS.txnId, def: {} })],
-    ['trends', rule('object', { fields: TRENDS_FIELDS, def: TRENDS_DEFAULT })],
-    ['legacyDials', optional(rule('object', { fields: LEGACY_DIAL_FIELDS }))],
-    ['cardSplit', optional(rule('objmap', { max: SPEND_DIALS.length, keys: SPEND_DIALS, fields: CARD_SPLIT_FIELDS, noun: 'card parts of plan amounts' }))]
+  /** An object field with a field list of its own; its default is each of its fields' default. */
+  const fieldGroup = (fields, extra) => rule('object', Object.assign({ fields, def: emptyOf(fields) }, extra));
+
+  const PLAN_UI = [
+    { name: 'baselineMonths', rule: oneOf(PS.BASELINE_CHOICES, PS.DEFAULTS.baselineMonths),
+      doc: 'how many recent complete months the dial baselines average (\'all\' = every one)' },
+    { name: 'horizon', rule: oneOf(PS.HORIZONS, PS.DEFAULTS.horizon), doc: 'months planned ahead, from the first month without complete data' },
+    { name: 'past', rule: oneOf(PS.PAST_CHOICES, PS.DEFAULTS.past), doc: 'months of history shown before the plan' },
+    { name: 'mode', rule: oneOf(PS.MODES, PS.DEFAULTS.mode), doc: 'the main chart: balances, money in and out each month, or trends (chosen series as lines)' },
+    { name: 'coverFromSavings', rule: bool(PS.DEFAULTS.coverFromSavings), doc: 'in projected months, move a checking shortfall from savings (per account only)' },
+    { name: 'dials', rule: rule('centsmap', { max: LIMITS.planDials, def: {}, noun: 'plan amounts', keys: DIAL_KEYS }),
+      keysMessage: 'Plan amounts can be set for: ' + DIAL_KEYS.join(', ') + '. Card and bank spending are worked out from essentials, flexible and irregular spending, not set directly.',
+      doc: '{ [dialKey]: signed cents } set directly (DIAL_KEYS). Signed on purpose: a savings drawdown is negative and must survive every save. Card and bank spending are worked out, never set (RETIRED_DIALS)' },
+    { name: 'rows', rule: rule('rowmap', { max: LIMITS.planRows, def: {}, fields: PLAN_ROW_FIELDS }),
+      doc: '{ [rowId]: { included?, cents? } } changes to the essentials/flexible drill-down rows' },
+    { name: 'hidden', rule: rule('keylist', { max: LIMITS.planHidden, def: null, nullable: true }),
+      doc: 'chart series the household switched off; null = never chosen (the screen picks)' },
+    { name: 'groups', rule: rule('enummap', { max: LIMITS.planGroups, keyMax: LIMITS.groupKey, values: SPEND_GROUPS, def: {}, noun: 'spending groups' }),
+      doc: '{ [categoryName | \'merchant:\' + merchant]: \'essentials\'|\'flexible\' } the household\'s own grouping (the taxonomy\'s `essential` flag otherwise)' },
+    { name: 'irregularOff', rule: rule('boolmap', { max: LIMITS.planIrregular, keyMax: LIMITS.txnId, def: {} }),
+      doc: '{ [txnId]: true } one-time costs left out of the irregular allowance' },
+    { name: 'trends', rule: fieldGroup(TRENDS_FIELDS), doc: 'the Trends chart: which series (TREND_SERIES), a moving average of 0/3/6 months, and a trend line' },
+    { name: 'legacyDials', rule: optional(rule('object', { fields: LEGACY_DIAL_FIELDS })),
+      doc: '(absent unless needed) { card?, bank? } signed cents set for the earlier card and bank dials, waiting to be carried over to essentials, flexible and irregular (timeline.migrateDials)' },
+    { name: 'cardSplit', rule: optional(rule('objmap', { max: SPEND_DIALS.length, keys: SPEND_DIALS, fields: CARD_SPLIT_FIELDS, noun: 'card parts of plan amounts' })),
+      keysMessage: 'A card part can be kept for: ' + SPEND_DIALS.join(', ') + '.',
+      doc: '(absent unless needed) { [essentials|flexible|irregular]: { cents, card, fromCard?, fromBank? } } the card part of a direct amount, used while the dial still holds exactly `cents`; fromCard / fromBank mark it as carried over from the earlier card / bank amount until it is kept' }
   ];
-  const PLAN_UI_DEFAULT = { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null,
-    groups: {}, irregularOff: {}, trends: TRENDS_DEFAULT };
+  const PLAN_UI_FIELDS = PLAN_UI.map(d => [d.name, d.rule]);
+  const PLAN_UI_DEFAULT = emptyOf(PLAN_UI_FIELDS);
   /** Where each earlier Home amount (ui.home, removed) goes in ui.plan.dials (card and bank then go on to ui.plan.legacyDials). */
   const HOME_TO_DIALS = { p1InCents: 'p1', p2InCents: 'p2', cardCents: 'card', bankCents: 'bank', savedCents: 'savings' };
 
@@ -681,8 +680,10 @@
   /**
    * Validate an object's fields against a rule list.
    * Lenient (sanitize): an invalid value is reset to its default with a note; an unusable
-   * required field returns null so the caller drops the whole entry (also noted).
-   * Strict (forms, scenario events): the first problem throws a ValidationError.
+   * required field returns null so the caller drops the whole entry (also noted); a key this
+   * version does not know is kept as saved, after the known fields, with a note (keepUnknown;
+   * left out instead when ctx.dropUnknown). Strict (forms, scenario events): the first problem
+   * throws a ValidationError; unknown keys are not copied.
    * @param {object} raw
    * @param {Array} fields [key, rule] pairs, in output order
    * @param {{path:string, ctx:object, strict?:boolean, defaults?:object, known?:string[]}} o
@@ -713,11 +714,33 @@
     }
     if (!o.strict) {
       const known = new Set(fields.map(f => f[0]).concat(['id'], o.known || []));
-      for (const k of Object.keys(raw)) {
-        if (!known.has(k)) o.ctx.note(o.path + '.' + k + ': not part of the saved budget format; dropped (it was ' + preview(raw[k]) + ').');
-      }
+      for (const k of Object.keys(raw)) if (!known.has(k)) keepUnknown(out, raw, k, o.path + '.' + k, o.ctx);
     }
     return out;
+  }
+
+  /**
+   * Forward compatibility (docs/ARCHITECTURE.md §7): a key this version does not know, found while
+   * loading, is kept as saved, so a budget saved by a newer copy of the app loses nothing when this
+   * copy opens and saves it again. It is named in a note and counted in ctx.kept (sanitize adds one
+   * summary line). A key that cannot be kept on a plain object ("__proto__"), or a value that is
+   * not JSON, is dropped and named instead. ctx.dropUnknown: left out, quietly.
+   */
+  function keepUnknown(out, raw, k, path, ctx) {
+    if (ctx.dropUnknown) return;
+    const text = isSafeKey(k) ? safeStringify(raw[k]) : null;
+    if (text === null) { ctx.note(path + ': not part of the saved budget format; dropped (it was ' + preview(raw[k]) + ').'); return; }
+    out[k] = JSON.parse(text);
+    ctx.note(path + ': not part of this version’s saved budget format; kept as saved (' + preview(raw[k]) + ').');
+    ctx.kept.push(path);
+  }
+
+  /** One line for the household when keepUnknown kept anything: put first, before the per-key notes. */
+  function noteKeptUnknown(ctx) {
+    const n = ctx.kept.length;
+    if (!n) return;
+    const shown = ctx.kept.slice(0, 3).join(', ') + (n > 3 ? ', ...' : '');
+    ctx.notes.unshift('This budget has ' + plural(n, 'setting') + ' this version of the app does not use (' + shown + '), probably saved by a newer copy of the app; ' + (n === 1 ? 'it is' : 'they are') + ' kept as saved.');
   }
 
   /** End month before start month: strict mode rejects it, lenient mode clears the end month. */
@@ -886,9 +909,7 @@
       // Absent in budgets saved before planned changes existed: none yet.
       changes: cleanList(raw.changes, CHANGE_FIELDS, { path: path + '.changes', ctx, max: LIMITS.planChanges, prefix: 'change', fallback: Array.isArray(base.changes) ? base.changes : [], after: changeOrder })
     };
-    for (const k of Object.keys(raw)) {
-      if (!PLAN_KEYS.includes(k)) ctx.note(path + '.' + k + ': not part of the saved budget format; dropped (it was ' + preview(raw[k]) + ').');
-    }
+    for (const k of Object.keys(raw)) if (!PLAN_KEYS.includes(k)) keepUnknown(plan, raw, k, path + '.' + k, ctx);
     return plan;
   }
 
@@ -1158,7 +1179,7 @@
     const now = stampOf(opts && opts.now, EPOCH);
     const prof = isObj(profile) ? profile : {};
     const people = profilePeople(prof);
-    const quiet = makeCtx(); // problems in the profile are not the household's saved data
+    const quiet = makeCtx({ dropUnknown: true }); // problems in the profile are not the household's saved data
     const plan = cleanPlan(isObj(prof.plan) ? Object.assign({}, prof.plan, { people }) : undefined, emptyPlan(people), quiet, 'profile.plan');
     const meta = { createdAt: now, updatedAt: now, migratedFrom: null, migrationNotes: [], legacySnapshot: null };
     const baseline = makeBaseline(plan, meta);
@@ -1184,8 +1205,14 @@
     return 'This budget was saved for the data set "' + saved + '" and is now used with "' + current + '". The plan, scenarios and settings apply as they are; corrections to individual transactions only take effect where the same transactions exist.';
   }
 
-  /** Field-by-field validation of a v5-shaped object against `base` (the defaults). */
-  function sanitizeState(raw, base, ctx, wantDatasetId) {
+  /**
+   * Field-by-field validation of a v5-shaped object against `base` (the defaults). The upgrades
+   * inside version 5 (V5_UPGRADES) run first, on the raw object; their notes are added, and kept in
+   * meta.migrationNotes, after the ui section's own notes.
+   */
+  function sanitizeState(input, base, ctx, wantDatasetId) {
+    const up = upgrade(input);
+    const raw = up.raw;
     let meta;
     if (raw.meta === undefined) meta = clone(base.meta);
     else if (!isObj(raw.meta)) { ctx.note('meta: not readable (' + preview(raw.meta) + '); reset.'); meta = clone(base.meta); }
@@ -1215,29 +1242,51 @@
     if (raw.ui === undefined) ui = clone(base.ui);
     else if (!isObj(raw.ui)) { ctx.note('ui: not readable (' + preview(raw.ui) + '); reset.'); ui = clone(base.ui); }
     else {
-      const moved = has(raw.ui, 'home') ? migrateHome(raw.ui) : null;
-      const retired = migratePlanDials(moved ? moved.ui : raw.ui);
-      ui = cleanFields(retired ? retired.ui : moved ? moved.ui : raw.ui, UI_FIELDS, { path: 'ui', ctx, strict: false, defaults: base.ui });
-      // Card and bank amounts waiting to be carried over: only amounts are kept, and nothing at all when none is left.
-      if (isObj(ui.plan) && has(ui.plan, 'legacyDials')) {
-        const kept = {};
-        for (const k of RETIRED_DIALS) if (isObj(ui.plan.legacyDials) && Number.isSafeInteger(ui.plan.legacyDials[k])) kept[k] = ui.plan.legacyDials[k];
-        if (Object.keys(kept).length) ui.plan.legacyDials = kept;
-        else delete ui.plan.legacyDials;
-      }
-      for (const m of [moved, retired]) {
-        if (!m || !m.note) continue;
-        ctx.note(m.note);
-        // Recorded like the other migrations, so the household can see what moved where.
-        const notes = Array.isArray(meta.migrationNotes) ? meta.migrationNotes : [];
-        if (!notes.includes(m.note)) meta.migrationNotes = notes.concat([m.note.slice(0, LIMITS.note)]).slice(-LIMITS.migrationNotes);
-      }
+      ui = cleanFields(raw.ui, UI_FIELDS, { path: 'ui', ctx, strict: false, defaults: base.ui });
+      if (isObj(ui.plan)) finishPlanUi(ui.plan);
+    }
+    for (const note of up.notes) {
+      ctx.note(note);
+      // Recorded like the other migrations, so the household can see what moved where.
+      const notes = Array.isArray(meta.migrationNotes) ? meta.migrationNotes : [];
+      if (!notes.includes(note)) meta.migrationNotes = notes.concat([note.slice(0, LIMITS.note)]).slice(-LIMITS.migrationNotes);
     }
 
-    for (const k of Object.keys(raw)) {
-      if (!STATE_KEYS.includes(k)) ctx.note(k + ': not part of the saved budget format; dropped (it was ' + preview(raw[k]) + ').');
+    const state = { version: VERSION, datasetId, plan, scenarios, compareIds, ledgerEdits, references, checklist, ui, meta };
+    for (const k of Object.keys(raw)) if (!STATE_KEYS.includes(k)) keepUnknown(state, raw, k, k, ctx);
+    return state;
+  }
+
+  /**
+   * The last step of checking a saved ui.plan (sanitize and cleanPlanUi): card and bank amounts
+   * waiting to be carried over (legacyDials) keep only amounts, and legacyDials is removed when
+   * nothing is left. Keys kept as saved (keepUnknown) stay. Changes `planUi` in place.
+   */
+  function finishPlanUi(planUi) {
+    if (!has(planUi, 'legacyDials')) return planUi;
+    const kept = {};
+    const waiting = planUi.legacyDials;
+    if (isObj(waiting)) {
+      for (const [k, v] of Object.entries(waiting)) if (!RETIRED_DIALS.includes(k) || Number.isSafeInteger(v)) kept[k] = v;
     }
-    return { version: VERSION, datasetId, plan, scenarios, compareIds, ledgerEdits, references, checklist, ui, meta };
+    if (Object.keys(kept).length) planUi.legacyDials = kept;
+    else delete planUi.legacyDials;
+    return planUi;
+  }
+
+  /**
+   * ui.plan as this version reads it, for code that draws it (BudgetEngine.timeline.settings):
+   * checked against PLAN_UI like sanitize does, silently. Every field this version knows is
+   * present and valid (an invalid value is reset to its default or left out, as sanitize would),
+   * fields it does not know are left out, legacyDials keeps only amounts, and legacyDials and
+   * cardSplit stay absent unless saved. Never throws; `raw` is not changed. A saved budget is
+   * checked by sanitize instead, which names every change and keeps unknown keys.
+   * @param {*} raw a ui.plan, saved or not (anything else gives the defaults)
+   * @returns {object}
+   */
+  function cleanPlanUi(raw) {
+    if (!isObj(raw)) return clone(PLAN_UI_DEFAULT);
+    return finishPlanUi(cleanFields(raw, PLAN_UI_FIELDS, { path: 'ui.plan', ctx: makeCtx({ dropUnknown: true }), strict: false }));
   }
 
   /**
@@ -1308,6 +1357,54 @@
     return { ui, note };
   }
 
+  // ------------------------------------------------------------------ upgrades inside version 5
+  // Changes to the saved format made after version 5 was first released. VERSION stays 5 (the
+  // storage key and every saved budget depend on it), so each entry recognises the earlier shape
+  // itself. sanitize runs the entries in order on the raw saved budget, before checking it
+  // (upgrade), and records each note in the notes and once in meta.migrationNotes. Rules for
+  // every entry (docs/ARCHITECTURE.md §7):
+  //   id          a short stable name
+  //   applies(raw) whether the raw saved budget still holds the earlier shape (never throws)
+  //   apply(raw)  -> { raw, note }: a new raw budget (the input is not changed) and the note saying
+  //               what moved where; null only when nothing the household saved changed
+  //   - it must be safe to run twice: after apply, applies is false, or apply changes nothing more;
+  //   - it must leave a note whenever it changes what the household saved, and that note's text
+  //     must never change once released (meta.migrationNotes is matched by text).
+  // Upgrades that need the data as well (a built plan) run on the plan screen instead:
+  // BudgetEngine.timeline.pendingUpgrade names them.
+  const withUi = (raw, ui) => Object.assign({}, raw, { ui });
+  const V5_UPGRADES = Object.freeze([
+    Object.freeze({
+      id: 'ui.home', // the earlier Home settings become the plan screen's (migrateHome)
+      applies: raw => isObj(raw) && isObj(raw.ui) && has(raw.ui, 'home'),
+      apply: raw => { const r = migrateHome(raw.ui); return { raw: withUi(raw, r.ui), note: r.note }; }
+    }),
+    Object.freeze({
+      id: 'ui.plan.dials.card-bank', // card and bank amounts wait in ui.plan.legacyDials (migratePlanDials)
+      applies: raw => isObj(raw) && isObj(raw.ui) && isObj(raw.ui.plan) && isObj(raw.ui.plan.dials) && RETIRED_DIALS.some(k => has(raw.ui.plan.dials, k)),
+      apply: raw => { const r = migratePlanDials(raw.ui); return r ? { raw: withUi(raw, r.ui), note: r.note } : { raw, note: null }; }
+    })
+  ]);
+
+  /**
+   * Run every V5_UPGRADES entry that applies to `raw`, in order. Pure; safe to run twice (the
+   * second run applies nothing).
+   * @param {*} raw a saved budget (version-5 shape), before it is checked
+   * @returns {{raw: *, notes: string[], applied: string[]}} applied: the ids that ran
+   */
+  function upgrade(raw) {
+    let cur = raw;
+    const notes = [], applied = [];
+    for (const u of V5_UPGRADES) {
+      if (!u.applies(cur)) continue;
+      const r = u.apply(cur);
+      cur = r.raw;
+      applied.push(u.id);
+      if (r.note) notes.push(r.note);
+    }
+    return { raw: cur, notes, applied };
+  }
+
   function isWorkbook(d) { return isObj(d) && d.format === WORKBOOK_FORMAT; }
 
   /** The earlier app's downloaded copies and storage wrappers look like { copyId, state }. */
@@ -1319,7 +1416,9 @@
   /**
    * Validate a saved State (any version-5 shape) field by field. Valid values are kept, invalid
    * ones are reset to their default or dropped, and each change is described in `notes` with the
-   * path it concerns. Earlier-version shapes are passed to migrate().
+   * path it concerns. The upgrades inside version 5 (V5_UPGRADES) run first. Keys this version
+   * does not know are kept as saved, each named, with one summary note first (keepUnknown).
+   * Earlier-version shapes are passed to migrate().
    * @returns {{state: object, notes: string[]}}
    */
   function sanitize(raw, profile, dataset, opts) {
@@ -1343,6 +1442,7 @@
       else ctx.note('version: ' + preview(data.version) + ' is not a known saved-budget version; read as version ' + VERSION + '.');
     }
     const state = sanitizeState(data, base, ctx, datasetIdOf(dataset));
+    noteKeptUnknown(ctx);
     return { state, notes: ctx.notes };
   }
 
@@ -2503,22 +2603,40 @@
     checklist: N.map(STRICT_BOOL, LIMITS.checklist),
     ui: N.item(UI_FIELDS, {
       whatIf: N.item(WHATIF_FIELDS),
-      plan: N.item(PLAN_UI_FIELDS, {
-        dials: N.map(SIGNED_CENTS, LIMITS.planDials, {
-          keys: DIAL_KEYS,
-          keysMessage: 'Plan amounts can be set for: ' + DIAL_KEYS.join(', ') + '. Card and bank spending are worked out from essentials, flexible and irregular spending, not set directly.'
-        }),
-        rows: N.map(PLAN_ROW_RULE, LIMITS.planRows),
-        groups: N.map(SPEND_GROUP_RULE, LIMITS.planGroups, { keyMax: LIMITS.groupKey }),
-        irregularOff: N.map(STRICT_BOOL, LIMITS.planIrregular, { keyMax: LIMITS.txnId }),
-        trends: N.item(TRENDS_FIELDS),
-        legacyDials: N.item(LEGACY_DIAL_FIELDS),
-        cardSplit: N.map(CARD_SPLIT_RULE, SPEND_DIALS.length, { keys: SPEND_DIALS, keysMessage: 'A card part can be kept for: ' + SPEND_DIALS.join(', ') + '.' })
-      }),
+      plan: N.item(PLAN_UI_FIELDS, planUiChildren()),
       dismissed: N.map(STRICT_BOOL, LIMITS.dismissed)
     }),
     meta: N.item([['createdAt', ISO_TIME], ['updatedAt', ISO_TIME], ['migrationNotes', NOTES_RULE]])
   });
+
+  /**
+   * How setPath writes inside each ui.plan field, derived from PLAN_UI: a map one entry at a time
+   * (an entry's rule follows from the map's rule; its limits, fixed keys and keysMessage come from
+   * the row), an object field one field at a time. Other fields are written whole.
+   */
+  function planUiChildren() {
+    const entryRule = r => {
+      switch (r.t) {
+        case 'centsmap': return SIGNED_CENTS;
+        case 'enummap': return oneOf(r.values, null);
+        case 'boolmap': return STRICT_BOOL;
+        case 'rowmap':
+        case 'objmap': return rule('object', { fields: r.fields });
+        default: return null;
+      }
+    };
+    const children = {};
+    for (const d of PLAN_UI) {
+      if (d.rule.t === 'object') { children[d.name] = N.item(d.rule.fields); continue; }
+      const entry = entryRule(d.rule);
+      if (!entry) continue;
+      const extra = {};
+      if (d.rule.keys) Object.assign(extra, { keys: d.rule.keys, keysMessage: d.keysMessage });
+      if (d.rule.keyMax) extra.keyMax = d.rule.keyMax;
+      children[d.name] = N.map(entry, d.rule.max, extra);
+    }
+    return children;
+  }
 
   function badPath(path) { fail('There is no field "' + path + '" in the saved budget.', 'path'); }
 
@@ -2923,6 +3041,11 @@
     addScenario, renameScenario, deleteScenario, removeScenario: deleteScenario,
     addEvent, updateEvent, removeEvent, validateEvent,
     DIAL_KEYS, RETIRED_DIALS, SPEND_GROUPS, SPEND_DIALS, CHANGE_KINDS, CHANGE_GROUPS, TREND_SERIES,
+    // ui.plan's fields as PLAN_UI describes them (read-only: name, default, optional, doc), and its silent cleaner.
+    PLAN_UI: Object.freeze(PLAN_UI.map(d => Object.freeze({ name: d.name, default: d.rule.optional ? undefined : clone(d.rule.def), optional: !!d.rule.optional, doc: d.doc }))),
+    cleanPlanUi,
+    // Upgrades inside version 5 (sanitize runs them; upgrade(raw) runs them alone).
+    V5_UPGRADES, upgrade,
     getPath, setPath, addItem, updateItem, removeItem,
     loadFromStorage, saveToStorage
   };

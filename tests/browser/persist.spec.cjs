@@ -4,10 +4,6 @@ const KEY = 'household-budget:v5:sample';
 const GROCERIES = 'input[data-bind="plan.targets.Groceries"]';
 const FUEL = 'input[data-bind="plan.targets.Fuel"]';
 
-const stored = (page, fn) => page.evaluate(([k, src]) => {
-  const st = JSON.parse(localStorage.getItem(k));
-  return new Function('st', 'return ' + src)(st);
-}, [KEY, String(fn)]);
 const storedTarget = (page, cat) => page.evaluate(([k, c]) => JSON.parse(localStorage.getItem(k)).plan.targets[c], [KEY, cat]);
 const stateTarget = (page, cat) => page.evaluate(c => window.HouseholdBudget.getState().plan.targets[c], cat);
 const text = (page, sel) => page.$eval(sel, el => el.textContent.replace(/\s+/g, ' ').trim());

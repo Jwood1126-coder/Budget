@@ -6,19 +6,9 @@
 // until the view's root says it was drawn for the current URL (data-route) and the current saved
 // state (data-rev = state.meta.updatedAt).
 
-async function noHorizontalScroll(page) {
-  // Compare with the configured viewport: under mobile emulation innerWidth grows with overflow.
-  const width = page.viewportSize().width;
-  return page.evaluate(w => document.scrollingElement.scrollWidth <= w + 1, width);
-}
+const { noHorizontalScroll, cents } = require('./helpers.cjs');
+
 const params = page => page.evaluate(() => Object.fromEntries(new URLSearchParams(location.hash.split('?')[1] || '')));
-/** Money text like "$1,234.56" or "−$12.00" → integer cents. */
-function cents(text) {
-  const m = String(text).match(/([−-])?\$([\d,]+\.\d{2})/);
-  if (!m) throw new Error('No amount in: ' + text);
-  const v = Math.round(Number(m[2].replace(/,/g, '')) * 100);
-  return m[1] ? -v : v;
-}
 /** Wait until the Spending markup on screen was rendered for the current URL and saved state. */
 async function settled(page) {
   await page.waitForFunction(() => {

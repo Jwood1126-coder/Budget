@@ -3,28 +3,16 @@
 // plan vs actual. All households, merchants and amounts are invented.
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { loadEngine } = require('../load-engine.cjs');
+const { E, rowMaker, dataset } = require('../helpers/ledger.cjs');
 
-const E = loadEngine();
 const L = E.ledger;
 const C = E.compare;
 
-let seq = 0;
-/** One spending row on the 10th of `month` (or `day`). Positive `cents` = money spent. */
-function spend(month, cents, category = 'Groceries', fields = {}) {
-  seq += 1;
-  const day = String(fields.day || 10).padStart(2, '0');
-  const row = Object.assign({
-    id: 's' + String(seq).padStart(5, '0'),
-    accountId: 'card',
-    date: month + '-' + day,
-    description: 'SAMPLE MERCHANT ' + category.toUpperCase(),
-    amountCents: 0 - cents,
-    kind: 'spend',
-    category
-  }, fields);
-  delete row.day;
-  return row;
+const row = rowMaker({ prefix: 's' });
+/** One spending row on the card, on the 10th of `month` (or `day`). Positive `cents` = money spent. */
+function spend(month, cents, category = 'Groceries', { day, ...fields } = {}) {
+  const date = month + '-' + String(day || 10).padStart(2, '0');
+  return row('card', date, 0 - cents, Object.assign({ description: 'SAMPLE MERCHANT ' + category.toUpperCase(), category }, fields));
 }
 
 /**
@@ -32,10 +20,8 @@ function spend(month, cents, category = 'Groceries', fields = {}) {
  * 2025-01-01 .. 2026-12-31 for both joint accounts.
  */
 function build(txns, { start = '2025-01-01', end = '2026-12-31', cardStart, cardEnd, overrides } = {}) {
-  return L.normalizeDataset({
-    schemaVersion: 2,
+  return dataset({
     datasetId: 'compare-test',
-    isSynthetic: true,
     accounts: [
       { id: 'chk', label: 'Joint checking', type: 'checking', scope: 'joint', coverage: [{ start, end }] },
       { id: 'card', label: 'Joint card', type: 'credit_card', scope: 'joint', coverage: [{ start: cardStart || start, end: cardEnd || end }] },

@@ -12,6 +12,7 @@
     "engine/forecast.js",
     "engine/balances.js",
     "engine/flows.js",
+    "engine/plan-settings.js",
     "engine/timeline.js",
     "engine/state.js",
     "engine/attention.js"

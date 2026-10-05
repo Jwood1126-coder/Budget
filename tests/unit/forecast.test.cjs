@@ -846,7 +846,7 @@ test('household: an unknown transfer during leave makes outflow unknown, never s
   const baseline = st.scenarios[0];
   const baby = st.scenarios.find(s => s.events.some(e => e.type === 'income_change'));
   const opts = { startMonth: '2026-10', months: 12, scope: 'household' };
-  const b = E.forecast.project(plan, baseline, opts);
+  E.forecast.project(plan, baseline, opts); // the baseline still projects
   const k = E.forecast.project(plan, baby, opts);
   assert.equal(k.summary.totalOutCents, null, 'unknown months make the total unknown');
   assert.ok(k.summary.totalOutKnownCents !== undefined);

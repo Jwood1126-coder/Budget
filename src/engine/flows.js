@@ -32,7 +32,7 @@
  *   everyday   everything else (groceries, fuel, eating out…), refunds included
  *
  * The plan side: joint funding per partner from the Budget's current income streams (the joint
- * portion, never gross or full take-home pay), and one scenario formula for Home.
+ * portion, never gross or full take-home pay), which the Plan screen's money-in dials start from.
  */
 (function (root) {
   const E = root.BudgetEngine || (root.BudgetEngine = {});
@@ -345,63 +345,5 @@
     return { month, timing: t, people, otherCents: otherLines.reduce((s, l) => s + l.cents, 0), otherLines };
   }
 
-  /**
-   * Home's plan: one effective amount per line and the remainder after allocations.
-   *   remainder = joint funding + other planned income − net card spending − bank-paid spending
-   *               − debt payments − business purchases − net savings − net investments
-   * A negative net savings amount is a drawdown: it raises the remainder (and lowers savings).
-   * @param {{ base: object, funding: object, home: object, people: string[] }} o
-   *   base: baseline(); funding: planFunding(); home: amounts the household set ({ p1InCents, cardCents, … }); people: partner ids shown
-   * @returns {object} lines with value, baseline, basis and whether the household changed it
-   */
-  function scenario({ base, funding, home = {}, people = [] }) {
-    const avg = base.avg.planning;
-    const set = k => isCents(home[k]);
-    const val = (k, baselineCents) => (set(k) ? home[k] : baselineCents);
-    const persons = people.map(pid => {
-      const plan = funding && funding.people[pid] ? funding.people[pid] : null;
-      const planCents = plan ? plan.jointCents : null;
-      const historyCents = avg ? avg[pid] : null;
-      const baselineCents = planCents !== null ? planCents : (historyCents !== null ? historyCents : 0);
-      const basis = planCents !== null ? 'plan' : 'history';
-      return { id: pid, name: plan ? plan.name : pid, baseline: baselineCents, basis, historyCents, value: val(pid + 'InCents', baselineCents), changed: set(pid + 'InCents') };
-    });
-    let fundingCents, fundingBaseline;
-    if (persons.length) {
-      fundingCents = persons.reduce((s, p) => s + p.value, 0);
-      fundingBaseline = persons.reduce((s, p) => s + p.baseline, 0);
-    } else {
-      // Nobody's deposits can be told apart: all money in from the recent months.
-      fundingBaseline = avg ? avg.moneyIn : 0;
-      fundingCents = val('inCents', fundingBaseline);
-    }
-    const otherIn = funding ? funding.otherCents : 0;
-    const cardBase = avg ? Math.max(0, avg.cardNet) : 0;
-    const bankBase = avg ? Math.max(0, avg.bankNet) : 0;
-    const savedBase = avg ? avg.savingsNet : 0;
-    const lines = {
-      funding: { value: fundingCents, baseline: fundingBaseline, changed: persons.length ? persons.some(p => p.changed) : set('inCents') },
-      otherIn: { value: otherIn, baseline: otherIn, changed: false },
-      card: { value: val('cardCents', cardBase), baseline: cardBase, signedBaseline: avg ? avg.cardNet : null, changed: set('cardCents') },
-      bank: { value: val('bankCents', bankBase), baseline: bankBase, signedBaseline: avg ? avg.bankNet : null, changed: set('bankCents') },
-      debt: { value: avg ? avg.debt : 0, baseline: avg ? avg.debt : 0, changed: false },
-      business: { value: avg ? avg.business : 0, baseline: avg ? avg.business : 0, changed: false },
-      savings: { value: val('savedCents', savedBase), baseline: savedBase, changed: set('savedCents') },
-      invest: { value: avg ? avg.investNet : 0, baseline: avg ? avg.investNet : 0, changed: false },
-    };
-    const remainderOf = key => lines.funding[key] + lines.otherIn[key] - lines.card[key] - lines.bank[key]
-      - lines.debt[key] - lines.business[key] - lines.savings[key] - lines.invest[key];
-    const out = {
-      persons, lines,
-      inCents: lines.funding.value + lines.otherIn.value,
-      outCents: lines.card.value + lines.bank.value + lines.debt.value + lines.business.value + lines.invest.value,
-      savedCents: lines.savings.value,
-      remainder: remainderOf('value'),
-      baselineRemainder: remainderOf('baseline'),
-      changed: Object.values(lines).some(l => l.changed) || persons.some(p => p.changed),
-    };
-    return out;
-  }
-
-  E.flows = { BASE_KEYS, ROLES, ONE_OFF_MIN_CENTS, ONE_OFF_REPEAT_SHARE, YEARLY_GAPS, REGULAR_SHARE, roleOf, derive, breakdown, baseline, planFunding, scenario };
+  E.flows = { BASE_KEYS, ROLES, ONE_OFF_MIN_CENTS, ONE_OFF_REPEAT_SHARE, YEARLY_GAPS, REGULAR_SHARE, roleOf, derive, breakdown, baseline, planFunding };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

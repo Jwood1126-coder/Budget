@@ -104,11 +104,14 @@ The full rules, data formats and engine APIs are in [docs/ARCHITECTURE.md](docs/
 
 ```sh
 npm test                                    # unit tests for the engine, importer and tools (node:test)
-node tools/build.cjs --sample && node tests/browser/run.cjs   # real-browser checks (needs Playwright)
+npm run test:browser                        # real-browser checks (needs Playwright)
+npm run lint                                # ESLint: undefined names and unused variables (eslint.config.js)
 node tools/check-privacy.cjs                # privacy scan
 ```
 
-The browser checks run in Chromium through Playwright at 1366px and 390px widths, against the sample build. If Playwright is missing: `npm install --no-save playwright && npx playwright install chromium`.
+The browser checks run in Chromium through Playwright at 1366px and 390px widths, against the sample build. `npm run test:browser` builds the sample to `dist/test/index.html` and tests that file, so it never overwrites the copy you open at `dist/index.html`; `node tests/browser/run.cjs budget` runs one spec file (or the tests whose name contains the text), and `BUDGET_DIST=path/to/index.html` tests another sample build. If Playwright is missing: `npm install --no-save playwright && npx playwright install chromium`.
+
+`npm run lint` fetches ESLint 9 through `npx` on first use (nothing is added to `package.json`); it checks only for undefined names and unused variables.
 
 ## Project layout
 

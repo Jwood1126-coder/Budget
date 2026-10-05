@@ -2,12 +2,8 @@
 // Forecast view: scenarios (create, rename, delete, copy), isolation from the budget, events,
 // missing amounts, parental leave, paycheck timing, horizon, comparison, settings, reload, phone.
 
-/** Compared with the configured viewport: mobile emulation widens window.innerWidth to fit overflow. */
-async function noHorizontalScroll(page) {
-  const width = page.viewportSize().width;
-  return page.evaluate(w => document.scrollingElement.scrollWidth <= w + 1 && window.innerWidth <= w + 1, width);
-}
-const state = page => page.evaluate(() => window.HouseholdBudget.getState());
+const { noHorizontalScroll, state } = require('./helpers.cjs');
+
 const params = page => page.evaluate(() => Object.fromEntries(new URLSearchParams(location.hash.split('?')[1] || '')));
 
 /** Exact cents behind a comparison cell (null when the value is unknown). */
@@ -597,6 +593,41 @@ module.exports = [
       assert.equal(balances.length, 23, 'every month after October has a balance');
       assert.equal(await cmpCents(page, 'lowest', 'baseline'), Math.min(...balances), 'lowest balance is the lowest month shown');
       await t.shot('fc-balance');
+    },
+  },
+  {
+    name: 'the first month starts from the balance the Plan page shows, and Budget projects from the same cash',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/forecast?scenario=baseline');
+      const plan = () => page.evaluate(() => {
+        const H = window.HouseholdBudget, ctx = H.context();
+        const c = H.engine.timeline.anchors(ctx.state.plan, ctx.dataset, ctx.realTxns).combined;
+        return { cents: c.cents, asOf: c.asOf, start: ctx.forecastStart, budget: ctx.project(ctx.state.scenarios[0].id, { months: 12 }).startBalanceCents };
+      });
+      const firstMonth = async month => (await monthAttr(page, month, 'balance-cents')) - (await monthAttr(page, month, 'cumulative-cents'));
+      // The sample: checking's running balance plus the savings balance entered on the Plan page.
+      let p = await plan();
+      assert.equal(p.cents, 7396580);
+      assert.equal(p.asOf, '2026-09-30');
+      assert.equal(p.start, '2026-10', 'the forecast starts the month after the balance date');
+      await page.waitForSelector(`#fc-m-${p.start}[data-balance-cents]`);
+      assert.equal(await firstMonth(p.start), p.cents, 'first month = Plan balance + that month’s change');
+      assert.equal(p.budget, p.cents, 'Budget (ctx.project) starts from the same cash');
+      // Nothing entered at all: the bank's running balance alone is the start, everywhere.
+      await page.evaluate(() => {
+        const st = window.HouseholdBudget.getState();
+        st.plan.balances = { ...st.plan.balances, jointCashCents: null, asOf: null, accounts: {}, accountDates: {} };
+        window.HouseholdBudget.setState(st);
+      });
+      await page.waitForFunction(() => window.HouseholdBudget.context().cashPlan().balances.jointCashCents === 6990114);
+      await page.waitForFunction(m => document.querySelector(`#fc-m-${m}`)?.dataset.balanceCents === String(6990114 + Number(document.querySelector(`#fc-m-${m}`).dataset.cumulativeCents)), p.start);
+      p = await plan();
+      assert.equal(p.cents, 6990114);
+      assert.equal(await firstMonth(p.start), p.cents);
+      assert.equal(p.budget, p.cents);
+      assert.ok((await page.textContent('#fc-chart figcaption')).includes('projected joint cash'), 'the chart shows balances, not only the change in cash');
+      assert.ok(!(await page.textContent('#view')).includes("Enter today's joint cash balance"), 'no prompt to enter a balance the data already has');
     },
   },
   {

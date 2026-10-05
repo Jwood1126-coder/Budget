@@ -29,7 +29,9 @@ timestamps arrive through an optional `{ now }`); invalid input throws `E.Valida
   `globalThis.BudgetEngine` (pure logic) or `globalThis.BudgetUI` (DOM). The same engine files are
   `require`d by Node tests in the order listed in `src/manifest.json`.
 - Node ≥ 18 is the only toolchain (build, import, tests: `npm test` runs
-  `node --test "tests/unit/*.test.cjs"`). Browser tests use Playwright when available.
+  `node --test "tests/unit/*.test.cjs"`). Browser tests use Playwright when available
+  (`npm run test:browser`, see "Tests" below). `npm run lint` runs ESLint with two rules
+  (`no-undef`, `no-unused-vars`) through `npx`; nothing is added to `package.json`.
 
 ```
 src/
@@ -45,15 +47,18 @@ src/
     plan.js              monthly budget model                    (BudgetEngine.plan)
     debt.js              debt facts, promo check, illustrations  (BudgetEngine.debt)
     forecast.js          scenario projection + comparison        (BudgetEngine.forecast)
-    balances.js          balances over time, patterns, projection limits (BudgetEngine.balances)
+    balances.js          balances over time, whose money a deposit is (BudgetEngine.balances)
     flows.js             spending by role and how it was paid, money into joint by person, savings in/out, the baseline the Plan screen's dials start from (BudgetEngine.flows)
+    plan-settings.js     the plan screen's vocabulary, shared by timeline and state (BudgetEngine.planSettings)
     timeline.js          the plan screen: months, dials, drill-down, balances that drive the line (BudgetEngine.timeline)
     state.js             saved-state schema, migration, storage  (BudgetEngine.state)
     attention.js         "needs attention" list (Review)         (BudgetEngine.attention)
   ui/
     core.js              escaping, formatting, DOM helpers       (BudgetUI.dom/.fmt)
-    components.js        breadcrumbs, tables, bar lists, charts  (BudgetUI.c)
+    components.js        breadcrumbs, tables, form fields, line and column charts (BudgetUI.c)
+    chart.js             the Plan screen's cash chart: drawing, hover, keyboard, legend (BudgetUI.chart)
     router.js            hash routing                            (BudgetUI.router)
+    shared.js            transaction labels, table, category and correction forms several views share (BudgetUI.shared)
     views/*.js           one file per view                       (BudgetUI.views.<name>)
     app.js               bootstrap, state store, event wiring    (BudgetUI.app) — loaded last
   styles/*.css           base tokens/components + one file per view
@@ -66,12 +71,43 @@ tools/
 fixtures/                synthetic sample (committed): raw CSVs, rules, profile, normalized data
 private/                 (ignored) real exports, rules, household profile, builds
 tests/unit/*.test.cjs    node:test suites for the engine and tools
-tests/browser/*.cjs      Playwright end-to-end checks against dist/index.html
+tests/helpers/ledger.cjs shared synthetic fixture builders for the unit tests
+tests/browser/*.spec.cjs Playwright end-to-end checks against the sample build in dist/test/index.html
+tests/browser/run.cjs    the browser test runner; helpers.cjs: helpers the specs share
+eslint.config.js         `npm run lint`: no-undef and no-unused-vars only (ESLint 9 through npx)
 ```
 
 `tools/import.cjs` refuses to write inside `fixtures/` unless `--sample` is given, and `--sample`
 refuses unless the config is `"isSynthetic": true` **and** every input file lives inside
 `fixtures/`. `--period` takes a range `A..B`.
+
+### Tests
+
+- **Unit** (`npm test`): node:test suites in `tests/unit`, invented data only. Shared builders are
+  in `tests/helpers/ledger.cjs`: `rowMaker({ prefix, pad?, description? })` returns
+  `row(accountId, date, amountCents, fields)` (a grocery purchase unless `fields` say otherwise; ids
+  unique per factory), `pair(out, inn)` links a transfer's two rows, `rawDataset` / `dataset({
+  datasetId, accounts, transactions, ...extra })` (schema 2, `isSynthetic: true`; `dataset`
+  normalizes), `jointAccounts({ coverage, chk?, sav?, card?, cardExtra? })`, `plan(extra)`,
+  `paycheck(fields)`, `contribution(fields)`, `deepFreeze(o)`, and `monthlyFlows(txns, dataset,
+  opts)`: joint money in, out and saved per full month from `ledger.summarize`, the independent
+  figures `flows.breakdown` must agree with to the cent. Test files keep thin local wrappers (their
+  id prefix, accounts and defaults).
+- **Browser** (`npm run test:browser`): builds the sample to `dist/test/index.html` (never
+  `dist/index.html`, which may be a private build; `node tools/build.cjs --sample` alone still
+  writes `dist/index.html`) and runs `tests/browser/run.cjs`, which runs every `*.spec.cjs` in
+  Chromium at 1366px and/or 390px. `BUDGET_DIST` points it at another sample build and
+  `BUDGET_RESULTS` moves the screenshots; an argument runs one spec file (or the tests whose name
+  contains it). Each test gets `t`: `t.open(hash, { clear = true })` loads the page from empty
+  storage (a new page's first load in a new context already does, so it loads once);
+  `t.nav(view)`; and `t.settled(page?)`, which resolves once no render is scheduled
+  (`BudgetUI.app.renderPending`, kept by the render scheduler) and `<html data-render-seq>` (one more
+  per render) has not changed for two animation frames — the generic wait after an action when there
+  is no specific marker to wait for; specs never sleep. `tests/browser/helpers.cjs` holds what the
+  specs share: `noHorizontalScroll(page)`, `state(page)` and the money formats the page uses
+  (`whole`, `amt`, `signedAmt`, `boxText`, `money`) with their parsers (`centsOf`, `cents`).
+- **Lint** (`npm run lint`) and the **privacy scan** (`npm run check:privacy`) run over the same
+  tree; both must pass before committing.
 
 ## 2. Dataset (normalized ledger), schema version 2
 
@@ -332,6 +368,7 @@ Edit = {
   reimbursement?: 'pending'|'confirmed'|'not_reimbursed',
   business?: 'pending'|'business'|'household',
   planningBaseline?: 'exclude'|'include',
+  person?: 'p1'|'p2'|'none',                       // whose money a deposit is; 'none' = neither partner
   note?: string,                                   // replaces the imported note on the effective row
   history: [{ at: ISO-8601|null, field: string, from: any, to: any, reason: string }]
 }
@@ -340,6 +377,10 @@ Edit = {
 Edits are created with `review.editRecord`. Up to 50,000 corrections are kept, each with its
 latest 200 history entries and up to 50 split parts. Corrections whose transaction is no longer
 in the data are kept and listed (`review.queues().orphanEdits`).
+
+`person` is applied by `ledger.applyEdits` as the effective row's `personId` (null for 'none') with
+`personBasis: 'edit'`; it wins over a person named by an import rule or transfer hint (`personId`
+on the imported row, `personBasis: 'rule'`; the imported value stays in `basePersonId`).
 
 ## 5. Plan (monthly budget model)
 
@@ -375,6 +416,7 @@ PlannedChange = {                      // up to 100; validated like every list i
 IncomeStream = {
   id, label, personId: 'p1'|'p2'|null,
   kind: 'paycheck'|'contribution'|'other',   // contribution = transfer from that person's personal account
+  grossPerPaycheckCents?: cents|null,        // optional, from a pay stub: reference only, never joint funding
   netPerPaycheckCents: cents|null,           // full take-home per occurrence (paycheck kind); null = unknown
   jointPerPaycheckCents: cents|null,         // portion reaching the joint account per occurrence
   frequency: 'weekly'|'biweekly'|'semimonthly'|'monthly'|'unknown',
@@ -504,6 +546,55 @@ State = {
           migrationNotes: string[], legacySnapshot: string|null }  // raw earlier data, set only by a migration
 }
 ```
+
+**`ui.plan` has one description:** the table `PLAN_UI` in `state.js` (readable as `state.PLAN_UI`),
+one row per field: its rule (type, default, limits; `optional(…)` = absent until needed), for a map
+with fixed keys the message `setPath` gives for another key, and what it holds. Derived from it:
+the defaults of a new budget, the rules `sanitize` checks a saved `ui.plan` with, how `setPath`
+writes inside each field (a map one entry at a time, an object field one field at a time, anything
+else whole), and `state.cleanPlanUi(raw)`, which `timeline.settings` reads `ui.plan` through. The
+lists the rows use (dial keys, the retired card/bank dials, spending groups and dials, planned-change
+kinds and groups, Trends series, the scalar choices and their defaults) are defined once in
+`engine/plan-settings.js` (`BudgetEngine.planSettings`, loaded before `timeline.js` and `state.js`)
+and are the same objects in `state` and `timeline`.
+
+**Adding a `ui.plan` field:** add one row to `PLAN_UI` (name, rule with its default and limits,
+`doc`) and one line for the field in the `plan: { … }` block above (a test checks that every row is
+named there). Nothing else changes: defaults, `sanitize`, `setPath`/`getPath`, `cleanPlanUi` and
+`timeline.settings` follow from the row. Choices the timeline needs by name go in
+`plan-settings.js` and the row uses them. A field that only adds information needs no upgrade: an
+older copy of the app keeps it as saved (forward compatibility, below). A field that replaces an
+earlier one also needs an entry in `V5_UPGRADES`.
+
+**Upgrades inside version 5** (`state.V5_UPGRADES`; `sanitize` runs them through
+`state.upgrade(raw)` on the raw saved budget before checking it). `VERSION` stays 5, so each entry
+recognises the earlier shape itself: `{ id, applies(raw), apply(raw) → { raw, note } }` (a new raw
+budget; the input is not changed). **Every entry must be safe to run twice** (after `apply`,
+`applies` is false, or `apply` changes nothing more) **and must leave a note** whenever it changes
+what the household saved. `sanitize` shows the note and records it once in `meta.migrationNotes`,
+matched by its text, so a released note's text never changes. Entries, in order: `ui.home` (the
+earlier Home settings move to `ui.plan`, `migrateHome`) and `ui.plan.dials.card-bank` (card and bank
+dials wait in `ui.plan.legacyDials`, `migratePlanDials`). Upgrades that need the data run on the
+plan screen instead, under the same rules: `timeline.pendingUpgrade(tl)` names them (`migrateRows`,
+`migrateDials`).
+
+**Forward compatibility.** A budget saved by a newer copy of the app may hold fields this copy does
+not know, and the page saves the budget as soon as it opens. So when loading (`sanitize`,
+`loadFromStorage`, `importWorkbook`), a key this version does not know is **kept as saved** (after
+the known fields) wherever the object has a field list: the top level, `plan`, its incomes, bills,
+debts (and `promo`), savings goals, personal spending and planned changes, `plan.balances`,
+`plan.settings`, scenarios with their events and assumptions, `references`, `meta`, `ui`,
+`ui.whatIf`, `ui.plan`, `ui.plan.trends` and `ui.plan.legacyDials` (`plan.people` entries are
+rebuilt from their ids and keep only `name`, as before). Each one gets the note "`<path>`: not
+part of this version’s saved budget format; kept as saved (`<value>`)." and one summary note comes
+first: "This budget has N settings this version of the app does not use (…), probably saved by a
+newer copy of the app; they are kept as saved." Such keys survive the save on opening, edits made through `setPath` and the plan
+screen's writes, reloading and a workbook export/import. Not kept: a `__proto__` key (dropped and
+named, "…not part of the saved budget format; dropped"); map entries (`ui.plan.rows`, `cardSplit`,
+`dials`, …), where an entry with a part this version does not know is still dropped as not valid;
+ledger corrections' fields; and an item rewritten whole by `updateItem`/`updateEvent`, which copies
+only the fields it knows. Writes stay strict: `setPath` refuses a field this version does not know.
+The household profile is not a saved budget: `defaults` leaves its unknown keys out.
 
 **Limits** (`state.LIMITS`): label 80 chars, note 500, category key 80, id 80, lastRoute 1000;
 scenarios 20, events per scenario 200, incomes 12, bills 60, savings 30, debts 30, targets 200,
@@ -833,9 +924,13 @@ its **scheduled** month, so semimonthly is always 2 a month and monthly always 1
 follow the anchor exactly. Holidays are not modelled.
 
 ### BudgetEngine.plan
-- `monthly(plan, { scope: 'joint'|'household' = 'joint', month?: 'YYYY-MM', timing? }) -> PlanSummary`
+- `monthly(plan, { scope: 'joint'|'household' = 'joint', month?: 'YYYY-MM', timing?, balanceKnown?: boolean }) -> PlanSummary`
   (timing defaults to `plan.settings.incomeTiming`, then conservative; `actual` without a month
-  falls back to conservative with an assumption). The UI always passes a month: the **plan
+  falls back to conservative with an assumption). `balanceKnown` says whether a starting cash
+  balance is known as `timeline.anchors` decides it (the plan alone cannot see balances that come
+  with the data); when false, `missing` lists `{ id: 'jointCash', label: 'Joint cash balance not
+  entered', area: 'balances' }`. Without it only the balances entered in the plan count. The UI
+  passes it (`ctx.plan`). The UI always passes a month: the **plan
   reference month** is the forecast start (the month after the latest complete month), so bills
   and incomes with start/end months, and real paydays, are judged for one stated month on
   Overview, Budget and in "what this change does".
@@ -1010,7 +1105,10 @@ Projection = {
   balance = start + cumulative). Positive rate with an unknown balance → `returnCents` null, nothing
   applied. Labelled hypothetical.
 - **Balance:** `balanceCents` is null unless `plan.balances.jointCashCents` is known (the
-  projection then reports cumulative change only). A balance dated `asOf` applies from the month
+  projection then reports cumulative change only). The UI never projects the saved plan as it is:
+  every projection (Budget, Forecast, the attention list) goes through `ctx.cashPlan()`, whose
+  `jointCashCents`/`asOf` are `timeline.anchors(...).combined` (see BudgetEngine.timeline), so it
+  starts from the same cash the Plan page shows. A balance dated `asOf` applies from the month
   after that date (it already includes that month's activity); earlier projected months have a
   null balance, with an assumption saying so. In household scope the balance starts from
   joint cash only (assumption: money in personal accounts is not included). `compare` adds the
@@ -1039,7 +1137,8 @@ included), `repayment` (checking → card: settles purchases already counted, ne
   parts), unassigned, interest, card/bank purchases and refunds, card repayments, debt, business,
   savings in/out, investments in/out; derived: cardNet, bankNet, consumption, funding (p1 + p2),
   moneyIn, savingsNet, investNet, left. `actual` counts every row; `planning` leaves out rows the
-  household left out of the planning baseline. Agrees with `balances.monthlyFlows` to the cent.
+  household left out of the planning baseline. Agrees to the cent with the joint month totals
+  worked out from `ledger.summarize` (cross-checked in tests/unit/flows.test.cjs).
 - `baseline(rows, { count })` → the last `count` complete months: totals (actual and planning) and
   averages built from averaged base amounts, so they add up the same way. Purchases are sorted
   into one-time (left out by the household, or found: $500 or more from a place that is not regular
@@ -1053,18 +1152,6 @@ included), `repayment` (checking → card: settles purchases already counted, ne
   (pay stub, reference only), take-home, kept personally and joint, per paycheck and per month
   (same count as the Budget: semimonthly 2, biweekly 2 typical or 26/12 average), ended streams
   (old pay) for comparison, and `jointCents` (the partner's joint contribution).
-- `scenario({ base, funding, home, people })` → one effective amount per line (the household's
-  setting, else the baseline) and `remainder` = funding + other planned income − card − bank −
-  debt − business − savings − investments. Planned card and bank spending are never below $0;
-  savings is signed (a drawdown raises the remainder).
-`balances.history` uses an entered balance at exactly its date. The days between the end of the
-account's export and that date (or between the date and the start of the export) are the account's
-`gap`: no transactions are assumed in them, and the account's note says so. The date is never moved.
-`balances.project(..., limits)` keeps real balances at $0 or more: savings tops up checking, a
-drawdown stops when savings is empty, and the rest is reported as `uncovered`.
-Ledger edits gain `person: 'p1'|'p2'|'none'` (whose money a deposit is; 'none' = neither), applied
-by `applyEdits` as `personId` with `personBasis` 'edit' (a rule's person has basis 'rule').
-Income streams gain `grossPerPaycheckCents` (optional, reference only).
 
 ### BudgetEngine.balances
 Joint cash accounts only (checking, savings, other; cards and loans are not balances to spend).
@@ -1082,7 +1169,8 @@ Joint cash accounts only (checking, savings, other; cards and loans are not bala
     figure for the account's `source` ('bank'); `anchor.source` keeps 'statement'. A month-end value is the nearest anchor at or before it
     plus the flows in between, or the next anchor minus the flows in between; it is null unless
     every day in between is covered by the account's exports or is in its `gap`
-    (`{ side: 'after'|'before', from, to, days }`, `gapFor`), where no transactions are assumed.
+    (`{ side: 'after'|'before', from, to, days }`, `gapFor`), where no transactions are assumed
+    (the account's `note` says so). An entered balance is used at exactly its date, never moved.
   - `anchor`: the latest known balance `{ date, cents, source }`; `first` / `last`: the earliest and
     latest days with a known end-of-day balance `{ date, cents }` (null without an anchor);
     `assumed`: per month, true when that value was worked across days in the `gap`.
@@ -1090,22 +1178,10 @@ Joint cash accounts only (checking, savings, other; cards and loans are not bala
     and a group or total that includes it is a change, not a balance (`kind: 'change'`).
   - Rows excluded as duplicate copies never move a balance; every other row does.
 - `incomeAttribution(plan) -> (txn) => 'p1'|'p2'|null` — whose deposit a row is: the row's
-  `personId` (from rules/transfer hints); else, for a contribution, the one person with a
+  `personId` (the household's own correction, §4, else a rule or transfer hint); else, for a contribution, the one person with a
   contribution stream, and for a payroll deposit, the one person whose paycheck reaches joint (a
   paycheck with no joint portion from someone who also sends transfers does not); with several
   candidates the per-paycheck/per-transfer amount must match one; otherwise null ("other").
-- `monthlyFlows(txns, dataset, { months?, coverageMap?, planning?, attribute? }) -> [{ month, coverage, inCents, outCents, savedCents, leftCents, businessCents, bySource? }]`
-  — joint scope, full months only (else null). in = income + contributions; out = spending (after
-  refunds) + debt payments + purchases marked business (they still left the account); saved = net
-  to savings. `planning: true` leaves out rows excluded from the planning baseline.
-  With `attribute`, `bySource: { p1, p2, other }` splits `inCents` (the parts add up exactly).
-- `usual(flows, { count = 12, endMonth? }) -> { inCents, outCents, savedCents, months, count, bySource? }` — averages of the last full months (`bySource.other` absorbs rounding so the parts add up to `inCents`).
-- `comfortable(flows, { count = 12 }) -> { comfortableCents, typicalLeftCents, monthsAtLeast, count, lowestCents, highestCents, months }`
-  — the leftover (in − out) reached in at least three of every four months (the value at index
-  ⌊n/4⌋ of the sorted leftovers), rounded down to $50, never below $0.
-- `project({ startMonth, months, start: { checking, savings }, inCents, outCents, savedCents }) -> { rows: [{ month, checking, savings, total }], firstShortMonth, monthlyLeftCents }`
-  — each month checking += in − out − saved, savings += saved. No interest or growth. A null
-  start is treated as 0 (the caller labels the line as change).
 
 ### BudgetEngine.timeline
 The plan screen's model, built once per render. Pure; `today` is passed in.
@@ -1270,10 +1346,21 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
     `coverFromSavings` moves projected checking shortfalls from savings (`policy.moves`), per
     account only.
 - `anchors(plan, dataset, txns?) -> { simple, accounts: [{ id, name, type, group, cents, asOf, source, dateAssumed, gap, anchor: { date, cents, source, label } }], combined: { cents, asOf, members, sameDate }|null, missing, enteredAsOf }`
-  — the starting balances; Forecast reads its starting cash from `combined`. Per account the newest
-  known balance wins: the export's running balance, a balance supplied with the data
-  (`dataset.balances`, source 'statement'|'bank'; absent is fine) or the entered one, which is used
-  only when no bank figure is dated the same day or later.
+  — the starting balances. Per account the newest known balance wins: the export's running
+  balance, a balance supplied with the data (`dataset.balances`, source 'statement'|'bank'; absent
+  is fine) or the entered one, which is used only when no bank figure is dated the same day or
+  later; with no account balance, the single joint cash figure (`jointCashCents`/`asOf`).
+  **This is the one accessor for starting cash.** `timeline.build` (the Plan page) calls it, and
+  the app's view context (`makeContext` in `ui/app.js`) calls it once per derive for everything
+  else: `ctx.anchors()` is its result for the saved plan and the decided transactions;
+  `ctx.cashPlan()` is the plan with `balances.jointCashCents`/`asOf` replaced by `combined`
+  (null/null when nothing is known), which `ctx.project` and the Forecast view's projections and
+  comparison start from; and "is a balance known" (`combined` not null) is passed to
+  `plan.monthly` (`balanceKnown`, via `ctx.plan`) and `attention.list` (`balanceKnown`, via
+  `ctx.attention`). A balance that comes only with the data therefore counts as known everywhere:
+  "Joint cash balance not entered" and "Enter today's balances" appear only when no balance is
+  known at all. Budget's joint cash card reads `ctx.anchors()` too, and offers the single joint cash
+  input only while no account has a balance.
 - `toCSV(tl, { people?, format? }) -> string` — RFC 4180, CRLF, deterministic. Block "Settings"
   (`key,value` rows: today, baseline window/setting/months used/from/to, plan start, last month,
   horizon, cover from savings, `dial.<key>.label|baseline|plan|source|card|bank`, `group.<key>`,
@@ -1307,16 +1394,22 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
   alone; removes `ui.plan.legacyDials` and any `ui.plan.dials.card`/`bank`; appends
   `tl.migration.dials.note` to `meta.migrationNotes`; returns the same state when nothing is
   waiting). The plan screen runs `migrateDials(migrateRows(state, tl), tl)` once, as one change,
-  and shows `tl.migration.note`. `setDial` removes the dial's `cardSplit` entry; `resetPlan` clears
+  and shows `tl.migration.note`; `pendingUpgrade(tl)` names that: null when nothing is waiting,
+  else `{ steps, note, apply }` — `steps` ⊆ `['migrateRows', 'migrateDials']` in that order, `note`
+  = `tl.migration.note`, `apply(state)` runs the steps (safe to run twice; section 7, upgrades). `setDial` removes the dial's `cardSplit` entry; `resetPlan` clears
   `cardSplit`. `acceptCarriedOver(state, key | keys)` ("Keep") removes only the
   `fromCard`/`fromBank` marker: the amount and its card part stay, so card and bank totals do not
   move; nothing marked → the same state.
-- `settings(raw)` (adds `groups`, `irregularOff`, `legacyDials` (`{ card?, bank? }`, amounts only;
-  a `dials.card`/`bank` still in `raw` moves here and wins), `cardSplit` (valid entries only),
-  `trends: { series, ma, trend }`; `mode` may be 'trends'), `prorate(cents, daysLeft, daysInMonth)`,
-  `depositHint(credits, personId)`; constants `SPEND_GROUPS`, `SPEND_DIALS`, `LEGACY_DIALS`,
-  `OUT_DIALS`, `MERCHANT_KEY`, `CHANGE_KINDS`, `CHANGE_GROUPS`, `SERIES`, `TREND_MA`,
-  `TREND_DEFAULTS`, `DIAL_LABEL`.
+- `settings(raw)` — `ui.plan` as the screen reads it: `state.cleanPlanUi(raw)` (the one validator,
+  from `PLAN_UI`, section 7: every field present with its default, anything not valid reset or left
+  out as `sanitize` would, silently; keys this version does not know left out) plus the screen's one
+  quirk: a `dials.card`/`bank` amount still in `raw` (a budget `sanitize` has not moved yet) goes to
+  `legacyDials` (`{ card?, bank? }`, amounts only) and wins over one waiting there. `legacyDials` and
+  `cardSplit` are always present (`{}` when empty). `prorate(cents, daysLeft, daysInMonth)`,
+  `depositHint(credits, personId)`; constants `OUT_DIALS`, `MERCHANT_KEY`, `DIAL_LABEL` and, from
+  `BudgetEngine.planSettings` (the same objects `state` uses): `BASELINE_CHOICES`, `HORIZONS`,
+  `PAST_CHOICES`, `MODES`, `DEFAULTS`, `TREND_MA`, `TREND_DEFAULTS`, `SPEND_GROUPS`, `SPEND_DIALS`,
+  `LEGACY_DIALS` (= `RETIRED_DIALS`), `CHANGE_KINDS`, `CHANGE_GROUPS`, `SERIES`.
 
 ### BudgetEngine.state
 - `VERSION = 5`, `storageKey(datasetId)`, `LEGACY_KEYS(copyIds?)`, constants `STORAGE_PREFIX`,
@@ -1344,7 +1437,9 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
     time Plan opens (card and bank spending are now worked out from those)." A blank (null) one is
     removed; one that is not an amount is dropped and named. `legacyDials` keeps only amounts and is
     removed when none is left; it survives a workbook export/import until the plan screen applies
-    it. A missing `plan.changes` becomes `[]` without a note.
+    it. A missing `plan.changes` becomes `[]` without a note. Both moves are `V5_UPGRADES` entries.
+  - A key this version does not know is kept as saved, with a note and one summary note
+    (section 7, forward compatibility).
   - A dataset id differing from the saved one is noted; edits apply where the transactions exist.
 - `migrate(raw, profile, dataset, opts?) -> { state, notes }` — saved-state versions 1–4 or
   unversioned earlier budgets (object, JSON text or `{ copyId, state }` wrapper) → v5. Never
@@ -1396,7 +1491,12 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
   `removeItem(state, list, id, { now }?)` — removing a bill/debt clears the link on the other side;
   removing a goal sets `goalId: null` on scenario events.
 - Constants for the plan screen: `DIAL_KEYS`, `RETIRED_DIALS` (['card', 'bank']), `SPEND_GROUPS`, `SPEND_DIALS`,
-  `CHANGE_KINDS`, `CHANGE_GROUPS`, `TREND_SERIES`.
+  `CHANGE_KINDS`, `CHANGE_GROUPS`, `TREND_SERIES` (frozen; `BudgetEngine.planSettings`'s lists).
+- `ui.plan` (section 7): `PLAN_UI` (read-only rows `{ name, default, optional, doc }`) and
+  `cleanPlanUi(raw) -> object` (silent: defaults filled in, invalid values reset or left out as
+  `sanitize` would, unknown keys left out, `legacyDials` amounts only; never throws).
+- Upgrades inside version 5 (section 7): `V5_UPGRADES` (`[{ id, applies, apply }]`, frozen) and
+  `upgrade(raw) -> { raw, notes, applied }` (runs the entries that apply, in order; pure).
 - `setPath(state, path, value) -> State` (validated writes from forms, path-copying, input never
   modified), `getPath(state, path)` (returns a copy, or undefined for a missing item):
   - Lists use selectors: `plan.incomes[id=p1-pay].netPerPaycheckCents`,
@@ -1414,10 +1514,13 @@ The plan screen's model, built once per render. Pure; `today` is passed in.
   touch globals; never throw; quota errors get a plain message). See section 7 for the key order.
 
 ### BudgetEngine.attention
-- `list({ dataset, txns, state, ctx }) -> [{ id, severity: 'action'|'decision'|'info', title, detail, route, cta? }]`
+- `list({ dataset, txns, state, ctx, balanceKnown? }) -> [{ id, severity: 'action'|'decision'|'info', title, detail, route, cta? }]`
   — data items (from `review.queues`), plan items and forecast items (`ctx.project(scenarioId, { months })`
   supplies projections); sorted action → decision → info; items whose `'attention:' + id` is in
   `state.ui.dismissed` are hidden; a part that fails becomes one `info` item instead of breaking the list.
+  The "Enter today's balances" item (id `balance`, route `#/overview`) is listed only when no starting
+  balance is known: `balanceKnown` as the caller passes it (the app: from `ctx.cashPlan()`), else
+  `timeline.anchors(state.plan, dataset, txns).combined`.
 
 ## 9. UI routes
 

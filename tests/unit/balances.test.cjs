@@ -1,41 +1,24 @@
 'use strict';
-// Tests for BudgetEngine.balances: balances over time, monthly patterns, "comfortable to save"
-// and the projection. All households, merchants and amounts are invented.
+// Tests for BudgetEngine.balances: balances over time and whose money a deposit is.
+// All households, merchants and amounts are invented.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { loadEngine } = require('../load-engine.cjs');
+const { E, rowMaker, pair, dataset, jointAccounts } = require('../helpers/ledger.cjs');
 
-const E = loadEngine();
 const L = E.ledger;
 const B = E.balances;
 
-let seq = 0;
-function row(accountId, date, amountCents, fields = {}) {
-  seq += 1;
-  return Object.assign({ id: 'b' + String(seq).padStart(5, '0'), accountId, date, description: 'SAMPLE ROW', amountCents, kind: 'spend', category: 'Groceries' }, fields);
-}
+const row = rowMaker({ prefix: 'b' });
 const pay = (date, cents, extra) => row('chk', date, cents, Object.assign({ kind: 'income', subtype: 'payroll', category: 'Income' }, extra));
 const buy = (date, cents, extra) => row('chk', date, -cents, extra);
-const toSavings = (date, cents) => {
-  const out = row('chk', date, -cents, { kind: 'transfer', subtype: 'savings', category: 'Transfer' });
-  const inn = row('sav', date, cents, { kind: 'transfer', subtype: 'savings', category: 'Transfer', pairId: out.id });
-  out.pairId = inn.id;
-  return [out, inn];
-};
+const SAVINGS = { kind: 'transfer', subtype: 'savings', category: 'Transfer' };
+const toSavings = (date, cents) => pair(row('chk', date, -cents, SAVINGS), row('sav', date, cents, SAVINGS));
 
-function build(txns, { chk = [{ start: '2026-01-01', end: '2026-06-30' }], sav = [{ start: '2026-01-01', end: '2026-06-30' }] } = {}) {
-  return L.normalizeDataset({
-    schemaVersion: 2, datasetId: 'balances-test', isSynthetic: true,
-    accounts: [
-      { id: 'chk', label: 'Joint checking', type: 'checking', scope: 'joint', coverage: chk },
-      { id: 'sav', label: 'Joint savings', type: 'savings', scope: 'joint', coverage: sav },
-      { id: 'card', label: 'Joint card', type: 'credit_card', scope: 'joint', coverage: chk }
-    ],
-    transactions: txns
-  });
-}
+const HALF_YEAR = [{ start: '2026-01-01', end: '2026-06-30' }];
+/** Joint checking, savings and a card (covered like checking). */
+const build = (txns, { chk = HALF_YEAR, sav = HALF_YEAR } = {}) => dataset({ datasetId: 'balances-test', accounts: jointAccounts({ chk, sav, card: chk }), transactions: txns });
 const eff = ds => L.applyEdits(ds, {});
 
 test('cash accounts: checking and savings count, cards do not', () => {
@@ -101,30 +84,6 @@ test('history: rows marked as duplicate copies never move the balance', () => {
   assert.equal(h.groups.checking.values[0], 260000);
 });
 
-test('monthly flows: in, out and saved for full months only; business purchases still left the account', () => {
-  const biz = buy('2026-02-11', 30000, { category: 'Household & hardware' });
-  const txns = [pay('2026-01-05', 300000), buy('2026-01-10', 100000), ...toSavings('2026-01-20', 25000),
-    pay('2026-02-05', 300000), biz, row('chk', '2026-02-20', -60000, { kind: 'debt_payment', subtype: 'loan', category: 'Debt' })];
-  const ds = build(txns, { chk: [{ start: '2026-01-01', end: '2026-02-14' }], sav: [{ start: '2026-01-01', end: '2026-02-28' }] });
-  const edited = L.applyEdits(ds, { [biz.id]: { business: 'business', reason: 'work tools', history: [] } });
-  const flows = B.monthlyFlows(edited, ds, { months: ['2026-01', '2026-02'] });
-  assert.deepEqual(flows[0], { month: '2026-01', coverage: 'full', inCents: 300000, outCents: 100000, savedCents: 25000, leftCents: 175000, businessCents: 0 });
-  assert.equal(flows[1].coverage, 'partial', 'the checking export ends mid-February');
-  assert.equal(flows[1].inCents, null, 'a partial month is unknown, not small');
-  const full = build(txns, { chk: [{ start: '2026-01-01', end: '2026-02-28' }], sav: [{ start: '2026-01-01', end: '2026-02-28' }] });
-  const f2 = B.monthlyFlows(L.applyEdits(full, { [biz.id]: { business: 'business', reason: 'work tools', history: [] } }), full, { months: ['2026-02'] })[0];
-  assert.equal(f2.outCents, 90000, 'debt payment + business purchase');
-  assert.equal(f2.businessCents, 30000);
-});
-
-test('monthly flows: one-offs left out of planning are left out only with planning: true', () => {
-  const big = buy('2026-01-15', 200000, { category: 'Dental' });
-  const ds = build([pay('2026-01-05', 300000), big]);
-  const edited = L.applyEdits(ds, { [big.id]: { planningBaseline: 'exclude', reason: 'one-off', history: [] } });
-  assert.equal(B.monthlyFlows(edited, ds, { months: ['2026-01'] })[0].outCents, 200000);
-  assert.equal(B.monthlyFlows(edited, ds, { months: ['2026-01'], planning: true })[0].outCents, 0);
-});
-
 test('income by person: named rows, then the budget’s incomes, decide whose money it is', () => {
   const plan = { incomes: [
     { id: 'a-pay', personId: 'p1', kind: 'paycheck', netPerPaycheckCents: 250000, jointPerPaycheckCents: 210000 },
@@ -151,59 +110,20 @@ test('income by person: named rows, then the budget’s incomes, decide whose mo
   assert.equal(who({ kind: 'income', subtype: 'interest', amountCents: 145000 }), null, 'interest never');
 });
 
-test('income by person: the parts add up to money in, month by month and on average', () => {
+test('income by person: the parts add up to money in', () => {
   const txns = [pay('2026-01-05', 210000), row('chk', '2026-01-15', 145000, { kind: 'transfer', subtype: 'contribution', category: 'Transfer' }),
     row('chk', '2026-01-31', 333, { kind: 'income', subtype: 'interest', category: 'Income' }), pay('2026-02-05', 210000)];
   const ds = build(txns, { chk: [{ start: '2026-01-01', end: '2026-02-28' }], sav: [{ start: '2026-01-01', end: '2026-02-28' }] });
-  const attribute = B.incomeAttribution({ incomes: [
+  const plan = { incomes: [
     { personId: 'p1', kind: 'paycheck', jointPerPaycheckCents: 210000 },
     { personId: 'p2', kind: 'contribution', jointPerPaycheckCents: 145000 }
-  ] });
-  const flows = B.monthlyFlows(eff(ds), ds, { months: ['2026-01', '2026-02'], attribute });
-  assert.deepEqual(flows[0].bySource, { p1: 210000, p2: 145000, other: 333 });
-  assert.equal(flows[0].inCents, 355333);
-  const u = B.usual(flows, { count: 12 });
-  assert.equal(u.bySource.p1 + u.bySource.p2 + u.bySource.other, u.inCents);
-  assert.deepEqual(u.bySource, { p1: 210000, p2: 72500, other: 167 });
-});
-
-test('usual: the average of the last full months', () => {
-  const flows = [
-    { month: '2026-01', inCents: 100000, outCents: 50000, savedCents: 10000 },
-    { month: '2026-02', inCents: null, outCents: null, savedCents: null },
-    { month: '2026-03', inCents: 200000, outCents: 70000, savedCents: 20000 },
-    { month: '2026-04', inCents: 300000, outCents: 90000, savedCents: 30000 },
-  ];
-  assert.deepEqual(B.usual(flows, { count: 2 }), { inCents: 250000, outCents: 80000, savedCents: 25000, months: ['2026-03', '2026-04'], count: 2 });
-  assert.equal(B.usual([], {}).inCents, null);
-});
-
-test('comfortable: what was left over in three of every four months, rounded down to $50', () => {
-  const lefts = [210000, 50000, 260000, 180000, 230000, 90000, 240000, 200000, 220000, 250000, 190000, 205000];
-  const flows = lefts.map((l, i) => ({ month: E.months.add('2025-10', i), inCents: 600000, outCents: 600000 - l, savedCents: 0 }));
-  const r = B.comfortable(flows, { count: 12 });
-  assert.equal(r.comfortableCents, 190000, 'the 4th lowest of 12 (already a multiple of $50)');
-  const odd = B.comfortable(flows.map((f, i) => (i === 3 ? { ...f, outCents: f.inCents - 191234 } : f)), { count: 12 });
-  assert.equal(odd.comfortableCents, 190000, 'rounded down to $50');
-  assert.equal(r.monthsAtLeast, 9);
-  assert.equal(r.lowestCents, 50000);
-  assert.equal(r.highestCents, 260000);
-  const bad = B.comfortable([{ month: '2026-01', inCents: 100, outCents: 500 }], {});
-  assert.equal(bad.comfortableCents, 0, 'never below $0');
-});
-
-test('project: plain arithmetic, and the month checking would run out', () => {
-  const p = B.project({ startMonth: '2026-10', months: 3, start: { checking: 100000, savings: 50000 }, inCents: 500000, outCents: 520000, savedCents: 40000 });
-  assert.equal(p.monthlyLeftCents, -60000);
-  assert.deepEqual(p.rows.map(r => ({ month: r.month, checking: r.checking, savings: r.savings, total: r.total })), [
-    { month: '2026-10', checking: 40000, savings: 90000, total: 130000 },
-    { month: '2026-11', checking: -20000, savings: 130000, total: 110000 },
-    { month: '2026-12', checking: -80000, savings: 170000, total: 90000 },
-  ]);
-  assert.equal(p.firstShortMonth, '2026-11');
-  assert.equal(p.limited, false, 'without limits it is plain arithmetic (amounts that are only a change can go below zero)');
-  assert.throws(() => B.project({ startMonth: '2026-10', months: 3, start: {}, inCents: 1.5, outCents: 0, savedCents: 0 }), E.ValidationError);
-  assert.throws(() => B.project({ startMonth: 'soon', months: 3, start: {}, inCents: 0, outCents: 0, savedCents: 0 }), E.ValidationError);
+  ] };
+  // flows.breakdown attributes each deposit with B.incomeAttribution(plan).
+  const [jan, feb] = E.flows.breakdown(eff(ds), ds, { months: ['2026-01', '2026-02'], plan }).map(r => r.actual);
+  assert.deepEqual({ p1: jan.p1, p2: jan.p2, other: jan.unassigned + jan.interest }, { p1: 210000, p2: 145000, other: 333 });
+  assert.equal(jan.moneyIn, 355333);
+  assert.deepEqual({ p1: feb.p1, p2: feb.p2, other: feb.unassigned + feb.interest }, { p1: 210000, p2: 0, other: 0 });
+  assert.equal(feb.moneyIn, 210000);
 });
 
 test('sample: month-end checking matches the bank’s own last balance, and the pattern explains the change', () => {
@@ -216,49 +136,12 @@ test('sample: month-end checking matches the bank’s own last balance, and the 
   assert.equal(h.groups.checking.values[h.months.indexOf('2026-09')], lastBank.balanceCents, 'no checking rows after the last balance row');
   assert.equal(h.total.kind, 'balance');
   // Over a year, in − out − saved accounts for the change in checking to within card-payment timing.
-  const flows = B.monthlyFlows(txns, ds, {});
+  const flows = E.flows.breakdown(txns, ds, { plan: profile.plan });
   const year = flows.filter(f => f.month >= '2025-10' && f.month <= '2026-09');
-  const left = year.reduce((s, f) => s + f.leftCents, 0);
+  assert.equal(year.length, 12);
+  const left = year.reduce((s, f) => s + f.actual.left, 0);
   const change = h.groups.checking.values[h.months.indexOf('2026-09')] - h.groups.checking.values[h.months.indexOf('2025-09')];
   assert.ok(Math.abs(left - change) < 300000, `pattern ${left} vs balance change ${change}`);
-});
-
-test('project with limits: no balance goes below $0; savings tops up checking; the rest is an uncovered shortfall', () => {
-  // Checking 1,000.00 and savings 500.00, 600.00 a month more going out than coming in, still moving 400.00 to savings.
-  const p = B.project({ startMonth: '2026-10', months: 4, start: { checking: 100000, savings: 50000 }, inCents: 500000, outCents: 520000, savedCents: 40000, limits: { checking: true, savings: true } });
-  assert.deepEqual(p.rows.map(r => [r.month, r.checking, r.savings, r.uncovered]), [
-    ['2026-10', 40000, 90000, 0],
-    ['2026-11', 0, 110000, 0],      // checking short 200.00: savings covers it
-    ['2026-12', 0, 90000, 0],       // short 600.00 again (after 400.00 went in): covered
-    ['2027-01', 0, 70000, 0],
-  ]);
-  assert.ok(p.rows.every(r => r.checking >= 0 && r.savings >= 0), 'no negative balance in any month');
-  assert.equal(p.firstShortMonth, '2026-11');
-  assert.equal(p.coveredFromSavingsCents, 20000 + 60000 + 60000);
-  assert.equal(p.firstUncoveredMonth, null);
-
-  // Spending far above income: savings empties, then the rest is uncovered, never a negative balance.
-  const q = B.project({ startMonth: '2026-10', months: 3, start: { checking: 50000, savings: 30000 }, inCents: 300000, outCents: 400000, savedCents: 0, limits: { checking: true, savings: true } });
-  assert.deepEqual(q.rows.map(r => [r.month, r.checking, r.savings, r.uncovered]), [
-    ['2026-10', 0, 0, 20000],       // short 1,000.00: 500.00 in checking + 300.00 from savings, 200.00 uncovered
-    ['2026-11', 0, 0, 120000],
-    ['2026-12', 0, 0, 220000],
-  ]);
-  assert.equal(q.savingsEmptyMonth, '2026-10');
-  assert.equal(q.firstUncoveredMonth, '2026-10');
-  assert.equal(q.uncoveredCents, 220000);
-  // Every cent is accounted for: start + 3 months of the plan = end balances − what was not covered.
-  assert.equal(50000 + 30000 + 3 * (300000 - 400000), q.rows[2].total - q.uncoveredCents);
-
-  // A planned drawdown bigger than savings: only what is there reaches checking.
-  const d = B.project({ startMonth: '2026-10', months: 3, start: { checking: 10000, savings: 25000 }, inCents: 200000, outCents: 210000, savedCents: -10000, limits: { checking: true, savings: true } });
-  assert.deepEqual(d.rows.map(r => [r.checking, r.savings, r.uncovered]), [
-    [10000, 15000, 0],              // 100.00 short, 100.00 drawn from savings
-    [10000, 5000, 0],
-    [5000, 0, 0],                   // only 50.00 was left to draw
-  ]);
-  assert.equal(d.savingsEmptyMonth, '2026-12');
-  assert.equal(d.firstSavingsShortMonth, '2026-12');
 });
 
 test('history: a balance dated after the export ends is used at its own date; the days in between are a labelled gap with no transactions assumed', () => {

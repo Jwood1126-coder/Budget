@@ -331,21 +331,9 @@ main { padding: var(--space-6) var(--space-6) var(--space-7); max-width: 1240px;
 .table tr.is-excluded th, .table tr.is-excluded td { color: var(--text-3); text-decoration: line-through; text-decoration-color: var(--border-strong); }
 .table a { font-weight: 600; }
 
-/* ------------------------------------------------------------- bar list */
-.bar-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
-.bar-text { display: flex; justify-content: space-between; gap: var(--space-3); align-items: baseline; font-size: .9rem; }
-.bar-name { min-width: 0; }
-.bar-name a { font-weight: 650; }
-.bar-name small { display: block; }
-.bar-value { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; display: inline-flex; gap: 6px; align-items: center; }
-.bar-track { position: relative; height: 10px; margin-top: 4px; background: var(--surface-3); border-radius: 5px; }
-.bar-fill { height: 100%; background: var(--series-1); border-radius: 0 5px 5px 0; min-width: 2px; }
-.bar-fill.negative { background: var(--text-3); }
-.bar-ref { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--text); border-radius: 1px; }
+/* ------------------------------------------------------------- legends and keys */
 .legend-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: var(--space-3) 0 0; font-size: .78rem; color: var(--text-2); }
 .key { display: inline-block; vertical-align: middle; }
-.key-bar { width: 14px; height: 8px; border-radius: 2px; background: var(--series-1); }
-.key-ref { width: 2px; height: 12px; background: var(--text); }
 .key-line { width: 16px; height: 0; border-top: 2px solid; }
 .key-line.series-1 { border-color: var(--series-1); }
 .key-line.series-2 { border-color: var(--series-2); }
@@ -398,8 +386,6 @@ main { padding: var(--space-6) var(--space-6) var(--space-7); max-width: 1240px;
 .chart .seg.series-2 { fill: var(--series-2); }
 .chart .seg.series-3 { fill: var(--series-3); }
 .chart .seg.series-muted { fill: var(--text-3); }
-.chart .hatch { fill: var(--surface); opacity: .75; }
-.chart .col-total { fill: var(--text-2); font-size: 11px; font-weight: 650; font-family: var(--font); }
 .chart-legend { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 var(--space-2); padding: 0; font-size: .82rem; color: var(--text-2); }
 .chart-legend li { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
 .chart-table { margin-top: var(--space-2); font-size: .85rem; }

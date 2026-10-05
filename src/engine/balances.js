@@ -1,6 +1,6 @@
 'use strict';
 /*
- * BudgetEngine.balances — bank balances over time and a simple pattern-based projection.
+ * BudgetEngine.balances — bank balances over time, and whose money a deposit into joint is.
  *
  * History: the balance of each joint cash account (checking, savings) at the end of every month.
  *   - "bank": the export's running-balance column gives the balance at the end of each day that
@@ -18,11 +18,8 @@
  *   A month-end value is null when the days between it and the nearest known balance are not
  *   all covered by that account's exports: unknown is never shown as "unchanged".
  *
- * Patterns: money in, money out and money saved per month, from the same counting rules as the
- * rest of the app (joint accounts only), for months whose coverage is full.
- *
- * Projection: each month, checking += in − out − saved and savings += saved. No interest, no
- * growth: plain arithmetic the household can check.
+ * Income attribution (incomeAttribution): whose money each deposit into the joint accounts is
+ * (p1, p2 or neither), used by flows.breakdown and the Plan screen's list of deposits.
  */
 (function (root) {
   const E = root.BudgetEngine || (root.BudgetEngine = {});
@@ -349,156 +346,5 @@
     return attribute;
   }
 
-  /**
-   * Money in, money out and money saved per month (joint accounts, full months only).
-   * in = pay and other income + transfers in from personal accounts;
-   * out = spending (after refunds) + debt payments + purchases marked as business costs (they
-   * still left the account); saved = net moved into savings.
-   * With `planning: true`, one-offs left out of the planning baseline are left out of `out`.
-   * With `attribute` (from incomeAttribution), each row also has `bySource: { p1, p2, other }`,
-   * which adds up to `inCents`.
-   */
-  function monthlyFlows(txns, dataset, { months, coverageMap, planning = false, attribute = null } = {}) {
-    const list = months || E.ledger.months(dataset);
-    const cov = coverageMap || E.ledger.coverageMap(dataset);
-    const byMonth = new Map(list.map(m => [m, []]));
-    // Excluded rows are kept here: summarize() skips them, but business purchases still left the account.
-    for (const t of E.ledger.filter(txns, { scope: 'joint', includeExcluded: true })) {
-      const m = t.date.slice(0, 7);
-      if (byMonth.has(m)) byMonth.get(m).push(t);
-    }
-    return list.map(m => {
-      const status = cov[m] ? cov[m].status : 'none';
-      if (status !== 'full') return { month: m, coverage: status, inCents: null, outCents: null, savedCents: null, leftCents: null, ...(attribute ? { bySource: null } : {}) };
-      const rows = byMonth.get(m).filter(t => !(planning && t.planningExcluded));
-      const s = E.ledger.summarize(rows);
-      let business = 0;
-      for (const t of rows) if (t.excluded === 'business' && t.kind === 'spend') business += 0 - t.amountCents;
-      const inCents = s.incomeCents + s.contributionsCents;
-      const outCents = s.spendingCents + s.debtPaymentsCents + business;
-      const savedCents = s.savedNetCents;
-      const out = { month: m, coverage: status, inCents, outCents, savedCents, leftCents: inCents - outCents - savedCents, businessCents: business };
-      if (attribute) {
-        const by = { p1: 0, p2: 0, other: 0 };
-        for (const t of rows) {
-          const v = E.ledger.measure(t);
-          const cents = v.incomeCents + v.contributionCents;
-          if (cents) by[attribute(t) || 'other'] += cents;
-        }
-        out.bySource = by;
-      }
-      return out;
-    });
-  }
-
-  /** Average of the last `count` full months ending at `endMonth` (default: the latest full one). */
-  function usual(flows, { count = 12, endMonth } = {}) {
-    const full = flows.filter(f => f.inCents !== null && (!endMonth || f.month <= endMonth));
-    const used = full.slice(-count);
-    if (!used.length) return { inCents: null, outCents: null, savedCents: null, months: [], count: 0 };
-    const avg = key => E.money.divide(used.reduce((s, f) => s + f[key], 0), used.length);
-    const out = { inCents: avg('inCents'), outCents: avg('outCents'), savedCents: avg('savedCents'), months: used.map(f => f.month), count: used.length };
-    if (used.every(f => f.bySource)) {
-      const src = k => E.money.divide(used.reduce((s, f) => s + f.bySource[k], 0), used.length);
-      out.bySource = { p1: src('p1'), p2: src('p2'), other: src('other') };
-      // Rounded averages can differ from the total's by a cent: "other" absorbs it so the parts add up.
-      out.bySource.other += out.inCents - (out.bySource.p1 + out.bySource.p2 + out.bySource.other);
-    }
-    return out;
-  }
-
-  /**
-   * What is comfortable to set aside each month: the amount left over (in − out) in at least
-   * three of every four recent full months, rounded down to $50 and never below $0. Months vary;
-   * an average would be too much in a quarter or more of them.
-   * @returns {{ comfortableCents: number|null, typicalLeftCents: number|null, monthsAtLeast: number,
-   *             count: number, lowestCents: number|null, highestCents: number|null, months: object[] }}
-   */
-  function comfortable(flows, { count = 12, endMonth } = {}) {
-    const used = flows.filter(f => f.inCents !== null && (!endMonth || f.month <= endMonth)).slice(-count);
-    if (!used.length) return { comfortableCents: null, typicalLeftCents: null, monthsAtLeast: 0, count: 0, lowestCents: null, highestCents: null, months: [] };
-    const lefts = used.map(f => f.inCents - f.outCents);
-    const sorted = lefts.slice().sort((a, b) => a - b);
-    const q = sorted[Math.floor(sorted.length * 0.25)];
-    const comfortableCents = Math.max(0, Math.floor(q / 5000) * 5000);
-    return {
-      comfortableCents,
-      typicalLeftCents: E.money.divide(lefts.reduce((s, v) => s + v, 0), lefts.length),
-      monthsAtLeast: lefts.filter(v => v >= comfortableCents).length,
-      count: used.length,
-      lowestCents: sorted[0], highestCents: sorted[sorted.length - 1],
-      months: used.map((f, i) => ({ month: f.month, leftCents: lefts[i] })),
-    };
-  }
-
-  /**
-   * Month-by-month projection from the latest balances.
-   * Each month: checking += in − out − saved and savings += saved (saved < 0 is a drawdown).
-   *
-   * With `limits` (use them when the starting amounts are real balances), a balance never goes
-   * below $0, as in real life:
-   *   - a drawdown can only take what savings holds; the rest never reaches checking;
-   *   - when checking would go below $0, savings tops it up;
-   *   - what neither can cover is a shortfall (it would have to be borrowed or spending cut),
-   *     added up in `uncovered`, never shown as a negative balance.
-   * Without limits (amounts are only "change since…", balances unknown) it is plain arithmetic.
-   * @param {{ startMonth: string, months: number, start: { checking: number|null, savings: number|null },
-   *           inCents: number, outCents: number, savedCents: number,
-   *           limits?: { checking?: boolean, savings?: boolean } }} o startMonth = first projected month
-   * @returns {{ rows: { month, checking, savings, total, uncovered, fromSavings }[], firstShortMonth: string|null,
-   *   firstSavingsShortMonth: string|null, savingsEmptyMonth: string|null, firstUncoveredMonth: string|null,
-   *   uncoveredCents: number, coveredFromSavingsCents: number, monthlyLeftCents: number, limited: boolean }}
-   *   firstShortMonth: the first month checking would go below $0 (with limits: the first month it
-   *   needed savings or ran short). firstSavingsShortMonth: the first month savings would go below $0
-   *   (without limits) or was emptied (with limits).
-   */
-  function project(o) {
-    if (!E.months.isMonth(o.startMonth)) throw new E.ValidationError('A projection needs a start month.', 'startMonth');
-    const n = Math.max(0, Math.min(120, Math.floor(o.months || 0)));
-    for (const k of ['inCents', 'outCents', 'savedCents']) {
-      if (!isCents(o[k])) throw new E.ValidationError('A projection needs whole-cent amounts for money in, out and saved.', k);
-    }
-    const lim = isObj(o.limits) ? o.limits : {};
-    const floorChecking = lim.checking === true, floorSavings = lim.savings === true;
-    const left = o.inCents - o.outCents - o.savedCents;
-    let checking = isCents(o.start && o.start.checking) ? o.start.checking : 0;
-    let savings = isCents(o.start && o.start.savings) ? o.start.savings : 0;
-    const rows = [];
-    let firstShortMonth = null, firstSavingsShortMonth = null, savingsEmptyMonth = null, firstUncoveredMonth = null;
-    let uncovered = 0, fromSavings = 0;
-    for (let i = 0; i < n; i++) {
-      const month = E.months.add(o.startMonth, i);
-      checking += left;
-      savings += o.savedCents;
-      if (floorSavings && savings < 0) {
-        // A drawdown bigger than what is left in savings: only what is there reaches checking.
-        checking += savings;
-        savings = 0;
-        if (savingsEmptyMonth === null) savingsEmptyMonth = month;
-      }
-      if (checking < 0 && firstShortMonth === null) firstShortMonth = month;
-      if (floorChecking && checking < 0) {
-        if (floorSavings && savings > 0) {
-          const move = Math.min(savings, 0 - checking);
-          savings -= move;
-          checking += move;
-          fromSavings += move;
-          if (savings === 0 && savingsEmptyMonth === null) savingsEmptyMonth = month;
-        }
-        if (checking < 0) {
-          uncovered += 0 - checking;
-          checking = 0;
-          if (firstUncoveredMonth === null) firstUncoveredMonth = month;
-        }
-      }
-      if (savings < 0 && firstSavingsShortMonth === null) firstSavingsShortMonth = month;
-      rows.push({ month, checking, savings, total: checking + savings, uncovered, fromSavings });
-    }
-    return {
-      rows, firstShortMonth, firstSavingsShortMonth: floorSavings ? savingsEmptyMonth : firstSavingsShortMonth, savingsEmptyMonth, firstUncoveredMonth,
-      uncoveredCents: uncovered, coveredFromSavingsCents: fromSavings, monthlyLeftCents: left, limited: floorChecking || floorSavings,
-    };
-  }
-
-  E.balances = { CASH_TYPES, GROUPS, cashAccounts, suppliedBalances, coveredBetween, endOfDay, anchorsFor, gapFor, history, incomeAttribution, monthlyFlows, usual, comfortable, project };
+  E.balances = { CASH_TYPES, GROUPS, cashAccounts, suppliedBalances, coveredBetween, endOfDay, anchorsFor, gapFor, history, incomeAttribution };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

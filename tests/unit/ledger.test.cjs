@@ -5,21 +5,13 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { loadEngine } = require('../load-engine.cjs');
+const H = require('../helpers/ledger.cjs');
 
-const E = loadEngine();
+const { E, deepFreeze } = H;
 const L = E.ledger;
 
 const LEGACY_PATH = path.join(__dirname, '..', '..', 'fixtures', 'legacy-v1-sample.json');
 const loadLegacy = () => JSON.parse(fs.readFileSync(LEGACY_PATH, 'utf8'));
-
-function deepFreeze(o) {
-  if (o && typeof o === 'object' && !Object.isFrozen(o)) {
-    Object.freeze(o);
-    for (const v of Object.values(o)) deepFreeze(v);
-  }
-  return o;
-}
 
 const ACCOUNTS = [
   { id: 'chk', label: 'Joint checking', type: 'checking', scope: 'joint', coverage: [{ start: '2026-01-01', end: '2026-09-30' }] },
@@ -28,31 +20,11 @@ const ACCOUNTS = [
   { id: 'alex-chk', label: 'Alex personal', type: 'checking', scope: 'personal', ownerId: 'p1', coverage: [{ start: '2026-01-01', end: '2026-09-30' }] }
 ];
 
-let seq = 0;
-function tx(date, amountCents, fields = {}) {
-  seq += 1;
-  return Object.assign({
-    id: 't' + String(seq).padStart(4, '0'),
-    accountId: 'card',
-    date,
-    description: 'SAMPLE GROCER #12',
-    amountCents,
-    kind: 'spend',
-    category: 'Groceries'
-  }, fields);
-}
+const row = H.rowMaker({ prefix: 't', pad: 4, description: 'SAMPLE GROCER #12' });
+/** A card purchase of groceries unless `fields` say otherwise. */
+const tx = (date, amountCents, fields) => row('card', date, amountCents, fields);
 
-function rawDataset(transactions, extra = {}) {
-  return Object.assign({
-    schemaVersion: 2,
-    datasetId: 'test-household',
-    isSynthetic: true,
-    generatedAt: '2026-10-01',
-    currency: 'USD',
-    accounts: ACCOUNTS,
-    transactions
-  }, extra);
-}
+const rawDataset = (transactions, extra = {}) => H.rawDataset({ datasetId: 'test-household', generatedAt: '2026-10-01', currency: 'USD', accounts: ACCOUNTS, transactions, ...extra });
 
 const dataset = (transactions, extra) => L.normalizeDataset(rawDataset(transactions, extra));
 const byId = (rows, id) => rows.find(t => t.id === id);

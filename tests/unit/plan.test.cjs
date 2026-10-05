@@ -406,6 +406,46 @@ test('unknown cash balance and debt balance are reported as missing facts', () =
   assert.ok(s.missing.some(m => m.area === 'debts' && m.id === 'card'));
 });
 
+/** One joint checking account; `balance` (cents) is the bank's own figure for Sep 30, when given. */
+function cashDataset(balance) {
+  const src = {
+    schemaVersion: 2, datasetId: 'plan-balance-test', isSynthetic: true,
+    accounts: [{ id: 'chk', label: 'Joint checking', type: 'checking', scope: 'joint', coverage: [{ start: '2026-08-01', end: '2026-09-30' }] }],
+    transactions: [{ id: 't1', accountId: 'chk', date: '2026-09-12', description: 'SAMPLE GROCER', amountCents: -8400, kind: 'spend', category: 'Groceries' }],
+  };
+  if (balance !== undefined) src.balances = [{ accountId: 'chk', date: '2026-09-30', cents: balance, source: 'bank' }];
+  return E.ledger.normalizeDataset(src);
+}
+const jointCashMissing = s => s.missing.find(m => m.id === 'jointCash');
+
+test('a balance that comes with the data is known: balanceKnown from E.timeline.anchors clears the missing joint cash', () => {
+  const plan = deepFreeze(basePlan()); // nothing entered: no joint cash figure, no account balances
+  const anc = E.timeline.anchors(plan, cashDataset(412345));
+  assert.equal(anc.combined.cents, 412345);
+  assert.equal(anc.accounts[0].source, 'bank');
+  const s = P.monthly(plan, { scope: 'joint', month: '2026-10', balanceKnown: !!anc.combined });
+  assert.equal(jointCashMissing(s), undefined, 'no "Joint cash balance not entered" while the data carries a balance');
+  assert.ok(s.missing.every(m => m.area !== 'balances'));
+  // The plan alone cannot see the data's balance: without balanceKnown only entered values count.
+  assert.ok(jointCashMissing(P.monthly(plan, { scope: 'joint', month: '2026-10' })));
+});
+
+test('no balance anywhere: the missing joint cash item stays, with its wording and area', () => {
+  const plan = deepFreeze(basePlan());
+  const anc = E.timeline.anchors(plan, cashDataset());
+  assert.equal(anc.combined, null);
+  for (const opts of [{ balanceKnown: !!anc.combined }, {}]) {
+    const m = jointCashMissing(P.monthly(plan, Object.assign({ scope: 'household', month: '2026-10' }, opts)));
+    assert.deepEqual(m, { id: 'jointCash', label: 'Joint cash balance not entered', area: 'balances' });
+  }
+  // An entered joint cash figure is a known balance either way; a non-boolean balanceKnown is ignored.
+  const entered = basePlan();
+  entered.balances = { jointCashCents: 250000, asOf: '2026-09-30', note: '' };
+  assert.equal(jointCashMissing(P.monthly(entered, { balanceKnown: !!E.timeline.anchors(entered, cashDataset()).combined })), undefined);
+  assert.equal(jointCashMissing(P.monthly(entered, { balanceKnown: 'yes' })), undefined);
+  assert.ok(jointCashMissing(P.monthly(basePlan(), { balanceKnown: 1 })));
+});
+
 // ------------------------------------------------------------------ months & timing
 
 test('bills respect startMonth/endMonth when a month is given', () => {

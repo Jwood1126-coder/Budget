@@ -335,6 +335,7 @@
       try {
         const scenario = st.scenarios[0];
         const after = ctx.project(scenario.id, { months: 12 });
+        // Only the change in cash is compared, which does not depend on the starting cash.
         const before = E.forecast.project(prev.plan, (prev.scenarios || [])[0] || null, { startMonth: ctx.forecastStart, months: 12, scope: ctx.scope });
         forecast = { before: before.summary.endCumulativeCents, after: after.summary.endCumulativeCents };
       } catch (err) { forecast = null; }
@@ -1128,7 +1129,9 @@
     const st = ctx.state;
     const bal = st.plan.balances || {};
     const cashKnown = E.money.isCents(bal.jointCashCents);
-    const anchored = E.timeline.anchors(st.plan, ctx.dataset, ctx.realTxns || ctx.txns);
+    // The same starting cash as the Plan page and Forecast: ctx.anchors() is what ctx.cashPlan()
+    // and so ctx.project (the goal statuses below) start from.
+    const anchored = ctx.anchors();
     const cashCard = anchored.accounts.length ? c.card(`<p class="fine">Forecasts start from the account balances on the Plan page: <strong>${esc(money(anchored.combined.cents))}</strong> as of ${esc(fmt.date(anchored.combined.asOf))} (${esc(anchored.accounts.map(a => a.name + ' ' + money(a.cents)).join(', '))}).</p>
       <p class="bud-counts"><a href="#/overview#plan-balances">Change the balances on the Plan page</a>. The single joint-cash figure below is used only while no account balance is known.</p>`,
     { title: 'Joint cash balance', id: 'bud-cash-card' }) : c.card(`<p class="fine">Bank exports do not include balances. Until you enter one, forecasts show how much joint cash goes up or down, not how much you will have.</p>

@@ -8,11 +8,13 @@
  *                     date, a balance supplied with the data, or the export's running balance),
  *                     else the one joint cash figure ("simple" mode). Forecast reads its starting
  *                     cash through this too.
- *   settings(raw)     ui.plan with every default filled in
+ *   settings(raw)     ui.plan with every default filled in (BudgetEngine.state.cleanPlanUi, plus
+ *                     the earlier card/bank dials still among the dials moved to legacyDials)
  *   toCSV(tl, opts)   the plan as a spreadsheet: its settings, then one row per month
  *   templates         ready-made planned changes (templates.baby(dueDate)), never accepted for you
  *   setDial / setRow / resetDial / resetPlan / setGroup / setIrregular / addChange / setChange /
  *   removeChange / acceptChanges / migrateRows   validated state writes for the screen
+ *   pendingUpgrade(tl) the upgrades the screen applies once (migrateRows, migrateDials), named
  *
  * Months: from the first month with data (or the earliest month a balance can be worked back
  * to) through planStart + horizon − 1. planStart is the month after the last month every
@@ -51,25 +53,22 @@
 (function (root) {
   const E = root.BudgetEngine || (root.BudgetEngine = {});
 
-  const BASELINE_CHOICES = [3, 6, 12, 'all'];
-  const HORIZONS = [6, 12, 24, 60];
-  const PAST_CHOICES = [6, 12, 'all'];
-  const MODES = ['balance', 'flows', 'trends'];
-  const TREND_MA = [0, 3, 6];
-  const DEFAULTS = Object.freeze({ baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true });
-  const TREND_DEFAULTS = Object.freeze({ series: Object.freeze(['card']), ma: 3, trend: true });
-  /** The spending groups of everyday spending, by how adjustable it is. */
-  const SPEND_GROUPS = ['essentials', 'flexible'];
+  // ------------------------------------------------------------------ constants
+  // Shared with BudgetEngine.state, which saves the plan screen's settings (ui.plan): defined once
+  // in plan-settings.js (BudgetEngine.planSettings), loaded before this file. The choices
+  // (BASELINE_CHOICES ... TREND_DEFAULTS) are what state's ui.plan descriptor (PLAN_UI) offers;
+  // SPEND_GROUPS: everyday spending by how adjustable it is; SPEND_DIALS: the spending dials, each
+  // with a card and a bank part; LEGACY_DIALS (= RETIRED_DIALS): dial keys from before spending was
+  // grouped (rows saved under them: '<key>-c|m|r-<hash>'); SERIES: the Trends chart's fixed series;
+  // IN_KEYS (= PEOPLE): the people a plan holds.
+  const PS = E.planSettings;
+  const { BASELINE_CHOICES, HORIZONS, PAST_CHOICES, MODES, TREND_MA, DEFAULTS, TREND_DEFAULTS, SPEND_GROUPS, SPEND_DIALS, CHANGE_KINDS, CHANGE_GROUPS, SERIES } = PS;
+  const LEGACY_DIALS = PS.RETIRED_DIALS;
+  const IN_KEYS = PS.PEOPLE;
   /** The money-out dials, in the order the screen shows them ('other' only when it has an amount). */
   const OUT_DIALS = ['essentials', 'flexible', 'irregular', 'savings', 'other'];
   /** ui.plan.groups key that moves one place (merchant) to a group of its own choosing. */
   const MERCHANT_KEY = 'merchant:';
-  const CHANGE_KINDS = ['oneTime', 'monthly'];
-  const CHANGE_GROUPS = ['income', 'essentials', 'flexible', 'irregular', 'savings'];
-  /** Dial keys that existed before spending was grouped by how adjustable it is (rows: '<key>-c|m|r-<hash>'). */
-  const LEGACY_DIALS = ['card', 'bank'];
-  /** The spending dials: each has a card and a bank part. */
-  const SPEND_DIALS = ['essentials', 'flexible', 'irregular'];
   const SHORT_LABEL = { essentials: 'Essentials', flexible: 'Flexible', irregular: 'Irregular' };
   /** Categories averaging less than this a month (either sign) are grouped into "Other" (when 2 or more). */
   const TINY_CATEGORY_CENTS = 2000;
@@ -91,7 +90,6 @@
     + 'The month of that balance adds net × (days left in the month after its date ÷ days in the month), rounded to the cent; later months add the full net. Plan months use the dials and the planned changes you accepted, earlier months what actually happened.';
   const ILLUSTRATIVE = 'Account lines are illustrative: card spending is taken from checking in the month it happens, not when the card is paid; the combined line is not affected.';
   const DIAL_LABEL = { inOther: 'Other money in', essentials: 'Essentials', flexible: 'Flexible spending', irregular: 'Irregular costs', savings: 'Net to savings', other: 'Debt, business & investments' };
-  const IN_KEYS = ['p1', 'p2'];
   /** Words for what one-time costs were, by category (the irregular dial's basis); others are lower-cased. */
   const IRREGULAR_WORDS = {
     'Dental': 'dental work', 'Vision': 'eye care', 'Medical & pharmacy': 'medical bills', 'Travel': 'trips',
@@ -99,24 +97,6 @@
     'Home improvement': 'home projects', 'Gifts & donations': 'gifts', 'Auto insurance': 'insurance',
     'Home insurance': 'insurance', 'Life insurance': 'insurance', 'Other insurance': 'insurance', 'Fees & interest': 'fees',
   };
-  /** The monthly series the Trends chart can draw (person series 'in-<personId>' come first). */
-  const SERIES = [
-    { key: 'in-other', name: 'Other money in', group: 'in' },
-    { key: 'in-total', name: 'All money in', group: 'in' },
-    { key: 'card', name: 'Card purchases', group: 'out' },
-    { key: 'bank', name: 'Paid from the bank', group: 'out' },
-    { key: 'essentials', name: 'Essentials', group: 'out' },
-    { key: 'flexible', name: 'Flexible spending', group: 'out' },
-    { key: 'irregular', name: 'Irregular costs', group: 'out' },
-    { key: 'other-out', name: 'Debt, business & investments', group: 'out' },
-    { key: 'out-total', name: 'All money out', group: 'out' },
-    { key: 'to-savings', name: 'Into savings', group: 'savings' },
-    { key: 'from-savings', name: 'Out of savings', group: 'savings' },
-    { key: 'net', name: 'Left in checking', group: 'net' },
-    { key: 'combined-change', name: 'Change in joint cash', group: 'net' },
-  ];
-  const SERIES_KEYS = new Set(SERIES.map(s => s.key));
-  const isSeriesKey = k => typeof k === 'string' && (SERIES_KEYS.has(k) || /^in-[A-Za-z0-9][A-Za-z0-9_.:-]*$/.test(k));
 
   const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
   const isCents = v => Number.isSafeInteger(v);
@@ -130,61 +110,22 @@
 
   // ------------------------------------------------------------------ settings
 
-  /** ui.plan with defaults for anything missing or not valid (the engine never trusts its input). */
+  /**
+   * ui.plan as the screen reads it. Checked by BudgetEngine.state.cleanPlanUi, the one validator for
+   * ui.plan (state's PLAN_UI table): every default filled in, anything not valid reset or left out
+   * as sanitize would, silently; hidden stays null until the household chooses. On top, the plan
+   * screen's own quirk: a card or bank amount still among the dials (a budget not checked by
+   * state.sanitize, which would move it) waits in legacyDials to be carried over (migrateDials), and,
+   * being newer, wins over one already waiting there. legacyDials and cardSplit are always present.
+   * @param {*} raw state.ui.plan (anything)
+   * @returns {object}
+   */
   function settings(raw) {
     const s = isObj(raw) ? raw : {};
-    const pick = (v, list, def) => (list.includes(v) ? v : def);
-    const dials = {};
-    if (isObj(s.dials)) for (const [k, v] of Object.entries(s.dials)) if (isCents(v)) dials[k] = v;
-    const rows = {};
-    if (isObj(s.rows)) {
-      for (const [k, v] of Object.entries(s.rows)) {
-        if (!isObj(v)) continue;
-        const o = {};
-        if (typeof v.included === 'boolean') o.included = v.included;
-        if (isCents(v.cents)) o.cents = v.cents;
-        if (Object.keys(o).length) rows[k] = o;
-      }
-    }
-    const groups = {};
-    if (isObj(s.groups)) for (const [k, v] of Object.entries(s.groups)) if (k.trim() && SPEND_GROUPS.includes(v)) groups[k.trim()] = v;
-    const irregularOff = {};
-    if (isObj(s.irregularOff)) for (const [k, v] of Object.entries(s.irregularOff)) if (v === true) irregularOff[k] = true;
-    const t = isObj(s.trends) ? s.trends : {};
-    // Amounts set for the earlier card and bank dials, waiting to be carried over (migrateDials);
-    // one still among the dials (a budget not checked by state.sanitize) is newer and wins.
-    const legacyDials = {};
-    if (isObj(s.legacyDials)) for (const k of LEGACY_DIALS) if (isCents(own(s.legacyDials, k))) legacyDials[k] = s.legacyDials[k];
-    for (const k of LEGACY_DIALS) {
-      if (isCents(own(dials, k))) legacyDials[k] = dials[k];
-      delete dials[k];
-    }
-    const cardSplit = {};
-    if (isObj(s.cardSplit)) {
-      for (const k of SPEND_DIALS) {
-        const v = own(s.cardSplit, k);
-        if (!isObj(v) || !isCents(v.cents) || !isCents(v.card)) continue;
-        cardSplit[k] = { cents: v.cents, card: v.card };
-        // Marks an amount carried over from the earlier card/bank dials, until the household keeps or changes it.
-        for (const f of ['fromCard', 'fromBank']) if (isCents(v[f])) cardSplit[k][f] = v[f];
-      }
-    }
-    return {
-      baselineMonths: pick(s.baselineMonths, BASELINE_CHOICES, DEFAULTS.baselineMonths),
-      horizon: pick(s.horizon, HORIZONS, DEFAULTS.horizon),
-      past: pick(s.past, PAST_CHOICES, DEFAULTS.past),
-      mode: pick(s.mode, MODES, DEFAULTS.mode),
-      coverFromSavings: typeof s.coverFromSavings === 'boolean' ? s.coverFromSavings : DEFAULTS.coverFromSavings,
-      dials, rows,
-      // null = the household never chose (the screen decides what to show); an array once set.
-      hidden: Array.isArray(s.hidden) ? s.hidden.filter(k => typeof k === 'string') : null,
-      groups, irregularOff, legacyDials, cardSplit,
-      trends: {
-        series: Array.isArray(t.series) ? Array.from(new Set(t.series.filter(isSeriesKey))) : TREND_DEFAULTS.series.slice(),
-        ma: pick(t.ma, TREND_MA, TREND_DEFAULTS.ma),
-        trend: typeof t.trend === 'boolean' ? t.trend : TREND_DEFAULTS.trend,
-      },
-    };
+    const cfg = E.state.cleanPlanUi(s);
+    const legacyDials = isObj(cfg.legacyDials) ? cfg.legacyDials : {};
+    for (const k of LEGACY_DIALS) if (isCents(own(s.dials, k))) legacyDials[k] = s.dials[k];
+    return Object.assign(cfg, { legacyDials, cardSplit: isObj(cfg.cardSplit) ? cfg.cardSplit : {} });
   }
 
   function rangeText(start, end) {
@@ -1885,6 +1826,32 @@
     return recordNote(next, mig.note);
   }
 
+  // ------------------------------------------------------------------ upgrades the plan screen applies
+  // Upgrades inside saved-state version 5 that need a built plan (row ids depend on the data), so
+  // state.sanitize cannot run them (its own are BudgetEngine.state.V5_UPGRADES). Like those, each
+  // is safe to run twice and leaves a note in meta.migrationNotes.
+  const SCREEN_UPGRADES = { migrateRows, migrateDials };
+
+  /**
+   * What the plan screen must apply once, as one change, for the timeline `tl` it just built:
+   * null when nothing is waiting, else { steps, note, apply }:
+   *   steps  the upgrades, in order: 'migrateRows' (row changes saved under the earlier card/bank
+   *          dials) and/or 'migrateDials' (amounts set for those dials, from ui.plan.legacyDials)
+   *   note   tl.migration.note: what to tell the household, once (also the key for "already done")
+   *   apply  state => the state with every step applied (migrateDials(migrateRows(state, tl), tl));
+   *          safe to run twice (the second run changes nothing)
+   * @param {object} tl from build
+   */
+  function pendingUpgrade(tl) {
+    const mig = isObj(tl) && isObj(tl.migration) ? tl.migration : null;
+    if (!mig) return null;
+    const steps = [];
+    if ((Array.isArray(mig.rows) && mig.rows.length) || (Array.isArray(mig.dropped) && mig.dropped.length)) steps.push('migrateRows');
+    if (isObj(mig.dials)) steps.push('migrateDials');
+    if (!steps.length) return null;
+    return { steps, note: mig.note, apply: state => steps.reduce((st, step) => SCREEN_UPGRADES[step](st, tl), state) };
+  }
+
   /**
    * Keep a carried-over amount as it is (one dial key or a list): its "carried over" marker is
    * removed, the amount and its card part stay. Nothing marked: the state is returned as it is.
@@ -1904,5 +1871,6 @@
     TINY_CATEGORY_CENTS, STABLE_MIN_CHARGES, STABLE_SPREAD, OTHER_CATEGORY, SIMPLE_LABEL, RULE, SIMPLE_RULE, ILLUSTRATIVE, DIAL_LABEL,
     build, anchors, settings, depositHint, prorate, toCSV, templates,
     setDial, setRow, resetDial, resetPlan, setGroup, setIrregular, addChange, setChange, removeChange, acceptChanges, migrateRows, migrateDials, acceptCarriedOver,
+    pendingUpgrade,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
