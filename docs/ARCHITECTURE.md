@@ -1422,15 +1422,20 @@ naming what is missing, when a public name has not been added), the parts in bet
     `planStart`), `notJoint` (`fundedFrom` p1/p2/unknown: never on the joint plan), `noAmount`
     (null or $0), `noCategory` (not a debt payment and no category: it cannot be matched to the
     history, so it is never added — that could count it twice), `inBudget` (its category has a
-    budget, which already plans that category). **Current debt bills win over a diluted average**:
+    budget, which already plans that category). **Current debt bills are the debt payments**:
     the debt bills seen and running in the baseline months (`seen` with no `endMonth`, or `ends`;
     `billChanges` → `seenDebtCents`, their monthly amounts added up) are in the history, but
-    averaged over the whole window a debt that started recently is diluted (three $80 payments in
-    twelve months average $20). The debt part of the `other` dial's baseline (`parts.debt`) is the
-    average of debt payments, or `seenDebtCents` when that is more — instead of the average, never
-    on top of it (a larger average, e.g. a debt with no bill, stays) — and an `ends` change takes
-    out exactly what it counted. The basis then adds "; debt payments at your current debt bills
-    from Budget ($80.00 a month, not the average of $20.00)". A dial set directly still wins.
+    the window's average misstates them: a debt that started recently is diluted (three $80
+    payments in twelve months average $20), and a payment lowered or refinanced keeps its older,
+    higher amount there. When `seenDebtCents` is more than $0, it is the debt part of the `other`
+    dial's baseline (`parts.debt`), lower or higher than the average of debt payments — instead of
+    the average, never on top of it — and an `ends` change takes out exactly what it counted. The
+    history cannot be split by bill (a debt bill has no category, payee or account), so none of a
+    larger average is kept: the dial's `debtCheck` (`{ billsCents, averageCents }`, else null) says
+    the history paid more, and the basis adds "; debt payments at your current debt bills from
+    Budget ($80.00 a month, not the average of $170.00). Your history paid more toward debts than
+    these bills: if a debt payment is missing from your bills, add it in Edit plan, or set this
+    amount here". A dial set directly still wins.
   - `goals`: `plan.savings` with `{ id, label, targetCents, savedCents, monthlyCents, targetMonth,
     spendAtTarget, cumulativeCents, reachMonth, already }`. The projected savings balance (the
     savings accounts' lines added up) reaches goal k in the first month, from the last complete

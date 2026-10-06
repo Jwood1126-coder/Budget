@@ -104,9 +104,12 @@ One stream per paycheck or regular transfer **into the joint accounts**:
 - How the plan uses a joint bill with an amount (the report's "Bills" table says which applied):
   - **seen**: the baseline months already hold a payment in its category (any debt payment for a
     debt bill), so the dials count it. With an `endMonth`, the plan takes the amount back out
-    from the month after it ("Car loan ends"). A current debt bill counts at its own amount when
-    the history's average is less (a loan that started a few months ago is diluted over the
-    window): Debt & business plans debt payments at the larger of the two, never both.
+    from the month after it ("Car loan ends"). Current debt bills count at their own amounts,
+    instead of the history's average of debt payments, whether that average is less (a loan
+    that started a few months ago is diluted over the window) or more (a payment lowered or
+    refinanced): an explicit current amount wins, never both. When the average is more, the
+    Debt & business dial says so: list every debt paid from joint money as a bill, or the plan
+    leaves out the ones without a bill.
   - **added**: not in the history (or `status: "planned"`, or `startMonth` after the plan
     start): added from `startMonth` (or the plan start) through `endMonth`, to Essentials (debt
     bills to Debt & business).
