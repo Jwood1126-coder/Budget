@@ -1,48 +1,33 @@
 'use strict';
 /*
- * Plan (#/overview), 2. Coming up: what is planned across the plan's months, at a glance, then
- * the list to edit it.
- *   The strip    one line per lane across the plan horizon: a pack (New baby, Childcare, Kid costs)
- *                as one bar from its first to its last month with its one-time and monthly total
- *                (one-time items as dots on it); a change of the household's own as a dot (one-time)
- *                or a bar (monthly, to its end month or the edge); a bill Budget adds or ends; a
- *                savings goal spent or reached. Faded and dashed: listed, not in the plan yet.
- *                Labels never overlap: each item takes the first lane with room.
- *   The list     every planned change, by month: accept, name, amount, status and remove on one
- *                line; when and how (one-time or monthly, group, whose income, start, end) folded
- *                under its date. A pack's items, and the changes of a what-if copied from a saved
- *                scenario, are one folded row (name, how many, once + a month, one box to accept
- *                or unaccept them all) that opens into those lines. What Budget adds (bills,
- *                goals) is read-only, edited in Budget.
- *   Add          the packs (one tap after a date; never accepted for you, tagged as a what-if of
- *                their own so Compare can show them first) and a change of the household's own.
+ * Planned changes, in two places:
+ *   Edit plan (#/budget)   the list to edit them, by month: accept, name, amount, status and remove
+ *                          on one line; when and how (one-time or monthly, group, whose income,
+ *                          start, end) folded under its date. A group's changes (a what-if copied
+ *                          from a saved scenario, the baby costs, a pack added earlier) are one
+ *                          folded row (name, how many, once + a month, one box to accept or
+ *                          unaccept them all) that opens into those lines. What Edit plan's pay,
+ *                          bills and goals add is read-only here, edited in their own section.
+ *                          "+ Custom change" adds one of the household's own.
+ *   Overview (#/overview)  "Coming up": the next few, short (a group as one line), nothing to edit.
  */
 (function (root) {
   const UI = root.BudgetUI;
   const E = root.BudgetEngine;
   const { esc } = UI.dom;
   const fmt = UI.fmt;
-  const c = UI.c;
   const P = UI._plan;
-  const { amt, plural, inputText, badgeWithId, isCents, packOf, SCENARIO_CLS, groupKeyOf, groupIdOf, shortLabel, compact, PACKS } = P;
+  const { amt, plural, inputText, badgeWithId, isCents, packOf, SCENARIO_CLS, groupKeyOf, groupIdOf, compact } = P;
 
   const KIND_LABEL = { oneTime: 'One-time', monthly: 'Monthly' };
   const CHANGE_GROUP_LABEL = { income: 'Income', essentials: 'Essentials', flexible: 'Flexible', irregular: 'Irregular', savings: 'Savings' };
   /** Groups only the changes worked out from Budget use (read-only rows). */
   const DERIVED_GROUP_LABEL = { debt: 'Debt & business' };
   const STATUS_BADGE = { applied: ['In plan', 'good'], notAccepted: ['Not accepted', 'neutral'], unset: ['Amount not set', 'warn'], outside: ['Outside horizon', 'neutral'], overridden: ['Savings set by you', 'neutral'] };
-  /** The packs offered, in order: the template, the id stem of their controls, what they need. */
-  const ADD_PACKS = [
-    { key: 'babyFirstYear', stem: 'baby', needs: 'due' },
-    { key: 'childcare', stem: 'childcare', needs: 'start' },
-    { key: 'kidCosts', stem: 'kids', needs: 'due' },
-  ];
 
   // ------------------------------------------------------------------ amounts and words
   /** Cost of a change to checking: spending and savings count up, income counts down. */
   const costOf = ch => (ch.group === 'income' ? 0 - ch.cents : ch.cents);
-  /** "$450", "$80/mo", "−$1.5k/mo" (income keeps its sign: a drop is negative). */
-  const amountText = ch => (isCents(ch.cents) ? compact(ch.cents, { signed: ch.group === 'income' }) + (ch.kind === 'monthly' ? '/mo' : '') : 'amount?');
   const whenText = ch => (ch.kind === 'monthly' ? (ch.endMonth ? fmt.month(ch.startMonth) + '–' + fmt.month(ch.endMonth) : 'from ' + fmt.month(ch.startMonth)) : fmt.month(ch.startMonth));
   const groupText = ch => CHANGE_GROUP_LABEL[ch.group] || DERIVED_GROUP_LABEL[ch.group] || ch.group;
   /** The colour of a change: its pack's, Budget's quiet one, a goal's green, else the household's own blue. */
@@ -58,135 +43,20 @@
   /** The note a template wrote, without the sentence every estimate shares. */
   const noteOf = ch => String(ch.note || '').replace(/\s*A generic estimate: adjust it to your own quotes and plans\.\s*$/, '').trim();
 
-  // ------------------------------------------------------------------ the strip
-  /** Drawing size, by the same rule as the chart (phones get their own, so text keeps its size). */
-  function stripGeometry() {
-    const w = typeof root.innerWidth === 'number' ? root.innerWidth : 1366;
-    if (UI.chart.isNarrow()) return { W: 340, pad: 6, font: 6.1 };
-    return { W: w < 1200 ? 720 : 940, pad: 8, font: 6.3 };
-  }
-
-  /**
-   * What the strip draws, before placing: { key, label, amount, from, to (month indexes; to null =
-   * a dot), dots: [index], cls, state 'on'|'off'|'part', kind 'pack'|'change'|'bill'|'goal', title }.
-   */
-  function stripItems(tl, months) {
-    const at = m => (m < months[0] ? 0 : months.indexOf(m));
-    const last = months.length - 1;
-    const inRange = ch => ch.startMonth <= months[last] && (ch.kind === 'oneTime' ? ch.startMonth >= months[0] : !ch.endMonth || ch.endMonth >= months[0]);
-    const endOf = ch => (ch.kind === 'oneTime' ? null : ch.endMonth && ch.endMonth < months[last] ? at(ch.endMonth) : last);
-    const items = [];
-    const groups = new Map();
-    for (const ch of tl.changes.list) {
-      if (!inRange(ch)) continue;
-      const name = groupKeyOf(ch);
-      if (name) {
-        const key = 'group-' + name;
-        if (!groups.has(key)) groups.set(key, { key, name, cls: clsOf(ch), list: [] });
-        groups.get(key).list.push(ch);
-        continue;
-      }
-      const state = ch.status === 'applied' ? 'on' : 'off';
-      if (ch.readOnly) {
-        const isEnd = ch.source === 'bill' && ch.cents < 0 && ch.kind === 'monthly';
-        items.push({ key: ch.id, label: shortLabel(ch.label), amount: amountText(Object.assign({}, ch, { cents: isEnd ? 0 - ch.cents : ch.cents })) + (isEnd ? ' less' : ''),
-          from: at(ch.startMonth), to: isEnd ? null : endOf(ch), dots: [], cls: clsOf(ch), state, kind: ch.source === 'goal' ? 'goal' : 'bill', title: ch.label });
-        continue;
-      }
-      items.push({ key: ch.id, label: shortLabel(ch.label), amount: amountText(ch), from: at(ch.startMonth), to: endOf(ch), dots: [], cls: clsOf(ch), state, kind: 'change', title: ch.label + ' · ' + whenText(ch) });
-    }
-    for (const g of groups.values()) {
-      const list = g.list;
-      const from = Math.min(...list.map(ch => at(ch.startMonth)));
-      const to = Math.max(...list.map(ch => (ch.kind === 'oneTime' ? at(ch.startMonth) : endOf(ch))));
-      const amount = totalsText(list).replace(' once', '');
-      const on = list.filter(ch => ch.status === 'applied').length;
-      items.push({ key: g.key, label: shortLabel(g.name), amount, from, to: to > from ? to : null,
-        dots: list.filter(ch => ch.kind === 'oneTime').map(ch => at(ch.startMonth)), cls: g.cls,
-        state: on === list.length ? 'on' : on ? 'part' : 'off', kind: 'pack', title: g.name + ': ' + plural(list.length, 'item') + (on < list.length ? `, ${on} in the plan` : '') });
-    }
-    for (const goal of tl.goals || []) {
-      if (!goal.reachMonth || goal.reachMonth < months[0] || goal.reachMonth > months[last]) continue;
-      items.push({ key: 'goal-reach-' + goal.id, label: shortLabel(goal.label) + ' ✓', amount: compact(goal.targetCents), from: at(goal.reachMonth), to: null, dots: [], cls: 'series-3', state: 'on', kind: 'reach', title: goal.label + ' reached' });
-    }
-    return items.sort((a, b) => a.from - b.from || (b.to === null ? -1 : 0) - (a.to === null ? -1 : 0));
-  }
-
-  /** The strip itself (an SVG drawn to a fixed width per screen size, so its text keeps its size). */
-  function stripHtml(tl) {
-    const months = tl.months.map(m => m.month).filter(m => m >= tl.planStart);
-    if (!months.length) return '';
-    const items = stripItems(tl, months);
-    if (!items.length) return '';
-    const g = stripGeometry();
-    const n = months.length;
-    const plotW = g.W - 2 * g.pad;
-    const xAt = i => g.pad + (plotW * i) / n;
-    const LANE = 34;
-    const lanes = [];
-    const placed = items.map(it => {
-      const x0 = xAt(it.from) + 2;
-      const x1 = it.to === null ? x0 + 8 : xAt(it.to + 1) - 2;
-      const text = it.label + (it.amount ? '  ' + it.amount : '');
-      const w = text.length * g.font;
-      const right = x0 - 4 + w <= g.W - g.pad;
-      const tx = right ? (it.to === null ? x0 - 4 : x0) : g.W - g.pad;
-      const span = [Math.min(right ? tx : tx - w, x0 - 4), Math.max(right ? tx + w : tx, x1)];
-      let lane = lanes.findIndex(end => end + 10 <= span[0]);
-      if (lane < 0) { lanes.push(-Infinity); lane = lanes.length - 1; }
-      lanes[lane] = span[1];
-      return Object.assign({}, it, { x0, x1, tx, anchor: right ? 'start' : 'end', lane });
-    });
-    const axisY = lanes.length * LANE + 8;
-    const H = axisY + 30;
-    // Month ticks: every month when there is room, else calendar steps (January always gets its year).
-    const per = plotW / n;
-    const step = per >= 34 ? 1 : per >= 17 ? 2 : per >= 11 ? 3 : per >= 5 ? 6 : 12;
-    const ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    let ticks = '';
-    months.forEach((m, i) => {
-      const mi = Number(m.slice(5, 7)) - 1;
-      if (i !== 0 && mi % step !== 0) return;
-      const x = xAt(i);
-      ticks += `<line class="cu-tick" x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${axisY}" y2="${axisY + 5}"/>`
-        + `<text class="cu-month" x="${(x + 3).toFixed(1)}" y="${axisY + 16}">${esc(ABBR[mi])}</text>`
-        + (mi === 0 || i === 0 ? `<text class="cu-year" x="${(x + 3).toFixed(1)}" y="${axisY + 28}">${esc(m.slice(0, 4))}</text>` : '');
-      if (i && mi === 0) ticks += `<line class="cu-year-rule" x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="0" y2="${axisY}"/>`;
-    });
-    const body = placed.map(it => {
-      const y = it.lane * LANE + 8;
-      const by = y + 20; // the bar's middle
-      const cls = `cu-item is-${it.kind} is-${it.state} ${esc(it.cls)}`;
-      let mark;
-      if (it.to === null) {
-        mark = it.kind === 'reach'
-          ? `<path class="cu-mark" d="M${it.x0.toFixed(1)} ${by - 6}l6 6l-6 6l-6 -6z"/>`
-          : `<circle class="cu-mark" cx="${it.x0.toFixed(1)}" cy="${by}" r="5.5"/>`;
-      } else {
-        mark = `<rect class="cu-bar" x="${it.x0.toFixed(1)}" y="${by - 5}" width="${Math.max(6, it.x1 - it.x0).toFixed(1)}" height="10" rx="5"/>`
-          + it.dots.map(i => `<circle class="cu-dot" cx="${(xAt(i) + per / 2).toFixed(1)}" cy="${by}" r="3"/>`).join('')
-          + (it.to === n - 1 && it.kind !== 'pack' ? `<path class="cu-open" d="M${(it.x1 - 1).toFixed(1)} ${by - 5}l5 5l-5 5z"/>` : '');
-      }
-      const label = `<text class="cu-label" x="${it.tx.toFixed(1)}" y="${y + 8}" text-anchor="${it.anchor}"><tspan class="cu-name">${esc(it.label)}</tspan>${it.amount ? `<tspan class="cu-amt" dx="6">${esc(it.amount)}</tspan>` : ''}</text>`;
-      return `<g class="${cls}" data-item="${esc(it.key)}"><title>${esc(it.title + (it.amount ? ' · ' + it.amount : ''))}</title>${mark}${label}</g>`;
-    }).join('');
-    const today = `<line class="cu-axis" x1="${g.pad}" x2="${g.W - g.pad}" y1="${axisY}" y2="${axisY}"/>`;
-    const spoken = items.map(it => `${it.title}${it.amount ? ', ' + it.amount : ''}, ${fmt.month(months[it.from])}${it.to !== null ? ' to ' + fmt.month(months[it.to]) : ''}${it.state === 'off' ? ', not in the plan yet' : ''}`).join('; ');
-    return `<div class="cu-strip" id="plan-coming-strip"><svg class="cu-svg" viewBox="0 0 ${g.W} ${H}" role="img" aria-label="${esc('Coming up, ' + fmt.month(months[0]) + ' to ' + fmt.month(months[n - 1]) + ': ' + spoken + '.')}">${ticks}${today}${body}</svg></div>`;
-  }
 
   // ------------------------------------------------------------------ the list
-  /** A change worked out from Budget (a bill, a savings goal or pay that starts or ends): shown, edited in Budget. */
+  /** A change worked out from pay, bills or goals (one that starts or ends): shown, edited in its own section. */
   function derivedRow(ctx, ch) {
     const id = 'plan-ch-' + ch.id;
     const [statusText, tone] = STATUS_BADGE[ch.status] || ['', 'neutral'];
     const href = ctx.href('budget', { section: ch.source === 'goal' ? 'savings' : ch.source === 'income' ? 'income' : 'bills' });
+    const what = ch.source === 'goal' ? 'Goal' : ch.source === 'income' ? 'Pay' : 'Bill';
     return `<li class="plan-ch-item is-${esc(ch.status)} is-derived" data-change="${esc(ch.id)}">
         <div class="plan-ch-main">
           <span class="plan-ch-swatch key key-swatch ${esc(clsOf(ch))}" aria-hidden="true"></span>
           <span class="plan-ch-accept plan-ch-noaccept" aria-hidden="true"></span>
           <span class="plan-ch-label plan-ch-text" title="${esc(ch.note || '')}">${esc(ch.label)}</span>
-          <a class="plan-ch-budget" id="${esc(id)}-budget" href="${esc(href)}" title="${esc(ch.note || '')}">${esc(ch.source === 'goal' ? 'Goal' : ch.source === 'income' ? 'Pay' : 'Bill')} · Budget<span class="sr-only">: edit ${esc(ch.label)} in Budget</span> →</a>
+          <a class="plan-ch-budget" id="${esc(id)}-budget" href="${esc(href)}" title="${esc(ch.note || '')}">${esc(what)}<span class="sr-only">: edit ${esc(ch.label)} under ${esc(what === 'Goal' ? 'savings goals' : what === 'Pay' ? 'pay and income' : 'bills')}</span> →</a>
           <span class="plan-ch-when-text">${esc(whenText(ch))}</span>
           <span class="plan-ch-amt plan-ch-figure">${esc(amt(ch.cents))}${ch.kind === 'monthly' ? '/mo' : ''}</span>
           <span class="plan-ch-status">${badgeWithId(id + '-status', statusText, tone)}</span>
@@ -294,35 +164,9 @@
     }).join('');
   }
 
-  // ------------------------------------------------------------------ add: the packs and a change
-  /** The due month of a New baby pack already in the plan ('YYYY-MM'), to start Childcare and Kid costs from. */
-  function dueOf(tl) {
-    const diapers = tl.changes.list.find(ch => ch.template === 'babyFirstYear' && ch.kind === 'monthly' && ch.group !== 'income');
-    return diapers ? diapers.startMonth : null;
-  }
-
+  // ------------------------------------------------------------------ add a change of the household's own
   function addHtml(tl) {
-    const due = dueOf(tl);
-    const pack = p => {
-      const id = 'plan-pack-' + p.stem;
-      const name = PACKS[p.key].name;
-      let fields;
-      if (p.needs === 'due') {
-        fields = `<label class="plan-ch-field"><span>Due date</span><input type="date" name="due" id="${esc(id)}-date" value="${esc(due ? due + '-15' : '')}" aria-describedby="${esc(id)}-date-error"></label>`;
-      } else {
-        const start = due ? E.months.add(due, 3) : tl.planStart;
-        const def = (E.timeline.templates.list().find(t => t.key === 'childcare') || {}).defaultCents || 120000;
-        fields = `<label class="plan-ch-field"><span>Starts</span><input type="month" name="start" id="${esc(id)}-start" value="${esc(start)}" aria-describedby="${esc(id)}-date-error"></label>
-          <label class="plan-ch-field"><span>A month</span><span class="input-money"><span aria-hidden="true">$</span><input type="text" name="amount" id="${esc(id)}-amt" inputmode="decimal" autocomplete="off" value="${esc(inputText(def))}" aria-describedby="${esc(id)}-date-error"></span></label>`;
-      }
-      return `<details class="plan-add-item" id="plan-add-${esc(p.stem)}"><summary class="plan-add-btn"><span class="plan-add-dot key key-swatch ${esc(PACKS[p.key].cls)}" aria-hidden="true"></span>${esc(name)}</summary>
-          <form class="plan-add-form" id="${esc(id)}-form" data-action="plan:add-pack" data-pack="${esc(p.key)}" data-stem="${esc(p.stem)}" novalidate>
-            <div class="plan-ch-addrow">${fields}<button type="submit" class="btn btn-primary btn-small" id="${esc(id)}-add">Add</button></div>
-            <p class="field-error" id="${esc(id)}-date-error" role="alert" hidden></p>
-          </form>
-        </details>`;
-    };
-    const custom = `<details class="plan-add-item" id="plan-add-custom"><summary class="plan-add-btn"><span class="plan-add-plus" aria-hidden="true">+</span>Custom</summary>
+    return `<details class="plan-add-item" id="plan-add-custom"><summary class="plan-add-btn"><span class="plan-add-plus" aria-hidden="true">+</span>Custom change</summary>
         <form class="plan-ch-add plan-add-form" id="plan-ch-add" data-action="plan:add-change" novalidate>
           <div class="plan-ch-addrow">
             <label class="plan-ch-field plan-ch-field-wide"><span>What</span><input type="text" name="label" id="plan-ch-new-label" maxlength="80" autocomplete="off" placeholder="e.g. Car repair"></label>
@@ -335,10 +179,9 @@
           <p class="field-error" id="plan-ch-new-error" role="alert" hidden></p>
         </form>
       </details>`;
-    return `<div class="plan-add" id="plan-add" role="group" aria-label="Add to the plan"><span class="plan-add-h" aria-hidden="true">Add</span>${ADD_PACKS.map(pack).join('')}${custom}</div>`;
   }
 
-  // ------------------------------------------------------------------ the section
+  // ------------------------------------------------------------------ Edit plan: the section
   /** The household's own changes in a few words: "3 of 9 in the plan · 1 without an amount". */
   function countsText(tl) {
     const own = tl.changes.list.filter(x => !x.readOnly);
@@ -348,21 +191,86 @@
 
   function changesHtml(ctx, tl) {
     const all = tl.changes.list.slice().sort((a, b) => (a.startMonth < b.startMonth ? -1 : a.startMonth > b.startMonth ? 1 : 0));
-    const own = all.filter(ch => !ch.readOnly);
-    const waiting = own.filter(ch => !ch.accepted).length;
-    const accepted = own.length - waiting;
-    const bulk = own.length ? `<p class="plan-ch-bulk">${waiting ? c.button(`Accept all ${waiting}`, { action: 'plan:change-accept-all', id: 'plan-ch-accept-all', cls: 'btn-small' }) : ''}${accepted ? c.button('Unaccept all', { action: 'plan:change-unaccept-all', id: 'plan-ch-unaccept-all', cls: 'btn-small btn-ghost' }) : ''}</p>` : '';
     const list = all.length
       ? `<ul class="plan-ch-list" id="plan-ch-list" aria-label="Planned changes">${listHtml(ctx, tl, all)}</ul>`
-      : '<p class="plan-ch-empty" id="plan-ch-empty">Nothing planned yet. Add a pack or a change of your own.</p>';
+      : '<p class="plan-ch-empty" id="plan-ch-empty">Nothing planned yet.</p>';
     const counts = countsText(tl);
     return `<section class="card plan-coming" id="plan-changes" aria-labelledby="plan-changes-h">
-        <div class="plan-card-head"><h2 class="plan-h" id="plan-changes-h">Coming up</h2>${counts ? `<p class="plan-card-meta" id="plan-ch-counts">${esc(counts)}</p>` : ''}</div>
-        ${stripHtml(tl)}
-        ${addHtml(tl)}
-        ${list}${bulk}
+        <div class="plan-card-head"><h2 class="plan-h" id="plan-changes-h" tabindex="-1">Planned changes</h2>${counts ? `<p class="plan-card-meta" id="plan-ch-counts">${esc(counts)}</p>` : ''}</div>
+        ${list}
+        <div class="plan-add" id="plan-add">${addHtml(tl)}</div>
       </section>`;
   }
 
-  Object.assign(P, { KIND_LABEL, CHANGE_GROUP_LABEL, changesHtml, costOf });
+  // ------------------------------------------------------------------ Overview: Coming up
+  /** "$450", "$80/mo", "−$1.5k/mo" (income keeps its sign: a drop is negative). */
+  const amountText = ch => (isCents(ch.cents) ? compact(ch.cents, { signed: ch.group === 'income' }) + (ch.kind === 'monthly' ? '/mo' : '') : 'amount not set');
+
+  /**
+   * The next few things on the plan, from the plan month on: a group's changes as one line (its
+   * name, first month, totals, how many are in the plan), every other change, bill, pay or goal
+   * from Edit plan as its own line, and the month each savings goal is reached. At most `limit`.
+   */
+  function comingItems(tl, limit = 6) {
+    const from = tl.planStart;
+    const items = [];
+    const groups = new Map();
+    for (const ch of tl.changes.list) {
+      if (!E.months.isMonth(ch.startMonth) || ch.status === 'outside') continue;
+      if (ch.startMonth < from && !(ch.kind === 'monthly' && (!ch.endMonth || ch.endMonth >= from))) continue;
+      const name = groupKeyOf(ch);
+      if (name) {
+        if (!groups.has(name)) { const g = { key: 'group-' + name, name, list: [] }; groups.set(name, g); items.push(g); }
+        groups.get(name).list.push(ch);
+        continue;
+      }
+      items.push({ key: ch.id, ch });
+    }
+    for (const mk of Array.isArray(tl.markers) ? tl.markers : []) {
+      if (mk.kind === 'goal' && E.months.isMonth(mk.month) && mk.month >= from) items.push({ key: 'goal-' + mk.month + '-' + mk.label, goal: mk });
+    }
+    const monthOf = x => (x.list ? x.list.reduce((m, ch) => (ch.startMonth < m ? ch.startMonth : m), x.list[0].startMonth) : x.ch ? x.ch.startMonth : x.goal.month);
+    const first = x => (monthOf(x) < from ? from : monthOf(x));
+    return items.map(x => Object.assign(x, { month: first(x) })).sort((a, b) => (a.month < b.month ? -1 : a.month > b.month ? 1 : 0)).slice(0, limit);
+  }
+
+  function comingHtml(ctx, tl) {
+    const items = comingItems(tl);
+    const row = x => {
+      let label, amount, meta = '', off = false, cls;
+      if (x.list) {
+        const on = x.list.filter(ch => ch.status === 'applied').length;
+        label = x.name;
+        amount = totalsText(x.list) || plural(x.list.length, 'item');
+        meta = on === x.list.length ? plural(x.list.length, 'item') : `${on} of ${x.list.length} in the plan`;
+        off = on === 0;
+        cls = clsOf(x.list[0]);
+      } else if (x.ch) {
+        const ch = x.ch;
+        label = ch.label;
+        amount = amountText(ch);
+        meta = ch.readOnly ? { bill: 'Bill', goal: 'Goal', income: 'Pay' }[ch.source] || '' : ch.status === 'applied' ? '' : (STATUS_BADGE[ch.status] || [''])[0];
+        off = ch.status !== 'applied';
+        cls = clsOf(ch);
+      } else {
+        label = String(x.goal.label);
+        amount = isCents(x.goal.cents) ? compact(x.goal.cents) : '';
+        meta = 'Goal';
+        cls = 'series-3';
+      }
+      return `<li class="ov-up${off ? ' is-off' : ''}" data-key="${esc(x.key)}">
+          <span class="ov-up-month">${esc(fmt.month(x.month))}</span>
+          <span class="ov-up-dot key key-swatch ${esc(cls)}" aria-hidden="true"></span>
+          <span class="ov-up-label">${esc(label)}${meta ? ` <span class="ov-up-meta">${esc(meta)}</span>` : ''}</span>
+          <span class="ov-up-amt num">${esc(amount)}</span>
+        </li>`;
+    };
+    const body = items.length ? `<ol class="ov-up-list" id="plan-coming-list">${items.map(row).join('')}</ol>` : '<p class="fine" id="plan-coming-empty">Nothing planned to change in the months ahead.</p>';
+    return `<section class="card ov-coming" id="plan-coming" aria-labelledby="plan-coming-h">
+        <div class="plan-card-head"><h2 class="ov-h" id="plan-coming-h">Coming up</h2><a class="ov-link" id="plan-coming-edit" href="${esc(ctx.href('budget', { focus: 'plan-changes-h' }))}">Edit plan →</a></div>
+        ${body}
+      </section>`;
+  }
+
+  Object.assign(P, { KIND_LABEL, CHANGE_GROUP_LABEL, changesHtml, comingHtml, comingItems, costOf });
 })(typeof globalThis !== 'undefined' ? globalThis : this);

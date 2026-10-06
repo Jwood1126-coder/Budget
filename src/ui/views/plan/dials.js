@@ -1,9 +1,10 @@
 'use strict';
 /*
- * Plan (#/overview), 3. the dials: money in by person; money out by how adjustable it is
+ * Edit plan (#/budget), the dials: money in by person; money out by how adjustable it is
  * (essentials, flexible, irregular, net to savings, other). Essentials and flexible open into
  * categories and places (each can move to the other group), the irregular dial into its one-time
- * costs; "Who paid in" lists the deposits behind money in. The headline adds the dials up.
+ * costs; "Who paid in" lists the deposits behind money in. Each dial has its Reset, and "Reset all
+ * to baseline" puts every dial back. sumOf adds the dials up for the spoken announcement.
  * Every place, "everything else" row and one-time item opens into the transactions behind it, each
  * with its category to change (a ledger edit, undoable); a place's row changes every transaction
  * from that place at once.
@@ -65,7 +66,7 @@
    */
   function shortBasis(tl, d) {
     const text = String(d.basis || '');
-    if (d.basisKind === 'budget' || /^From Budget/.test(text)) return d.key === 'savings' ? 'From your savings goals' : 'From Budget';
+    if (d.basisKind === 'budget' || /^From Budget/.test(text)) return d.key === 'savings' ? 'From your savings goals' : d.group === 'in' ? 'From your pay' : 'From your bills and budgets';
     if (d.basisKind === 'average' && d.group === 'in') return 'Deposit average';
     if (/^Set here/.test(text)) return 'Set here';
     if (d.key === 'irregular' && d.drill && d.drill.count) return plural(d.drill.count, 'one-time cost') + ', spread';
@@ -95,8 +96,8 @@
     if (person && d.basisKind === 'budget') basis += ' · ' + budgetLink('Change');
     if (person && d.needsConfirm) {
       const unknown = d.budget && Array.isArray(d.budget.unknown) ? d.budget.unknown : [];
-      basis += ' · ' + budgetLink('Set pay in Budget');
-      why += (/[.!?]$/.test(d.basis) ? '' : '.') + (unknown.length ? ' ' + esc('Budget has no amount for: ' + unknown.join(', ') + '.') : '') + ' Enter the current amount here, or save pay in Budget.';
+      basis += ' · ' + budgetLink('Set pay');
+      why += (/[.!?]$/.test(d.basis) ? '' : '.') + (unknown.length ? ' ' + esc('Pay and income has no amount for: ' + unknown.join(', ') + '.') : '') + ' Enter the current amount here, or save it under Pay and income.';
     }
     const unconfirmed = person && d.needsConfirm ? badgeWithId(id + '-unconfirmed', 'Not confirmed', 'warn') : '';
     const average = person && d.basisKind === 'budget' && isCents(d.averageCents) && isCents(d.budgetCents) && d.averageCents !== d.budgetCents
@@ -380,7 +381,7 @@
     const range = tl.baseline.start === tl.baseline.end ? fmt.month(tl.baseline.start) : fmt.month(tl.baseline.start) + '–' + fmt.month(tl.baseline.end);
     const confirm = provisional.length ? c.button(`Confirm all ${provisional.length} provisional match${provisional.length === 1 ? '' : 'es'}`, { action: 'plan:confirm-deposits', id: 'plan-dep-confirm', cls: 'btn-small' }) : '';
     const summary = 'Who paid in' + (open ? ` · ${plural(open, 'deposit')} to confirm` : '');
-    const body = `<p class="fine">Deposits into joint, ${esc(range)}. Suggested matches come from the pay in Budget or the amount: the bank’s words don’t name the person. Changing one moves it between the dials above; the bank’s description is kept.</p>${confirm}${table}`;
+    const body = `<p class="fine">Deposits into joint, ${esc(range)}. Suggested matches come from the pay you saved or the amount: the bank’s words don’t name the person. Changing one moves it between the dials above; the bank’s description is kept.</p>${confirm}${table}`;
     return c.disclosure(esc(summary), body, { id: 'plan-deposits', cls: 'plan-deposits' });
   }
 
@@ -411,7 +412,7 @@
     const chIn = ch && isCents(ch.inCents) ? ch.inCents : 0, chOut = ch && isCents(ch.outCents) ? ch.outCents : 0;
     const chSav = ch && isCents(ch.savingsCents) ? ch.savingsCents : 0;
     const chName = !ch || !ch.items.length ? '' : ch.items.length === 1 ? ch.items[0].label
-      : ch.items.every(i => i.source === 'bill') ? 'bills Budget adds' : 'planned changes this month';
+      : ch.items.every(i => i.source === 'bill') ? 'bills' : 'planned changes this month';
     const inTotal = inKeys.reduce((s, k) => s + vals[k], 0) + chIn;
     const terms = [[1, inTotal, 'in']].concat(outKeys.map(k => [-1, vals[k], SUM_NAME[k] || k]));
     if (chOut) terms.push([-1, chOut, chName]);
@@ -441,12 +442,15 @@
   function dialsCard(ctx, tl) {
     const group = keys => keys.map(k => dialHtml(ctx, tl, tl.dialsByKey[k])).join('');
     const reset = tl.changed && tl.changedBy.dials ? c.button('Reset all to baseline', { action: 'plan:reset', id: 'plan-reset', cls: 'btn-small' }) : '';
-    return `<section class="card plan-dials" id="plan-dials" aria-label="Plan dials">
+    // Amounts still carried over from the earlier card/bank dials: one quiet line until kept or reset.
+    const carried = tl.carriedOver ? `<p class="plan-carried" id="plan-carried">${esc(tl.carriedOver.summary)}</p>` : '';
+    return `<section class="card plan-dials" id="plan-dials" aria-labelledby="plan-dials-h">
+        <div class="plan-card-head"><h2 class="plan-h" id="plan-dials-h" tabindex="-1">Money in and out, a month</h2>${reset}</div>
+        ${carried}
         <div class="plan-groups">
-          <div class="plan-group" role="group" aria-labelledby="plan-g-in"><h2 class="plan-h" id="plan-g-in">Money in</h2>${group(tl.groups.in)}${depositsHtml(ctx, tl)}</div>
-          <div class="plan-group" role="group" aria-labelledby="plan-g-out"><h2 class="plan-h" id="plan-g-out">Money out</h2>${group(tl.groups.out)}</div>
+          <div class="plan-group" role="group" aria-labelledby="plan-g-in"><h3 class="plan-h plan-h-sub" id="plan-g-in">Money in</h3>${group(tl.groups.in)}${depositsHtml(ctx, tl)}</div>
+          <div class="plan-group" role="group" aria-labelledby="plan-g-out"><h3 class="plan-h plan-h-sub" id="plan-g-out">Money out</h3>${group(tl.groups.out)}</div>
         </div>
-        <div class="plan-sum-row"><div class="plan-sum" id="plan-sum">${sumOf(tl, valuesOf(tl)).html}</div>${reset}</div>
       </section>`;
   }
 

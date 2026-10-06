@@ -1,51 +1,62 @@
 'use strict';
 /*
- * Budget (route #/budget): this month's plan, for a household that mostly looks and now and then
- * adjusts. Everything comes from the Plan screen's model (BudgetEngine.timeline.build, the same
- * cached build), so Budget and Plan always show the same numbers.
- *   1. Hero         "<Month> plan": where each dollar goes (tl.summary)          budget/hero.js
- *   2. So far       planned vs spent by group and category, with a pace marker;
- *                   a category's planned amount is typed in place                budget/month.js
- *   3. Goals        savings goals (progress, reach month, monthly amount) and
- *                   investments                                                  budget/goals.js
- *   4. Coming up    the next planned changes, linked to the chart                budget/goals.js
- *   5. Setup        pay, bills, debts and the goals list, folded away            budget/setup.js
- * What the parts share is in budget/common.js (BudgetUI._budget, private to this view).
- * Route params: section=income|bills|debts|savings opens that setup area (section=targets: the
- * spending section); focus=<element id> focuses a field (links from other views use both).
+ * Edit plan (route #/budget): the one place for the plan's inputs. Everything comes from the same
+ * BudgetEngine.timeline.build as the Overview (ctx.memo('timeline')), so both show one plan.
+ *   1. Money in and out   the dials: money in by person; money out as essentials, flexible,
+ *                         irregular, net to savings and other, each with its Reset ("Reset all to
+ *                         baseline" too); essentials and flexible open into categories → places →
+ *                         transactions (amounts, moves between groups, recategorize)  plan/dials.js
+ *   2. Planned changes    the list to edit, groups as one folded row, + Custom change plan/changes.js
+ *   3. Savings goals      one card per goal, its monthly amount editable            budget/goals.js
+ *   4. Pay, bills, debts  the setup editors, folded by area                         budget/setup.js
+ *   5. Settings           baseline months, cover a checking shortfall from savings   this file
+ * What the budget parts share is in budget/common.js (BudgetUI._budget); the plan parts and
+ * plan:* actions are BudgetUI._plan's (plan/*.js), wired by P.wire after each render.
+ * Route params: section=income|bills|debts|savings opens that setup area, section=targets opens
+ * the category lists; focus=<element id> focuses a field (links from other views use both).
  * Every edit is undoable from the toast (app.update); the toast adds what the month now nets.
  */
 (function (root) {
   const UI = root.BudgetUI;
-  const E = root.BudgetEngine;
-  const { esc } = UI.dom;
+  const { esc, domId } = UI.dom;
   const fmt = UI.fmt;
   const c = UI.c;
   const B = UI._budget;
-  const { amt, signedWhole, model, monthName, setError, AREAS } = B;
+  const P = UI._plan;
+  const { signedWhole, model, AREAS } = B;
+
+  const BASELINES = [{ value: 3, label: 'Last 3' }, { value: 6, label: 'Last 6' }, { value: 12, label: 'Last 12' }, { value: 'all', label: 'All' }];
+
+  // ------------------------------------------------------------------ 5. settings
+  function settingsHtml(ctx, tl) {
+    const body = `${c.segmented({ label: 'Baseline: complete months to average', name: 'plan-baseline', options: BASELINES, value: tl.baseline.setting, action: 'plan:baseline' })}
+      <p class="fine" id="plan-baseline-label">${esc(tl.baseline.label)}.</p>
+      <label class="check plan-cover" for="plan-cover"><input type="checkbox" id="plan-cover" data-action="plan:cover"${tl.settings.coverFromSavings ? ' checked' : ''}><span>Cover a checking shortfall from savings</span></label>`;
+    return c.disclosure('Settings', body, { id: 'plan-more', cls: 'card plan-more' });
+  }
 
   // ------------------------------------------------------------------ render
   function render(ctx) {
     const tl = model(ctx);
     const month = tl && tl.summary ? tl.summary.month : null;
     const header = c.pageHeader({
-      eyebrow: 'Budget',
-      title: month ? `${monthName(month)} plan` : 'Your plan',
-      subtitle: month ? `Joint accounts · ${esc(fmt.monthLong(month))} · the same plan as the chart` : 'Joint accounts',
-      actions: month ? `<a class="btn btn-secondary btn-small" id="bud-to-chart" href="${esc(ctx.href('overview'))}">Open the chart</a>` : '',
+      title: 'Edit plan',
+      subtitle: month ? `Joint accounts · amounts a month, from ${esc(fmt.monthLong(month))}` : 'Joint accounts',
     });
     const dataNote = ctx.app.datasetError ? c.notice({ tone: 'bad', title: 'Your data file could not be read', body: esc(ctx.app.datasetError) }) : '';
-    const noData = !tl ? c.card(c.empty(ctx.months.length ? 'The plan could not be worked out from this data.' : 'Load your bank exports to see this month’s plan. Nothing leaves this device.', c.linkButton('Load data', ctx.href('data'), { variant: 'primary' })), { title: 'No plan yet', id: 'bud-empty' }) : '';
+    const noData = !tl ? c.card(c.empty(ctx.months.length ? 'The plan could not be worked out from this data.' : 'Load your bank exports to start the plan. Nothing leaves this device.', c.linkButton('Load data', ctx.href('data'), { variant: 'primary' })), { title: 'No plan yet', id: 'bud-empty' }) : '';
     return `<div class="bud-page" id="bud-root">
       ${header}
       ${dataNote}
       ${noData}
-      ${tl ? B.heroCard(ctx, tl) : ''}
-      ${tl ? `<div class="bud-grid">
-        <div class="bud-col-main">${B.monthCard(ctx, tl)}</div>
-        <div class="bud-col-side">${B.goalsCard(ctx, tl)}${B.comingUpCard(ctx, tl)}</div>
-      </div>` : ''}
-      ${B.setupDetails(ctx, tl)}
+      <div class="plan bud-edit" id="plan-root">
+        ${tl ? P.dialsCard(ctx, tl) : ''}
+        ${tl ? P.changesHtml(ctx, tl) : ''}
+        ${tl ? B.goalsCard(ctx, tl) : ''}
+        ${B.setupDetails(ctx, tl)}
+        ${tl ? settingsHtml(ctx, tl) : ''}
+        <p class="sr-only" id="plan-live" aria-live="polite"></p>
+      </div>
       <p class="sr-only" id="bud-live" aria-live="polite"></p>
     </div>`;
   }
@@ -61,20 +72,26 @@
     return flow ? flow.netCents : null;
   }
 
+  /**
+   * A field a link asks for: by id; a category's budget field (bud-target-<category>, from the
+   * Transactions and Spending views) is that category's row amount in the lists.
+   */
+  function fieldFor(focus) {
+    if (!focus) return null;
+    const el = document.getElementById(focus);
+    if (el) return el;
+    if (!/^bud-target-/.test(focus)) return null;
+    return Array.from(document.querySelectorAll('input[data-action="plan:row-cents"]')).find(x => domId('bud-target', x.dataset.name || '') === focus) || null;
+  }
+
   function afterRender(container, ctx) {
     const rootEl = container.querySelector('#bud-root');
     if (!rootEl) return;
     const tl = model(ctx);
+    const planRoot = rootEl.querySelector('#plan-root');
+    if (planRoot && tl) P.wire(planRoot, ctx);
 
-    // Enter commits a typed planned amount (the same as leaving the box).
-    rootEl.addEventListener('keydown', ev => {
-      const el = ev.target;
-      if (ev.key !== 'Enter' || !el.matches || !el.matches('input[data-commit]')) return;
-      ev.preventDefault();
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-
-    // ?section= opens a setup area (targets: the spending section) and ?focus= focuses a field,
+    // ?section= opens a setup area (targets: the category lists) and ?focus= focuses a field,
     // once per navigation; again when the same link is used twice (the app then re-renders the
     // same URL and moves focus to the page title, which this replaces with the field).
     const { section, focus } = ctx.route.params;
@@ -82,8 +99,9 @@
     else {
       const first = handledFocus !== location.hash;
       handledFocus = location.hash;
-      const area = AREAS.includes(section) ? document.getElementById('bud-area-' + section) : section === 'targets' ? document.getElementById('bud-month') : null;
-      const el = focus ? document.getElementById(focus) : null;
+      const area = AREAS.includes(section) ? document.getElementById('bud-area-' + section) : section === 'targets' ? document.getElementById('plan-dials') : null;
+      if (first && section === 'targets') for (const d of rootEl.querySelectorAll('#plan-drill-essentials, #plan-drill-flexible')) d.open = true;
+      const el = fieldFor(focus);
       if (first && area && area.tagName === 'DETAILS') area.open = true;
       if (el) {
         // A heading target (a card it links to) becomes focusable for this purpose only.
@@ -123,41 +141,8 @@
   }
 
   // ------------------------------------------------------------------ actions
-  /** Typed amounts: commas and a typographic minus or dash are fine. */
-  const typed = value => String(value || '').trim().replace(/[−–—]/g, '-');
-
-  const actions = Object.assign({
-    /**
-     * A category's planned amount, typed on its row: the category budget (plan.targets) through
-     * E.timeline.setTarget, or setRow when the row carries its own amount from the Plan screen
-     * (setRow moves it into the budget). Blank clears the budget: the category plans at its
-     * history again.
-     */
-    'budget:set-plan': (ctx, el) => {
-      const raw = typed(el.value);
-      let cents = null;
-      if (raw !== '') {
-        try { cents = E.money.inputToCents(raw, { field: 'plan' }); } catch (err) { setError(el.id, err.message || 'Enter an amount in dollars, such as 125 or 125.50.'); return; }
-      }
-      setError(el.id, null);
-      const cat = el.dataset.cat;
-      const current = el.dataset.cents === '' ? null : Number(el.dataset.cents);
-      const tl = model(ctx);
-      if (cents !== null && cents === current && el.dataset.source !== 'history') return;
-      // Enter commits, and the browser may fire its own change as well: the second one finds the
-      // budget already saved and does nothing.
-      const targets = ctx.state.plan.targets || {};
-      const rows = (ctx.state.ui.plan && ctx.state.ui.plan.rows) || {};
-      const rowCents = rows[el.dataset.row] ? rows[el.dataset.row].cents : undefined;
-      if (Object.prototype.hasOwnProperty.call(targets, cat) && targets[cat] === cents && rowCents === undefined) return;
-      if (cents === null && el.dataset.source === 'history') { el.value = UI.dom.centsToInputText(current); return; }
-      const message = cents === null ? `${cat} plan saved: back to its usual amount.` : `${cat} plan saved: ${amt(cents)} a month.`;
-      ctx.app.update(st => (el.dataset.source === 'set'
-        ? E.timeline.setRow(st, el.dataset.row, { cents }, tl)
-        : E.timeline.setTarget(st, cat, cents)), { message });
-    },
-  }, B.setupActions);
+  const actions = Object.assign({}, P.actions, B.setupActions);
 
   UI.views = UI.views || {};
-  UI.views.budget = { title: 'Budget', render, afterRender, actions };
+  UI.views.budget = { title: 'Edit plan', render, afterRender, actions };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

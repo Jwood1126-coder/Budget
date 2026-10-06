@@ -1,14 +1,18 @@
 'use strict';
 /*
- * Plan (#/overview), 1. the chart card: one chart in three modes on one timeline (Balance: the
- * combined cash, each account and the investments at month end; Flows: money in and out each
- * month; Trends: the monthly series and month-end balances picked, with an average and a trend
- * line, the title, the y-axis, the caption and the spoken summary saying which kind it shows),
- * Past and Ahead, Export CSV. Markers above the plot: accepted planned changes (a pack's items by
- * the pack's name), what Budget adds after the plan starts, and the month each savings goal is
- * reached. Balance mode has Compare: a what-if (the changes tagged with that name, accepted or
- * not) drawn as its own line, with how far it ends from the plan; the choice is the route's
- * ?compare=, never saved. Shared helpers come from BudgetUI._plan (plan/common.js).
+ * Overview (#/overview): the chart card. Two panels stacked on the same months, because a balance
+ * (where the money is at a month's end) and money in and out (a flow over a month) are different
+ * measures, each with its own axis title:
+ *   Balances       each joint cash account's month-end balance (checking, savings) and the
+ *                  combined cash; markers above it for accepted planned changes, what Edit plan
+ *                  adds after the plan starts, and the month each savings goal is reached
+ *   Money in/out   income and outgoing each month, and the net moved to savings (negative: taken
+ *                  from savings)
+ * Both are UI.chart.cashChart (balance and trends modes): actual months solid, plan months dashed
+ * (the plan's monthly estimate). A click, tap or Enter on a month opens its breakdown
+ * (chart:select, plan/month.js). Past and Ahead set the months; Export CSV; when the plan goes
+ * below $0 a warning says when. Saved choices of the retired Balance/Flows/Trends switch, the
+ * Trends lines and hidden legend series stay in ui.plan and are not read here.
  */
 (function (root) {
   const UI = root.BudgetUI;
@@ -17,144 +21,70 @@
   const fmt = UI.fmt;
   const c = UI.c;
   const P = UI._plan;
-  const { DIAL_CLS, whole, exact, isCents, packOf, shortLabel } = P;
+  const { whole, exact, isCents, packOf, shortLabel } = P;
 
-  const MODES = [{ value: 'balance', label: 'Balance' }, { value: 'flows', label: 'Flows' }, { value: 'trends', label: 'Trends' }];
   const PAST = [{ value: 6, label: '6 mo' }, { value: 12, label: '12 mo' }, { value: 'all', label: 'All' }];
   const AHEAD = [{ value: 6, label: '6 mo' }, { value: 12, label: '1 yr' }, { value: 24, label: '2 yr' }, { value: 60, label: '5 yr' }];
-  const TREND_MA = [{ value: 0, label: 'Off' }, { value: 3, label: '3 mo' }, { value: 6, label: '6 mo' }];
-  const SERIES_GROUPS = [['in', 'In'], ['out', 'Out'], ['savings', 'Savings'], ['net', 'Net'], ['balances', 'Balances']];
-  // Trends colours: a preferred colour per series (the dial's own where there is one), then the
-  // first free one, in the order the household picked them, so adding a line never recolours another.
-  const TREND_CLS = ['series-1', 'series-2', 'series-3', 'series-4', 'series-5', 'series-6'];
-  const TREND_PREF = { 'in-p1': 'series-1', 'in-p2': 'series-2', card: 'series-1', bank: 'series-2', essentials: 'series-5', flexible: 'series-4', irregular: 'series-6', 'to-savings': 'series-3', 'from-savings': 'series-3' };
-
-  /** Without any known balance there is no balance line to draw: show the flows (or trends) instead. */
-  const modeOf = tl => (tl.balances.mode === 'none' && tl.settings.mode === 'balance' ? 'flows' : tl.settings.mode);
-
-  /**
-   * Series switched off in the chart. Never chosen (null): the checking account lines are off, the
-   * savings ones show with the combined line. Once a legend chip is pressed the whole choice is saved.
-   */
-  function hiddenOf(ctx, tl) {
-    const raw = ctx.state.ui && ctx.state.ui.plan ? ctx.state.ui.plan.hidden : null;
-    if (Array.isArray(raw)) return raw;
-    return tl.balances.accounts.filter(a => a.group === 'checking').map(a => 'acct-' + a.id);
-  }
+  /** Line colours: checking, savings, combined (validated categorical order). */
+  const LINE_CLS = { checking: 'series-2', savings: 'series-3', combined: 'series-1' };
+  const FLOW_CLS = { in: 'series-1', out: 'series-5', savings: 'series-3' };
 
   /** The months the chart shows (the Past window to the end of the plan). */
   const fromOf = tl => Math.max(0, tl.window.fromIndex);
 
-  /** The Trends series picked, in the order they were picked (unknown keys dropped; never empty). */
-  function pickedOf(tl) {
-    const known = new Set(tl.series.map(s => s.key));
-    const list = (tl.settings.trends && Array.isArray(tl.settings.trends.series) ? tl.settings.trends.series : []).filter(k => known.has(k));
-    if (list.length) return list;
-    return known.has('card') ? ['card'] : tl.series.slice(0, 1).map(s => s.key);
+  /** A balance line's points for the chart. */
+  function pointsOf(list, from, account) {
+    return list.slice(from).map(p => ({
+      month: p.month, cents: p.cents,
+      // 'assumed': the value rests on days no export covers (drawn dotted, never solid). An engine
+      // without that status only flags a month-end that falls inside those days (gap).
+      status: p.status === 'assumed' ? 'assumed' : p.gap && p.cents !== null ? 'gap' : p.status,
+      illustrative: p.illustrative === true,
+      note: [p.note ? String(p.note) : '', account && p.anchor && account.anchor ? 'Known balance ' + exact(account.anchor.cents) + ' on ' + fmt.date(account.anchor.date) + '.' : ''].filter(Boolean).join(' '),
+    }));
   }
 
-  /** A balance series (a month-end level, not a monthly amount). An engine without `kind` has amounts only. */
-  const isBalanceSeries = s => s.kind === 'balance' || s.group === 'balances';
-  /** What the picked Trends lines measure: 'flows' (monthly amounts), 'balances' (month-end levels) or 'mixed'. */
-  function trendUnits(tl) {
-    const on = new Set(pickedOf(tl));
-    const picked = tl.series.filter(s => on.has(s.key));
-    const balances = picked.filter(isBalanceSeries).length;
-    return !balances ? 'flows' : balances === picked.length ? 'balances' : 'mixed';
-  }
-  /** The Trends y-axis title for what the picked lines measure. */
-  const TREND_AXIS = { flows: 'Monthly, $ per month', balances: '$ at month end', mixed: '$ — monthly amounts and month-end balances' };
-  /** The Trends chart title (and its table's caption) for what the picked lines measure. */
-  const TREND_TITLE = { flows: 'Monthly amounts over time', balances: 'Balances over time', mixed: 'Monthly amounts and balances over time' };
-
-  /** Colour per picked series: its preferred colour unless taken, else the first free one. */
-  function trendColours(picked) {
-    const used = new Set();
-    const out = {};
-    for (const key of picked) {
-      let cls = TREND_PREF[key];
-      if (!cls || used.has(cls)) cls = TREND_CLS.find(x => !used.has(x)) || 'series-muted';
-      used.add(cls);
-      out[key] = cls;
+  /** Top panel: each cash account (checking first) and the combined line. */
+  function balanceSpec(tl, months, from) {
+    const b = tl.balances;
+    const lines = [];
+    const accounts = b.accounts.slice().sort((x, y) => (x.group === 'checking' ? 0 : 1) - (y.group === 'checking' ? 0 : 1));
+    const used = { checking: 0, savings: 0 };
+    for (const a of accounts) {
+      const group = a.group === 'savings' ? 'savings' : 'checking';
+      // A second account of the same kind takes the next free colour.
+      const cls = used[group]++ ? undefined : LINE_CLS[group];
+      lines.push({ key: 'acct-' + a.id, name: a.name, role: 'account', cls, points: pointsOf(a.points, from, a) });
     }
-    return out;
-  }
-
-  // ------------------------------------------------------------------ 1. the chart
-  function chartSpec(ctx, tl) {
-    const from = fromOf(tl);
-    const rows = tl.months.slice(from);
-    const months = rows.map(m => m.month);
-    const mode = modeOf(tl);
-    const TITLE = { balance: 'Joint cash at the end of each month', flows: 'Money in and out of joint each month', trends: TREND_TITLE[mode === 'trends' ? trendUnits(tl) : 'flows'] };
-    const spec = {
-      id: 'plan-chart', mode, months, todayMonth: tl.todayMonth, planStart: tl.planStart,
-      hidden: mode === 'trends' ? [] : hiddenOf(ctx, tl),
-      title: TITLE[mode], titleHidden: UI.chart.isNarrow(), tableCaption: TITLE[mode],
-      markers: markersOf(tl),
+    if (b.combined) lines.push({ key: 'combined', name: b.mode === 'simple' ? 'Cash' : 'Combined cash', role: 'combined', cls: LINE_CLS.combined, points: pointsOf(b.combined.points, from) });
+    return {
+      id: 'plan-chart', mode: 'balance', months, todayMonth: tl.todayMonth, planStart: tl.planStart, lines,
+      title: 'Balances at the end of each month', tableCaption: 'Balances at the end of each month',
+      axisTitle: 'Balance, $ at month end', markers: markersOf(tl), selectable: true,
     };
-    if (mode === 'balance') {
-      const b = tl.balances;
-      const points = (list, account) => list.slice(from).map(p => ({
-        month: p.month, cents: p.cents,
-        // 'assumed': the value rests on days no export covers (drawn dotted, never solid). An engine
-        // without that status only flags a month-end that falls inside those days (gap).
-        status: p.status === 'assumed' ? 'assumed' : p.gap && p.cents !== null ? 'gap' : p.status,
-        illustrative: p.illustrative === true,
-        note: [p.note ? String(p.note) : '', account && p.anchor && account.anchor ? 'Known balance ' + exact(account.anchor.cents) + ' on ' + fmt.date(account.anchor.date) + '.' : ''].filter(Boolean).join(' '),
-      }));
-      spec.lines = [];
-      if (b.combined) spec.lines.push({ key: 'combined', name: 'Combined cash', role: 'combined', points: points(b.combined.points) });
-      for (const a of b.accounts) spec.lines.push({ key: 'acct-' + a.id, name: a.name, role: 'account', points: points(a.points, a) });
-      // Investments: their own line, never part of combined cash (growth only at a rate the household entered: illustrative).
-      if (b.investments && b.investments.points.some(p => p.cents !== null)) {
-        spec.lines.push({ key: 'balance-investments', name: 'Investments', role: 'account', cls: 'series-4', points: b.investments.points.slice(from).map(p => ({ month: p.month, cents: p.cents, status: p.status === 'illustrative' ? 'projected' : p.status, illustrative: p.status === 'illustrative', note: p.status === 'illustrative' ? b.investments.illustrative : '' })) });
-      }
-      // The plan at baseline (no dial moved, no planned change): a faint line to compare with.
-      const ghost = tl.changed && b.combined && Array.isArray(b.combined.baselinePoints) ? b.combined.baselinePoints : null;
-      if (ghost) spec.lines.push({ key: 'ghost', name: 'Baseline plan', role: 'ghost', points: ghost.slice(from).map((cents, i) => ({ month: months[i], cents, status: cents === null ? null : 'projected' })) });
-      // A what-if chosen in Compare: the plan with that what-if's changes, accepted or not.
-      const cmp = tl.compare && Array.isArray(tl.compare.points) ? tl.compare : null;
-      if (cmp) spec.lines.push({ key: 'compare', name: cmp.scenario, role: 'compare', points: cmp.points.slice(from).map(p => ({ month: p.month, cents: p.cents, status: p.cents === null ? null : 'projected' })) });
-    } else if (mode === 'flows') {
-      const known = (...vals) => (vals.some(v => v === null || v === undefined) ? null : vals.reduce((s, v) => s + v, 0));
-      const cin = tl.people.map(p => ({ key: 'in-' + p.id, name: p.name + ' → joint', cls: DIAL_CLS[p.id] || 'series-muted', values: rows.map(m => m.in[p.id]) }));
-      const otherIn = rows.map(m => known(m.in.unassigned, m.in.other));
-      if (tl.dialsByKey.inOther || otherIn.some(v => v)) cin.push({ key: 'in-other', name: 'Other money in', cls: 'series-muted', values: otherIn });
-      const fromSavings = rows.map(m => (m.savings === null ? null : Math.max(0, 0 - m.savings)));
-      if (fromSavings.some(v => v > 0)) cin.push({ key: 'in-savings', name: 'From savings', cls: 'series-3', values: fromSavings });
-      const cout = [['essentials', 'Essentials'], ['flexible', 'Flexible'], ['irregular', 'Irregular']].map(([k, name]) => ({ key: 'out-' + k, name, cls: DIAL_CLS[k], values: rows.map(m => m.out[k]) }));
-      const toSavings = rows.map(m => (m.savings === null ? null : Math.max(0, m.savings)));
-      if (toSavings.some(v => v > 0) || tl.dialsByKey.savings) cout.push({ key: 'out-savings', name: 'To savings', cls: 'series-3', values: toSavings });
-      // Debt, business and investments: with the dial, and whenever a month shown had any (so the columns add up).
-      const otherOut = rows.map(m => known(m.out.debt, m.out.business, m.out.invest));
-      if (tl.dialsByKey.other || otherOut.some(v => v)) cout.push({ key: 'out-other', name: 'Debt, business, investing', cls: 'series-muted', values: otherOut });
-      spec.columns = {
-        in: cin, out: cout,
-        notes: rows.map(m => {
-          if (m.status === 'actual' && !m.complete) return 'Not every account’s export covers this month.';
-          if (m.status === 'actual' && m.oneOffs.length) return 'Includes one-time: ' + m.oneOffs.map(o => o.merchant + ' ' + whole(o.cents)).join(', ') + '.';
-          return '';
-        }),
-      };
-      spec.net = { key: 'net', name: 'Net', values: rows.map(m => m.net) };
-    } else {
-      const picked = pickedOf(tl);
-      const cls = trendColours(picked);
-      const on = new Set(picked);
-      spec.trends = {
-        // unit: a balance is a month-end level (the chart's summary says where it ended, not an average).
-        series: tl.series.filter(s => on.has(s.key)).map(s => ({ key: s.key, name: s.name, cls: cls[s.key], unit: isBalanceSeries(s) ? 'atMonthEnd' : 'perMonth', values: s.values.slice(from) })),
-        ma: tl.settings.trends.ma, trend: tl.settings.trends.trend,
-      };
-      spec.axisTitle = TREND_AXIS[trendUnits(tl)];
-    }
-    return spec;
+  }
+
+  /** Bottom panel: income, outgoing and the net moved to savings, each a monthly amount. */
+  function flowSpec(tl, months, from) {
+    const series = new Map((tl.series || []).map(s => [s.key, s]));
+    const vals = key => (series.get(key) ? series.get(key).values.slice(from) : months.map(() => null));
+    const to = vals('to-savings'), back = vals('from-savings');
+    const net = to.map((v, i) => (isCents(v) && isCents(back[i]) ? v - back[i] : null));
+    const list = [
+      { key: 'flow-in', name: 'Income', cls: FLOW_CLS.in, unit: 'perMonth', values: vals('in-total') },
+      { key: 'flow-out', name: 'Outgoing', cls: FLOW_CLS.out, unit: 'perMonth', values: vals('out-total') },
+    ];
+    if (net.some(v => isCents(v) && v !== 0)) list.push({ key: 'flow-savings', name: 'Net to savings', cls: FLOW_CLS.savings, unit: 'perMonth', values: net });
+    return {
+      id: 'plan-flows', mode: 'trends', months, todayMonth: tl.todayMonth, planStart: tl.planStart,
+      title: 'Money in and out each month', tableCaption: 'Money in and out each month',
+      axisTitle: 'Monthly, $ per month', trends: { series: list, ma: 0, trend: false }, selectable: true,
+    };
   }
 
   /**
    * What the chart marks above the plot: the accepted planned changes with an amount (from the
-   * plan start when earlier), what Budget adds once the plan is under way (bills that start or
+   * plan start when earlier), what Edit plan adds once the plan is under way (bills that start or
    * end later, goals spent), and the month each savings goal is reached.
    */
   function markersOf(tl) {
@@ -162,33 +92,13 @@
       .filter(ch => ch.status === 'applied' && (!ch.readOnly || ch.startMonth > tl.planStart))
       .map(ch => {
         const pack = packOf(ch);
-        return { month: ch.startMonth < tl.planStart ? tl.planStart : ch.startMonth, label: shortLabel(ch.label), title: ch.label, cents: ch.cents, kind: ch.kind, pack: pack ? pack.name : '' };
+        const group = ch.readOnly ? '' : ch.scenario || (pack ? pack.name : '');
+        return { month: ch.startMonth < tl.planStart ? tl.planStart : ch.startMonth, label: shortLabel(ch.label), title: ch.label, cents: ch.cents, kind: ch.kind, pack: group };
       });
     for (const mk of Array.isArray(tl.markers) ? tl.markers : []) {
       if (mk.kind === 'goal') list.push({ month: mk.month, label: shortLabel(String(mk.label).replace(/ reached$/, '')) + ' ✓', title: String(mk.label).replace(/ reached$/, ''), cents: mk.cents, kind: 'goal' });
     }
     return list;
-  }
-
-  /** The Compare control (Balance mode, when the plan has what-ifs) and how far the what-if ends from the plan. */
-  function compareHtml(ctx, tl) {
-    const names = (tl.scenarios || []).map(x => x.name);
-    if (!names.length) return '';
-    const cur = tl.compare ? tl.compare.scenario : '';
-    const opts = [['', 'What-if…']].concat(names.map(n => [n, n]));
-    let diff = '';
-    const cmp = tl.compare;
-    const main = tl.balances.combined ? tl.balances.combined.points : [];
-    if (cmp && Array.isArray(cmp.points)) {
-      const last = cmp.points.map((p, i) => (isCents(p.cents) && main[i] && isCents(main[i].cents) ? i : -1)).filter(i => i >= 0).pop();
-      if (last !== undefined) {
-        const d = cmp.points[last].cents - main[last].cents;
-        const by = fmt.month(cmp.points[last].month);
-        diff = `<span class="plan-compare-diff${d < 0 ? ' is-down' : d > 0 ? ' is-up' : ''}" id="plan-compare-diff">${d === 0 ? esc('Same as this plan by ' + by) : `<strong>${esc((d > 0 ? '+' : '') + whole(d))}</strong> ${esc('by ' + by)}`}</span>`;
-      }
-      if (cmp.unset && cmp.unset.length) diff += `<span class="plan-compare-unset" id="plan-compare-unset">${esc(cmp.unset.length + (cmp.unset.length === 1 ? ' amount' : ' amounts') + ' not set')}</span>`;
-    }
-    return `<span class="plan-compare${cur ? ' is-on' : ''}"><label for="plan-compare">Compare</label><select id="plan-compare" data-action="plan:compare">${opts.map(([v, l]) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>${diff}</span>`;
   }
 
   /** 'Oct 1–2, 2026', 'Sep 29 – Oct 2, 2026', 'Dec 30, 2025 – Jan 2, 2026', or one day. */
@@ -222,81 +132,82 @@
     return 'Dotted: worked ' + (before ? 'forward' : 'back') + ' across ' + across + ', which your export does not cover (assumes nothing moved). ' + fix;
   }
 
-  function captionOf(tl, mode, spec) {
-    if (mode === 'trends') {
-      const t = tl.settings.trends;
-      const units = trendUnits(tl);
-      return [units === 'balances' ? 'Month-end balances from your data; dashed = this plan.' : 'Monthly amounts from your data; dashed = this plan.',
-        units === 'mixed' ? 'Balance lines are month-end levels, not monthly amounts.' : '',
-        t.ma ? `Average = trailing ${t.ma} months.` : '',
-        t.trend ? 'Trend = straight-line fit of the actual months.' : ''].filter(Boolean).join(' ');
-    }
-    const b = tl.balances;
+  /** The months drawn solid (the data) and dashed (the plan's estimate), for both captions. */
+  function solidDashed(tl, lines) {
     const parts = [];
-    const lines = spec && Array.isArray(spec.lines) ? spec.lines : [];
-    const assumed = mode === 'balance' ? assumedOf(tl) : null;
-    if (mode === 'balance' && b.mode === 'accounts' && b.accounts.length) parts.push('Combined cash = ' + b.accounts.map(a => a.name).join(' + ') + '.');
     if (tl.lastComplete) {
       // Months worked across assumed days are dotted: "solid" stops before them.
       let solidTo = tl.lastComplete;
-      const main = lines.find(l => l.role === 'combined') || lines[0];
-      if (assumed && main) {
+      const main = lines ? lines.find(l => l.role === 'combined') || lines[0] : null;
+      if (main && assumedOf(tl)) {
         const solid = main.points.filter(p => p.month <= tl.lastComplete && p.cents !== null && p.status !== 'assumed' && p.status !== 'gap' && p.status !== 'projected');
         const tail = main.points.filter(p => p.month <= tl.lastComplete && p.cents !== null).pop();
         if (tail && tail.status === 'assumed') solidTo = solid.length ? solid[solid.length - 1].month : null;
       }
       if (solidTo) parts.push('Solid: your data through ' + fmt.month(solidTo) + '.');
     }
-    parts.push((mode === 'balance' ? 'Dashed' : 'Striped') + ': this plan from ' + fmt.month(tl.planStart) + '.');
-    if (lines.some(l => l.role === 'ghost')) parts.push('Faint dashed: the plan at baseline, before your changes.');
+    parts.push('Dashed: this plan’s monthly estimate from ' + fmt.month(tl.planStart) + '.');
+    return parts;
+  }
+
+  function balanceCaption(tl, spec) {
+    const b = tl.balances;
+    const parts = [];
+    if (b.mode === 'accounts' && b.accounts.length) parts.push('Combined cash = ' + b.accounts.map(a => a.name).join(' + ') + '.');
+    parts.push(...solidDashed(tl, spec.lines));
+    const assumed = assumedOf(tl);
     if (assumed) parts.push(assumedLine(assumed));
-    if (mode === 'balance' && b.illustrative && lines.some(l => l.role === 'account')) parts.push(String(b.illustrative));
-    if (mode === 'balance' && b.mode === 'simple' && b.label) parts.push(b.label + '.');
+    if (b.illustrative && spec.lines.some(l => l.role === 'account')) parts.push(String(b.illustrative));
+    if (b.mode === 'simple' && b.label) parts.push(b.label + '.');
     return parts.join(' ');
   }
 
-  /** Trends: the lines picked (each removable), a list to add one, the average and the trend line. */
-  function trendPicker(tl) {
-    const picked = pickedOf(tl);
-    const cls = trendColours(picked);
-    const on = new Set(picked);
-    const chips = tl.series.filter(s => on.has(s.key)).map(s => {
-      const key = `<span class="key key-line ${esc(cls[s.key])}" aria-hidden="true"></span>`;
-      if (picked.length === 1) return `<span class="plan-trend-chip is-only" id="plan-trend-${esc(s.key)}" title="At least one line stays in the chart">${key}${esc(s.name)}</span>`;
-      return `<button type="button" class="plan-trend-chip" id="plan-trend-${esc(s.key)}" data-action="plan:trend-series" data-series="${esc(s.key)}" aria-label="${esc('Remove ' + s.name + ' from the chart')}">${key}${esc(s.name)}<span class="plan-trend-x" aria-hidden="true">✕</span></button>`;
-    }).join('');
-    const groups = SERIES_GROUPS.map(([g, label]) => {
-      const list = tl.series.filter(s => s.group === g && !on.has(s.key));
-      return list.length ? `<optgroup label="${esc(label)}">${list.map(s => `<option value="${esc(s.key)}">${esc(s.name)}</option>`).join('')}</optgroup>` : '';
-    }).join('');
-    const add = groups
-      ? `<span class="plan-trend-add"><label class="sr-only" for="plan-trend-add">Add a line to the chart</label><select id="plan-trend-add" data-action="plan:trend-series"><option value="">Add a line…</option>${groups}</select></span>`
-      : '';
-    const t = tl.settings.trends;
-    return `<div class="plan-trend-pick" id="plan-trend-pick" role="group" aria-label="Lines in the chart">
-        <span class="plan-trend-chips">${chips}${add}</span>
-        <span class="plan-trend-opts">
-          ${c.segmented({ label: 'Average', name: 'plan-trend-ma', options: TREND_MA, value: t.ma, action: 'plan:trend-ma' })}
-          <label class="check plan-trend-line" for="plan-trend-line"><input type="checkbox" id="plan-trend-line" data-action="plan:trend-line"${t.trend ? ' checked' : ''}><span>Trend line</span></label>
-        </span>
-      </div>`;
+  function flowCaption(tl) {
+    return ['Income: everything paid into the joint accounts. Outgoing: spending, bills and debt; money moved to savings is not outgoing.',
+      'Net to savings: moved to savings in the month, less what came back from it.'].concat(solidDashed(tl, null)).join(' ');
+  }
+
+  /** "Below $0" warnings: the combined cash on this plan, else a checking account (kept apart even when the total is fine). */
+  function warningHtml(tl) {
+    const b = tl.balances;
+    if (b.runsOut || (b.lowest && isCents(b.lowest.cents) && b.lowest.cents < 0)) {
+      const when = b.runsOut ? fmt.monthLong(b.runsOut) : fmt.monthLong(b.lowest.month);
+      const low = b.lowest && isCents(b.lowest.cents) ? ` Lowest: ${whole(b.lowest.cents)} in ${fmt.month(b.lowest.month)}.` : '';
+      return `<div class="ov-warn is-bad" id="plan-warn" role="note"><strong>Cash goes below $0 in ${esc(when)} on this plan.</strong>${esc(low)}</div>`;
+    }
+    for (const a of b.accounts.filter(x => x.group === 'checking')) {
+      const low = a.points.filter(p => p.month >= tl.planStart && isCents(p.cents) && p.cents < 0);
+      if (low.length) {
+        return `<div class="ov-warn is-warn" id="plan-warn" role="note"><strong>${esc(a.name)} goes below $0 in ${esc(fmt.monthLong(low[0].month))} on this plan,</strong> ${esc('even though combined cash stays above it. Move money from savings, or turn on “cover from savings” in Edit plan.')}</div>`;
+      }
+    }
+    return '';
   }
 
   function chartCard(ctx, tl) {
-    const mode = modeOf(tl);
+    const from = fromOf(tl);
+    const months = tl.months.slice(from).map(m => m.month);
     const none = tl.balances.mode === 'none';
-    const options = none ? MODES.filter(m => m.value !== 'balance') : MODES;
-    const prompt = none ? `<a class="plan-prompt" id="plan-prompt" href="#plan-balances" data-action="plan:goto-balances">Enter today’s balances below to see where the money is heading</a>` : '';
-    const controls = `${prompt}${c.segmented({ label: 'Show', name: 'plan-mode', options, value: mode, action: 'plan:mode', hideLabel: true })}${mode === 'balance' ? compareHtml(ctx, tl) : ''}${mode === 'trends' ? trendPicker(tl) : ''}`;
-    const spec = chartSpec(ctx, tl);
-    const chart = UI.chart.cashChart(Object.assign(spec, { caption: captionOf(tl, mode, spec), captionFold: 'About this chart', controls }));
+    let top;
+    if (none) {
+      top = `<div class="ov-nobal" id="plan-nobal">${c.empty('No balance is known yet, so there is no balance line.', `<button type="button" class="btn btn-secondary btn-small" id="plan-prompt" data-action="plan:goto-balances">Enter your balances</button>`)}</div>`;
+    } else {
+      const spec = balanceSpec(tl, months, from);
+      top = UI.chart.cashChart(Object.assign(spec, { caption: balanceCaption(tl, spec), captionFold: 'About this chart' }));
+    }
+    const bottom = UI.chart.cashChart(Object.assign(flowSpec(tl, months, from), { caption: flowCaption(tl), captionFold: 'About this chart' }));
     const ranges = `<div class="plan-ranges">
         ${c.segmented({ label: 'Past', name: 'plan-past', options: PAST, value: tl.settings.past, action: 'plan:past' })}
         ${c.segmented({ label: 'Ahead', name: 'plan-horizon', options: AHEAD, value: tl.settings.horizon, action: 'plan:horizon' })}
-        ${c.button('Export CSV', { action: 'plan:export-csv', id: 'plan-export-csv', cls: 'btn-small plan-export' })}
+        ${c.button('Export CSV', { action: 'plan:export-csv', id: 'plan-export-csv', cls: 'btn-small btn-ghost plan-export' })}
       </div>`;
-    // Going below $0 is the Lowest point tile above the chart (plan/tiles.js).
-    return `<section class="card plan-chart-card" id="plan-chart-card" data-mode="${esc(mode)}" aria-label="Plan chart">${chart}${ranges}</section>`;
+    return `<section class="card plan-chart-card" id="plan-chart-card" aria-labelledby="plan-chart-h">
+        <div class="ov-chart-head"><h2 class="ov-h" id="plan-chart-h">Where you’re heading</h2><p class="ov-hint fine" id="plan-chart-hint">Select a month to see its breakdown.</p></div>
+        ${warningHtml(tl)}
+        <div class="ov-panel ov-panel-balance">${top}</div>
+        <div class="ov-panel ov-panel-flows">${bottom}</div>
+        ${ranges}
+      </section>`;
   }
 
   /** The timeline cut to the months the chart shows (for the CSV: one row per month shown). */
@@ -314,5 +225,5 @@
     });
   }
 
-  Object.assign(P, { chartCard, pickedOf, shownTimeline });
+  Object.assign(P, { chartCard, shownTimeline });
 })(typeof globalThis !== 'undefined' ? globalThis : this);

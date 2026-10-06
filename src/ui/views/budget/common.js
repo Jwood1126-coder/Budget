@@ -1,18 +1,16 @@
 'use strict';
 /*
- * Budget (route #/budget): "this month's plan". What its parts share, in the private
- * BudgetUI._budget namespace. The view is split by section; each file adds its part, in
+ * Edit plan (route #/budget): what its own parts share, in the private BudgetUI._budget namespace
+ * (the dials and planned changes are BudgetUI._plan's, plan/*.js). Each file adds its part, in
  * src/manifest.json order:
- *   budget/common.js  this file: the model (the Plan screen's BudgetEngine.timeline.build, the same
- *                     cached build: ctx.memo('timeline')), formatting, form fields, and the pure
- *                     helpers the sections draw from (dollarFlow, paceOf, progressOf, upcoming,
- *                     goalView, sparkPath; unit-tested in tests/unit/budget-view.test.cjs)
- *   budget/hero.js    1. "<Month> plan": where each dollar goes (tl.summary)
- *   budget/month.js   2. This month so far: planned vs spent by group and category, plan editable
- *   budget/goals.js   3. Goals (and investments), 4. Coming up
- *   budget/setup.js   5. Setup details: pay, bills, debts, savings goals (the editors)
- *   views/budget.js   the view itself: composition, afterRender, the budget:* actions
- * Nothing outside the Budget view reads BudgetUI._budget.
+ *   budget/common.js  this file: the model (the Overview's BudgetEngine.timeline.build, the same
+ *                     cached build: ctx.memo('timeline')), formatting, form fields, and pure
+ *                     helpers (dollarFlow — the month's net for the toast —, paceOf, progressOf,
+ *                     upcoming, goalView, sparkPath; unit-tested in tests/unit/budget-view.test.cjs)
+ *   budget/goals.js   the savings goal cards
+ *   budget/setup.js   pay, bills, debts and the savings goals list (the editors)
+ *   views/budget.js   the view itself: composition, afterRender, the actions
+ * Nothing outside Edit plan reads BudgetUI._budget.
  */
 (function (root) {
   const UI = root.BudgetUI;

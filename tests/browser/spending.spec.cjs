@@ -330,7 +330,7 @@ module.exports = [
       assert.match(await page.textContent('.sp-tile-usual'), /Usual · history/);
       // A category with neither says so and how to fix it.
       await open(t, '#/spending?period=2026-09&cat=Dental');
-      assert.match(await page.textContent('#sp-plan-tile'), /Not set.*Set a target in Budget/s);
+      assert.match(await page.textContent('#sp-plan-tile'), /Not set.*Set a target in Edit plan/s);
       // A seasonal category is compared with the same month last year, and says so.
       await open(t, '#/spending?period=2026-09&cat=Gas%20%26%20heating');
       const basis = await page.textContent('#sp-cat-basis');

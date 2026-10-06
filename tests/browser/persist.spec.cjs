@@ -4,9 +4,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const KEY = 'household-budget:v5:sample';
-// The planned amounts typed on Budget's category rows (they write plan.targets).
-const GROCERIES = 'input[data-action="budget:set-plan"][data-cat="Groceries"]';
-const FUEL = 'input[data-action="budget:set-plan"][data-cat="Fuel"]';
+// The amounts typed on Edit plan's category rows (?section=targets opens them; they write plan.targets).
+const GROCERIES = 'input[data-action="plan:row-cents"][data-name="Groceries"]';
+const FUEL = 'input[data-action="plan:row-cents"][data-name="Fuel"]';
 
 const storedTarget = (page, cat) => page.evaluate(([k, c]) => JSON.parse(localStorage.getItem(k)).plan.targets[c], [KEY, cat]);
 const stateTarget = (page, cat) => page.evaluate(c => window.HouseholdBudget.getState().plan.targets[c], cat);
@@ -202,7 +202,7 @@ module.exports = [
       await commit(page, GROCERIES, '650');
       await page.waitForFunction(() => !document.getElementById('toast').hidden && /Groceries/.test(document.getElementById('toast').textContent));
       const msg = await text(page, '#toast');
-      assert.match(msg, /changed on this page only/);
+      assert.match(msg, /Not saved in this browser/);
       assert.ok(!/(^|[^t] )saved/i.test(msg.replace(/Not saved/g, '')), 'never says saved: ' + msg);
     },
   },

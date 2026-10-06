@@ -179,7 +179,7 @@
     if (savedBudgetExists(ctx, id)) return `A budget is already saved under “${id}” in this browser. It will be used with this data.`;
     const name = profileName(ctx.profile);
     const fict = isObj(ctx.profile) && ctx.profile.isSynthetic;
-    return `Nothing is saved under “${id}” yet, so the budget will start from the household profile${name ? ` “${name}”` : ''}${fict ? ' (the fictional sample: load your own profile, or edit the plan in Budget afterwards)' : ''}.`;
+    return `Nothing is saved under “${id}” yet, so the budget will start from the household profile${name ? ` “${name}”` : ''}${fict ? ' (the fictional sample: load your own profile, or change it in Edit plan afterwards)' : ''}.`;
   }
 
   // ------------------------------------------------------------------ file pickers
@@ -505,13 +505,13 @@
 
   function profileFact(ctx, meta) {
     const p = ctx.profile;
-    if (!isObj(p)) return '<strong>None</strong><span class="dp-fact-sub">The budget starts empty. Enter it in Budget, or load a profile below.</span>';
+    if (!isObj(p)) return '<strong>None</strong><span class="dp-fact-sub">The budget starts empty. Enter it in Edit plan, or load a profile below.</span>';
     const where = ctx.app.profileSource === 'browser'
       ? 'Loaded in this browser' + (meta.profile && meta.profile.loadedAt && dayOf(meta.profile.loadedAt) ? ' on ' + fmt.date(dayOf(meta.profile.loadedAt)) : '')
       : 'Built into this page';
     const mixed = p.isSynthetic && !ctx.dataset.isSynthetic && ctx.dataset.transactions.length > 0;
     return `<strong>${esc(profileName(p) || 'Unnamed household')}</strong> ${p.isSynthetic ? c.badge('Fictional', 'info') : ''}<span class="dp-fact-sub">${esc(where)}. The budget starts from it, and Reset returns to it.</span>` +
-      (mixed ? `<span class="dp-fact-sub tone-warn">Your transactions are real but this profile is the fictional sample, so the plan’s pay, bills and targets are invented until you change them. Load your own profile below, or edit the plan in Budget.</span>` : '');
+      (mixed ? `<span class="dp-fact-sub tone-warn">Your transactions are real but this profile is the fictional sample, so the plan’s pay, bills and targets are invented until you change them. Load your own profile below, or change it in Edit plan.</span>` : '');
   }
 
   function budgetFact(ctx) {

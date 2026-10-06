@@ -13,8 +13,10 @@
  * overrides the detection, to try the other path.
  * open() loads the page at a hash, from empty storage unless { clear: false } (the first load of a
  * context's only page already starts from empty storage, so it loads only once).
- * nav() clicks the navigation link for a view: on phones Spending sits in the
- * "More" menu of the tab bar, so it opens that first.
+ * nav() clicks the navigation link for a view. The order is the same everywhere: Overview, Edit
+ * plan (route budget), Transactions (route review), then Spending and Data & privacy. On phones
+ * those last two sit in the tab bar's "More" menu (Data & privacy is also the top bar's link,
+ * which nav() uses), so for Spending it opens that menu first.
  * settled() resolves once the app is idle: no render scheduled (BudgetUI.app.renderPending) and
  * <html data-render-seq> unchanged for two animation frames. Use it after an action whose
  * re-render the spec has no specific marker to wait for; never sleep.
@@ -115,8 +117,9 @@ async function main() {
           async nav(view, pg = page) {
             // On phones Data & privacy is the top bar's link (it is also in More).
             if (view === 'data' && vp === 'phone') return pg.click('.topbar-data');
+            // Overview, Edit plan, Transactions (and Data & privacy on desktop) are tabs of their own.
             const secondary = view === 'spending';
-            if (!secondary) return pg.click(`.mainnav > ul > li > a[data-nav="${view}"]`);
+            if (!secondary) return pg.click(`.mainnav > ul > li:not(.nav-more) > a[data-nav="${view}"]`);
             if (vp === 'phone') {
               // A render in flight can close the menu between the two taps; open it again if so.
               for (let attempt = 0; attempt < 3; attempt++) {
