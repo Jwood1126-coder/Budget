@@ -1415,11 +1415,14 @@ naming what is missing, when a public name has not been added), the parts in bet
     dial's baseline (`parts.debt`), lower or higher than the average of debt payments — instead of
     the average, never on top of it — and an `ends` change takes out exactly what it counted. The
     history cannot be split by bill (a debt bill has no category, payee or account), so none of a
-    larger average is kept: the dial's `debtCheck` (`{ billsCents, averageCents }`, else null) says
-    the history paid more (the dial is then shown even at $0), and the basis adds "; debt payments at your current debt bills from
-    Budget ($80.00 a month, not the average of $170.00). Your history paid more toward debts than
-    these bills: if a debt payment is missing from your bills, add it in Edit plan, or set this
-    amount here". A dial set directly still wins.
+    different average is kept. Whenever the average differs from the bills, the dial's `debtCheck`
+    (`{ billsCents, averageCents, historyMore }`, else null) discloses it (the dial is then shown
+    even at $0) and the basis adds "; debt payments at your current debt bills from Budget ($80.00
+    a month, not the average of $170.00). The history’s debt payments cannot be matched to these
+    bills one by one, so the plan uses the bills" and, when the history paid more (`historyMore`,
+    also a "Check debt bills" badge on Edit plan), "; the history paid more: if a debt payment is
+    missing from your bills, add it in Edit plan, or set this amount here". A dial set directly
+    still wins.
   - `goals`: `plan.savings` with `{ id, label, targetCents, savedCents, monthlyCents, targetMonth,
     spendAtTarget, cumulativeCents, reachMonth, already }`. The projected savings balance (the
     savings accounts' lines added up) reaches goal k in the first month, from the last complete
