@@ -156,13 +156,16 @@
   /** The other spending group: where a row in `group` can move. */
   const otherGroup = group => (group === 'essentials' ? 'flexible' : 'essentials');
 
-  function moveControl(r, { key, name, moved }) {
+  function moveControl(ctx, tl, r, { key, name, moved }) {
     const id = 'plan-row-' + r.id;
-    if (moved) {
-      return c.button('Put back', { action: 'plan:move-group', data: { key, to: '', name }, cls: 'btn-small btn-ghost drill-move', id: id + '-back', ariaLabel: `Put ${name} back in its usual group` });
-    }
-    const to = otherGroup(r.group);
-    return c.button('Move to ' + (to === 'essentials' ? 'Essentials' : 'Flexible'), { action: 'plan:move-group', data: { key, to, name }, cls: 'btn-small btn-ghost drill-move', id: id + '-move', ariaLabel: `Move ${name} to ${GROUP_NAME[to]}` });
+    const to = moved ? null : otherGroup(r.group);
+    // A move the plan could not keep the total for now (timeline.moveBlocked) is shown, unavailable, with the reason.
+    const blocked = E.timeline.moveBlocked(ctx.state, key, to, tl);
+    const label = moved ? 'Put back' : 'Move to ' + (to === 'essentials' ? 'Essentials' : 'Flexible');
+    const aria = moved ? `Put ${name} back in its usual group` : `Move ${name} to ${GROUP_NAME[to]}`;
+    const html = c.button(label, { action: 'plan:move-group', data: { key, to: to || '', name }, cls: 'btn-small btn-ghost drill-move', id: id + (moved ? '-back' : '-move'),
+      disabled: !!blocked, ariaLabel: blocked ? aria + ' (not available: ' + blocked + ')' : aria });
+    return blocked ? html.replace('<button', `<button title="${esc(blocked)}"`) : html;
   }
 
   function rowHtml(ctx, tl, r, { move = null, bulk = '' } = {}) {
@@ -181,7 +184,7 @@
     return `<div class="drill-row level-${r.level}${r.included ? '' : ' is-out'}" data-row="${esc(r.id)}">
         <label class="drill-name" for="${esc(id)}-on"><input type="checkbox" id="${esc(id)}-on" data-action="plan:row-include" data-row="${esc(r.id)}" data-name="${esc(name)}"${r.included ? ' checked' : ''}><span>${esc(name)}</span></label>
         <span class="input-money drill-amt"><span aria-hidden="true">$</span><input id="${esc(id)}-amt" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" value="${esc(inputText(r.planCents))}" data-action="plan:row-cents" data-commit="1" data-row="${esc(r.id)}" data-name="${esc(name)}" aria-label="${esc(name)}, dollars a month in the plan" aria-describedby="${esc(id)}-meta ${esc(id)}-error"></span>
-        <p class="drill-meta" id="${esc(id)}-meta"><span>${esc(usual)} · ${esc(seen + ' of ' + of + ' mo')}</span>${pattern}${paid}${moved}${from}${edited}${move ? moveControl(r, move) : ''}${bulk}</p>
+        <p class="drill-meta" id="${esc(id)}-meta"><span>${esc(usual)} · ${esc(seen + ' of ' + of + ' mo')}</span>${pattern}${paid}${moved}${from}${edited}${move ? moveControl(ctx, tl, r, move) : ''}${bulk}</p>
         <p class="field-error drill-error" id="${esc(id)}-error" role="alert" hidden></p>
       </div>`;
   }

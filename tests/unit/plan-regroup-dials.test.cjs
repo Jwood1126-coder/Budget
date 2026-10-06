@@ -123,8 +123,10 @@ test('setGroup with Essentials set directly: the moved category’s amount is ad
     assert.deepEqual([m.ui.plan.dials, shiftOf(m)], [dials, {}], JSON.stringify(dials));
     assert.equal(outTotal(build(m)), outTotal(t), JSON.stringify(dials));
   }
-  // Without the timeline the amount is not known: no adjustment (the screen always passes it).
-  assert.deepEqual(shiftOf(T.setGroup(st, 'Hobbies', 'essentials')), {});
+  // Without the timeline the amount is not known: refused while one dial is set directly (the screen always passes it).
+  assert.throws(() => T.setGroup(st, 'Hobbies', 'essentials'), /can’t be moved while Essentials is set to an amount here and Flexible is not/);
+  assert.match(T.moveBlocked(st, 'Hobbies', 'essentials'), /Reset Essentials, or set Flexible too, then move it\.$/);
+  assert.equal(T.moveBlocked(st, 'Hobbies', 'essentials', tl), null);
 });
 
 test('a new amount set for the dial, or a reset, removes the adjustment; a workbook keeps it', () => {
@@ -406,4 +408,60 @@ test('plan report: a workbook saved before names were resolved is reported as th
   assert.match(R.toMarkdown(E, r), /- Applied as the Plan screen does when it opens \(regroupDials\): Flexible is planned at \$180\.00: /);
   // A budget with nothing waiting: no upgrade line.
   assert.equal(R.buildReport({ E, dataset: DS, profile: PROFILE, today: '2033-01-06', sample: false }).setup.upgrade, null);
+});
+
+// ------------------------------------------------------------------ moves the adjustment cannot measure are refused
+
+test('with one spending dial set directly ($0 included), a whole place, a category in "Other" and a combined budget’s member cannot be moved; saved state is unchanged', () => {
+  // Two categories under $20 a month share the "Other" row; the energy budget plans its members at $0.
+  const ds = dataset(HISTORY.concat([['Postage', 10, 'Invented Post Office'], ['Shoe repair', 8, 'Invented Cobbler'], ['Electricity', 100, 'Invented Power Co']]));
+  const withEnergy = dials => {
+    let st = E.state.defaults({ isSynthetic: true, household: { name: 'Invented household' }, plan: planOf({ targets: { [ENERGY]: 30000 } }) }, ds);
+    for (const [k, v] of Object.entries(dials)) st = T.setDial(st, k, v);
+    return st;
+  };
+  const cases = [
+    ['merchant:Invented Craft Shop', 'essentials', /^A whole place can’t be moved/],
+    ['Postage', 'essentials', /^A category grouped into “Other” can’t be moved/],
+    ['Electricity', 'flexible', /^A category planned through a combined budget can’t be moved/],
+    [ENERGY, 'flexible', /^A combined budget can’t be moved/],
+  ];
+  for (const dials of [{ flexible: 40000 }, { essentials: 40000 }, { flexible: 0 }, { essentials: 0 }]) {
+    const st = withEnergy(dials);
+    const tl = build(st, ds);
+    const total = outTotal(tl);
+    for (const [key, to, reason] of cases) {
+      const label = key + ' with ' + JSON.stringify(dials);
+      assert.match(T.moveBlocked(st, key, to, tl) || '', reason, label);
+      // Refused every time it is tried, with the same reason; nothing saved, the total unchanged.
+      for (let i = 0; i < 3; i++) assert.throws(() => T.setGroup(st, key, to, tl), err => reason.test(err.message), label);
+      assert.deepEqual([st.ui.plan.dials, st.ui.plan.groups, st.ui.plan.dialShift], [dials, {}, undefined], label);
+      assert.equal(outTotal(build(st, ds)), total, label);
+    }
+    // A category with a row of its own still moves, with its adjustment, and the total holds;
+    // out of a dial set to less than its amount ($0 here) it would not: refused, with the reason.
+    const [key, to] = dials.flexible !== undefined ? ['Hobbies', 'essentials'] : ['Groceries', 'flexible'];
+    if (Object.values(dials)[0] === 0) {
+      assert.throws(() => T.setGroup(st, key, to, tl), err => /can’t be moved out of (Flexible|Essentials): \1 is set to \$0\.00 here, less than its \$[\d,]+\.\d\d a month/.test(err.message), key);
+    } else {
+      assert.equal(outTotal(build(T.setGroup(st, key, to, tl), ds)), total, key + ' with ' + JSON.stringify(dials));
+    }
+    // Into the dial set to $0: added to it, the total holds.
+    const [inKey, inTo] = dials.flexible !== undefined ? ['Groceries', 'flexible'] : ['Hobbies', 'essentials'];
+    assert.equal(outTotal(build(T.setGroup(st, inKey, inTo, tl), ds)), total, inKey + ' into ' + JSON.stringify(dials));
+  }
+  // Both set directly, or neither: every move keeps the total, so none is refused.
+  for (const dials of [{ essentials: 40000, flexible: 30000 }, {}]) {
+    const st = withEnergy(dials);
+    const tl = build(st, ds);
+    for (const [key, to] of cases) {
+      assert.equal(T.moveBlocked(st, key, to, tl), null, key);
+      const m = T.setGroup(st, key, to, tl);
+      if (Object.keys(dials).length) assert.equal(outTotal(build(m, ds)), outTotal(tl), key);
+    }
+  }
+  // Putting back a place moved earlier (while neither dial was set) is a move too.
+  const placed = T.setGroup(withEnergy({}), 'merchant:Invented Craft Shop', 'essentials', build(withEnergy({}), ds));
+  const later = T.setDial(placed, 'flexible', 40000);
+  assert.match(T.moveBlocked(later, 'merchant:Invented Craft Shop', null, build(later, ds)), /^A whole place can’t be moved/);
 });

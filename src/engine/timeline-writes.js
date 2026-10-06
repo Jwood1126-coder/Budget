@@ -216,6 +216,52 @@
     return E.state.setPath(state, 'ui.plan.dialShift.' + key, { cents: total, categories: names.slice(-20) });
   }
 
+  const GROUP_LABEL = { essentials: 'Essentials', flexible: 'Flexible' };
+  /**
+   * Why moving `key` to `group` (null: back to its default) is not allowed now, or null. With
+   * exactly one of the two spending dials set directly (any amount, $0 included), the regrouping
+   * adjustment keeps the total only for a category with a row of its own (setGroup); these moves
+   * would change the total, so they wait until both dials or neither are set directly: a place
+   * moved as a whole, a category grouped into "Other" (too small for a row of its own), a category
+   * planned through a combined budget (an aggregate's member, or the aggregate itself), a category
+   * taken out of the dial set directly when that amount ($0 included) is less than the category's
+   * (the plan amount stops at $0), and any category move without the current timeline `tl` to
+   * measure it. Saved state is never touched.
+   */
+  function moveBlocked(state, key, group, tl) {
+    if (typeof key !== 'string' || !key.trim()) return null;
+    const k = key.trim();
+    const p = planUi(state);
+    const direct = SPEND_GROUPS.filter(g => isCents(own(p.dials, g)));
+    if (direct.length !== 1) return null;
+    const set = GROUP_LABEL[direct[0]], other = GROUP_LABEL[SPEND_GROUPS.find(g => g !== direct[0])];
+    const why = what => what + ' can’t be moved while ' + set + ' is set to an amount here and ' + other + ' is not: the plan’s total would change. '
+      + 'Reset ' + set + ', or set ' + other + ' too, then move it.';
+    if (k.startsWith(MERCHANT_KEY)) return why('A whole place');
+    const before = isObj(p.groups) ? own(p.groups, k) : undefined;
+    const fallback = E.categories.isEssential(k) ? 'essentials' : 'flexible';
+    const from = SPEND_GROUPS.includes(before) ? before : fallback;
+    if (from === (group || fallback)) return null;
+    if (E.categories.membersOf(k)) return why('A combined budget');
+    const drill = tl && isObj(tl.dialsByKey) && tl.dialsByKey[from] ? tl.dialsByKey[from].drill : null;
+    if (!drill || !Array.isArray(drill.rows)) return why('This category');
+    const rows = drill.rows.filter(r => r.level === 1);
+    const row = rows.find(r => !r.synthetic && r.groupKey === k);
+    if (row) {
+      if (row.aggregate || row.source === 'aggregate' || (Array.isArray(row.covers) && row.covers.length)) return why('A category planned through a combined budget');
+      // Out of the dial set directly: its amount (with any adjustment) must still hold the category's, or $0 would cut it short.
+      const moving = row.included && isCents(row.planCents) ? row.planCents : 0;
+      const shift = isObj(p.dialShift) && isObj(own(p.dialShift, from)) && isCents(p.dialShift[from].cents) ? p.dialShift[from].cents : 0;
+      if (direct[0] === from && moving > 0 && own(p.dials, from) + shift - moving < 0) {
+        return row.label + ' can’t be moved out of ' + set + ': ' + set + ' is set to ' + E.money.format(Math.max(0, own(p.dials, from) + shift))
+          + ' here, less than its ' + E.money.format(moving) + ' a month, so the plan’s total would change. Raise or reset ' + set + ', then move it.';
+      }
+      return null;
+    }
+    // No row of its own: grouped into "Other" (its amount is in that row), or not in the plan at all (nothing moves).
+    return rows.some(r => Array.isArray(r.members) && r.members.length > 1 && r.members.includes(k)) ? why('A category grouped into “Other”') : null;
+  }
+
   /**
    * Put a category (key = its name) or a place (key = 'merchant:' + place) in 'essentials' or
    * 'flexible'; null/undefined goes back to the default (the taxonomy, or the place's categories).
@@ -225,12 +271,15 @@
    * the category's plan amount in the group it leaves (its row in `tl`; $0 when left out, grouped
    * into "Other" or not in `tl`) is taken off that dial when it is the one set directly, or added
    * to the receiving one, as a regrouping adjustment (ui.plan.dialShift); the amount set stays as
-   * saved, and moving it back takes the adjustment back. A place moved as a whole gets none.
+   * saved, and moving it back takes the adjustment back. A move the adjustment cannot keep the
+   * total for (moveBlocked) is refused with its reason; nothing is saved.
    */
   function setGroup(state, key, group, tl) {
     if (typeof key !== 'string' || !key.trim()) fail('Choose a category or a place to move.', 'key');
     if (group !== null && group !== undefined && !SPEND_GROUPS.includes(group)) fail('Choose essentials or flexible.', 'group');
     const k = key.trim();
+    const blocked = moveBlocked(state, k, group, tl);
+    if (blocked) fail(blocked, 'key');
     const p = planUi(state);
     const before = isObj(p.groups) ? own(p.groups, k) : undefined;
     let next = E.state.setPath(state, 'ui.plan.groups.' + k, group === null || group === undefined ? undefined : group);
@@ -452,7 +501,7 @@
   }
 
   Object.assign(T, {
-    setDial, setRow, setTarget, resetDial, resetRow, resetPlan, setGroup, setIrregular, addChange, setChange, removeChange, acceptChanges, migrateRows, migrateDials,
+    setDial, setRow, setTarget, resetDial, resetRow, resetPlan, setGroup, moveBlocked, setIrregular, addChange, setChange, removeChange, acceptChanges, migrateRows, migrateDials,
     splitOther, regroupDials, pendingUpgrade, acceptCarriedOver,
   });
 })(typeof globalThis !== 'undefined' ? globalThis : this);

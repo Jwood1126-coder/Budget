@@ -20,6 +20,9 @@
  *                     validated state writes for the screen (setRow on a category, and setTarget,
  *                     write its budget: plan.targets; the resets put back what the setup file
  *                     supplied, else remove the change)
+ *   moveBlocked(state, key, group, tl) why setGroup would refuse that move now (a whole place,
+ *                     a category in "Other" or in a combined budget while exactly one spending
+ *                     dial is set directly: the adjustment could not keep the total), or null
  *   pendingUpgrade(tl) the upgrades the screen applies once (migrateRows, regroupDials, migrateDials,
  *                     splitOther), named
  *
@@ -75,7 +78,8 @@
  * (ui.plan.dialShift[key] = { cents, categories }, applied only while the dial is set directly:
  * plan amount = the amount set + cents, never below $0; the dial's `shift` says so, and its basis
  * ends "Set here: $300.00, less $120.00 for …, now planned in Essentials"). setGroup writes it when
- * exactly one of the two is set directly (the moved category's plan amount in the group it leaves);
+ * exactly one of the two is set directly (the moved category's plan amount in the group it leaves;
+ * moves it cannot measure exactly are refused then, moveBlocked);
  * setDial, resetDial and resetPlan remove it. Amounts set before imported category names were
  * resolved (ui.plan.groupsRead 'exact', marked by the ui.plan.groupsRead upgrade when Essentials or
  * Flexible was set directly) were chosen when only exact taxonomy names were essential, so an
@@ -554,7 +558,7 @@
     'TINY_CATEGORY_CENTS', 'STABLE_MIN_CHARGES', 'STABLE_SPREAD', 'OTHER_CATEGORY', 'SIMPLE_LABEL', 'RULE', 'SIMPLE_RULE', 'ILLUSTRATIVE', 'DIAL_LABEL',
     'INVEST_RULE',
     'build', 'anchors', 'settings', 'depositHint', 'prorate', 'toCSV', 'templates',
-    'setDial', 'setRow', 'setTarget', 'resetDial', 'resetRow', 'resetPlan', 'setGroup', 'setIrregular', 'addChange', 'setChange', 'removeChange', 'acceptChanges', 'migrateRows', 'migrateDials', 'splitOther', 'regroupDials', 'acceptCarriedOver',
+    'setDial', 'setRow', 'setTarget', 'resetDial', 'resetRow', 'resetPlan', 'setGroup', 'moveBlocked', 'setIrregular', 'addChange', 'setChange', 'removeChange', 'acceptChanges', 'migrateRows', 'migrateDials', 'splitOther', 'regroupDials', 'acceptCarriedOver',
     'pendingUpgrade',
   ];
   const missing = PUBLIC.filter(k => T[k] === undefined);

@@ -1548,7 +1548,12 @@ naming what is missing, when a public name has not been added), the parts in bet
     lowered), and the dial gets `shift: { cents, categories, setCents }` (else null) and its basis
     ends "Set here: $300.00, less $200.00 for Groceries & meal kits, now planned in Flexible" ("…,
     plus $50.00 for Dining & drinks, now planned here"). `setGroup` writes it when exactly one of the
-    two is set directly; an amount set before names were resolved (when only exact taxonomy names
+    two is set directly. Moves it could not keep the total for are refused then (`moveBlocked(state,
+    key, group, tl)` gives the reason, `setGroup` throws it, nothing is saved; Edit plan shows the
+    move button disabled with the reason as its title): a whole place, a category grouped into
+    "Other", a combined budget or its member, a category taken out of the dial set directly when
+    that amount ($0 included) is less than the category's, and any category move without `tl`.
+    Both or neither set directly: every move keeps the total and none is refused. An amount set before names were resolved (when only exact taxonomy names
     were essential; `settings.groupsRead` 'exact') is carried over once the same way
     (`migration.regroupDials`, `regroupDials`).
   - **Category budgets** (`plan.targets`): a level-1 row of one category plans at its change in

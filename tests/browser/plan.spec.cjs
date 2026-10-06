@@ -238,6 +238,31 @@ module.exports = [
     },
   },
   {
+    name: 'with only Flexible set directly, moving a whole place is unavailable, with the reason; categories still move',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/budget');
+      await page.evaluate(() => { const H = window.HouseholdBudget, st = H.getState(); st.ui.plan.dials = { flexible: 250000 }; H.setState(st); });
+      await t.settled();
+      await page.waitForSelector('#plan-drill-flexible');
+      const moves = () => page.$$eval('#plan-drill-flexible button.drill-move', bs => bs.map(b => ({ key: b.dataset.key, disabled: b.disabled, title: b.title || '', aria: b.getAttribute('aria-label') })));
+      const list = await moves();
+      const places = list.filter(m => m.key.startsWith('merchant:'));
+      const cats = list.filter(m => !m.key.startsWith('merchant:'));
+      assert.ok(places.length && cats.length, JSON.stringify(list.slice(0, 4)));
+      for (const m of places) {
+        assert.ok(m.disabled, m.key);
+        assert.match(m.title, /^A whole place can’t be moved while Flexible is set to an amount here and Essentials is not: the plan’s total would change\. Reset Flexible, or set Essentials too, then move it\.$/);
+        assert.match(m.aria, /\(not available: A whole place can’t be moved/);
+      }
+      assert.ok(cats.some(m => !m.disabled), 'a category with a row of its own still moves');
+      // Neither set: places move again.
+      await page.evaluate(() => { const H = window.HouseholdBudget, st = H.getState(); st.ui.plan.dials = {}; H.setState(st); });
+      await t.settled();
+      assert.ok((await moves()).filter(m => m.key.startsWith('merchant:')).every(m => !m.disabled));
+    },
+  },
+  {
     name: 'month breakdown: an aggregate budget (the migrated energy one) counts its members’ spending once, on its own line',
     async run(t) {
       const { page, assert } = t;
