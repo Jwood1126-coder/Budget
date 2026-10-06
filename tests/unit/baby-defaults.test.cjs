@@ -455,6 +455,28 @@ test('a single diapers item (a pack’s, or the household’s own) lowers the su
   onceEach(tw);
 });
 
+test('a copied supplies row the household renamed and set ("Other baby costs", id sc-baby-supplies) is the supplies allowance: no default beside it, $0 included; kept as it is', () => {
+  for (const cents of [0, 12345]) {
+    const st = copy(opened(profile({ scenario: true, due: '2031-08-03' })));
+    const i = st.plan.changes.findIndex(c => c.id === 'sc-supplies');
+    st.plan.changes[i] = Object.assign({}, st.plan.changes[i], { id: 'sc-baby-supplies', label: 'Other baby costs', cents, accepted: true });
+    const row = copy(st.plan.changes[i]);
+    const r = B.ensure(st);
+    assert.equal(byId(r.state.plan.changes, 'baby-default-supplies'), undefined, cents + ': no second supplies allowance');
+    assert.deepEqual(byId(r.state.plan.changes, 'sc-baby-supplies'), row, cents + ': identity, name, amount and inclusion kept');
+    const tl = build(r.state);
+    const supplies = m => monthOf(tl, m).changesApplied.filter(a => a.id === 'sc-baby-supplies' || a.id === 'baby-default-supplies').reduce((t, a) => t + a.cents, 0);
+    assert.equal(supplies('2031-10'), cents, cents + ': counted once, at the household’s amount');
+    assert.equal(B.ensure(r.state).state, r.state, 'a second run is a no-op');
+  }
+  // Made earlier (a budget saved before the row was recognised): the row replaces the default in its months.
+  const st = copy(B.ensure(opened(profile({ due: '2031-08-03' }))).state);
+  st.plan.changes.push({ id: 'sc-baby-supplies', label: 'Other baby costs', kind: 'monthly', group: 'essentials', personId: null, startMonth: '2031-08', endMonth: null, cents: 12345, accepted: true, template: null, scenario: B.GROUP_NAME, note: '' });
+  const tl = build(st);
+  assert.equal(monthOf(tl, '2031-10').changesApplied.filter(a => /supplies/.test(a.id)).reduce((t, a) => t + a.cents, 0), 12345);
+  assert.deepEqual(tl.changes.overlaps.map(o => [o.kind, o.role, o.whole, o.with]), [['alternative', 'supplies', true, ['sc-baby-supplies']]]);
+});
+
 // ------------------------------------------------------------------ keeping the household's edits
 
 test('idempotent, and later edits survive reload and a workbook round trip; a removed default is not made again', () => {

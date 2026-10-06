@@ -89,12 +89,19 @@
   /** The packs (templates) that cover a default's costs too, in the months their items run. */
   const PACK_ROLES = Object.freeze({ babyFirstYear: ['setup', 'supplies'], childcare: ['childcare'], kidCosts: ['supplies'] });
 
-  /** Which default a change is about, from its label ('setup'|'supplies'|'childcare'|null). Spending only. */
+  /** Which default a change is about, from its label, else a copied row's id ('setup'|'supplies'|'childcare'|null). Spending only. */
   function roleOf(c) {
     if (!isObj(c) || c.group === 'income' || c.group === 'savings') return null;
     const label = typeof c.label === 'string' ? c.label : '';
-    const hit = ROLE_WORDS.find(([, re]) => re.test(label));
+    const hit = ROLE_WORDS.find(([, re]) => re.test(label)) || ROLE_WORDS.find(([, re]) => re.test(copiedWords(c)));
     return hit ? hit[0] : null;
+  }
+  /**
+   * A copied what-if row's id in words ('sc-baby-supplies' → 'baby supplies'): its stable identity,
+   * which says what it stands for whatever the household renamed it ("Other baby costs").
+   */
+  function copiedWords(c) {
+    return isObj(c) && typeof c.id === 'string' && c.id.startsWith('sc-') ? c.id.slice(3).replace(/[-_]+/g, ' ') : '';
   }
   const derivedRole = c => (isObj(c) && isObj(c.derived) && ROLES.includes(c.derived.role) ? c.derived.role : null);
   /**
@@ -103,7 +110,7 @@
    */
   const ownOf = (c, role, name) => roleOf(c) === role && (c.scenario === name || THIS_BABY_RE.test(String(c.label || '')));
   /** An item for the whole allowance of `role` (it replaces the default), else it covers its own amount. */
-  const wholeOf = (c, role) => WHOLE_RE[role].test(String(c.label || ''));
+  const wholeOf = (c, role) => WHOLE_RE[role].test(String(c.label || '')) || WHOLE_RE[role].test(copiedWords(c));
   const isCopied = c => isObj(c) && typeof c.id === 'string' && c.id.startsWith('sc-');
   const monthsOf = d => d.slice(0, 7);
   const monthText = m => E.months.label(m);
