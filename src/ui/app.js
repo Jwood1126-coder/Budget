@@ -15,7 +15,6 @@
   const E = root.BudgetEngine;
   const UI = root.BudgetUI;
   const { $, $$, esc } = UI.dom;
-  const fmt = UI.fmt;
   const views = UI.views || (UI.views = {});
 
   const LOADED_DATASET_KEY = 'household-budget:loaded-dataset';
@@ -300,18 +299,13 @@
   let renderSeq = 0;
 
   /**
-   * A retired view's address (#/forecast…): rewritten in place to the view that replaced it. A
-   * Forecast scenario (?scenario=id or a name) becomes the Plan chart's Compare (?compare=name);
-   * nothing else carries over. Returns the route to render.
+   * A retired view's address (#/forecast…): rewritten in place to the view that replaced it (the
+   * Overview). Nothing carries over: the Overview has no Compare, so a ?scenario= or ?compare= is
+   * dropped (saved scenarios stay as they are). Returns the route to render.
    */
   function redirected(route) {
     if (!route.redirectFrom) return route;
     const params = {};
-    const asked = route.params.scenario || (route.params.compare || '').split(',')[0] || '';
-    if (asked) {
-      const sc = (app.state.scenarios || []).find(s => s && (s.id === asked || s.name === asked));
-      if (sc && sc.id !== 'baseline') params.compare = sc.name; else if (!sc) params.compare = asked;
-    }
     try { root.history.replaceState(null, '', UI.router.href(route.view, params)); } catch { /* the view still renders */ }
     return { view: route.view, params, known: true, redirectFrom: null };
   }
@@ -408,11 +402,6 @@
       : app.dataset.transactions.length ? (app.dataSource === 'browser' ? 'Private data loaded in this browser' : 'Private build — keep on your devices')
         : app.build.profilePrivate ? 'Household profile built in — keep this file on your devices' : 'No transactions loaded yet';
     $('#dataBadge').textContent = badge;
-    const months = ctx.months;
-    $('#footerData').textContent = months.length
-      ? `Data: ${fmt.month(months[0])} – ${fmt.month(months[months.length - 1])} · ${ctx.dataset.accounts.length} accounts · ${ctx.dataset.transactions.length.toLocaleString('en-US')} records`
-      : 'No transaction data loaded';
-    $('#navNote').textContent = app.storageOk ? 'Changes save in this browser only. Use Data & privacy to share them.' : 'Browser storage is unavailable: export a workbook to keep changes.';
     // Only possible duplicates get a count in the navigation: they change totals. Everything else
     // in Review is optional tidying, so the navigation does not nag about it.
     let count = 0;

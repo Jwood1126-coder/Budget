@@ -5,7 +5,7 @@ date, rebuilds the page, and checks the result with a plan report:
 
 | File (all in the git-ignored `private/` folder) | What it holds |
 | --- | --- |
-| `private/household-profile.json` | **The setup file**: people, pay, bills, category budgets, savings goals, debts, planned changes and what-ifs, and Plan-screen settings (`planUi`). |
+| `private/household-profile.json` | **The setup file**: people, pay, bills, category budgets, savings goals, debts, planned changes and what-ifs, and plan settings (`planUi`). |
 | `private/import.json` | The import config: accounts (including balance-only investment accounts and whose they are), the export files, and statement balances. |
 | `private/rules.json` | Optional household rules for the importer (format: [ARCHITECTURE.md](ARCHITECTURE.md), "Rules format"). |
 
@@ -120,8 +120,8 @@ One stream per paycheck or regular transfer **into the joint accounts**:
 "targets": { "Groceries": 65000, "Dining & takeout": 30000, "Clothing": null }
 ```
 
-A number is that category's monthly budget: the Plan screen plans the category at it, and the
-Budget screen shows it. `null` means "not set" (the plan uses the category's history). A budget
+A number is that category's monthly budget: the plan uses it for the category, and Edit plan
+shows it on the category's row. `null` means "not set" (the plan uses the category's history). A budget
 for a category with no history adds a row of its own. Category names come from the app's
 category list (`src/engine/categories.js`); an imported name that stands for one of them
 ("Natural gas", "Groceries & meal kits") is planned like it (Essentials or Flexible). A combined
@@ -178,7 +178,7 @@ Dated one-time or monthly changes on top of the plan:
 - `cents: null` = amount not known yet: listed and reported, never applied.
 - `accepted: true` applies it to the plan; `false` lists it only.
 - **What-ifs**: give related changes the same `scenario` name (≤ 60 characters) and leave them
-  `accepted: false`. The Plan screen can compare the plan with them ("Compare"), and the report's
+  `accepted: false`. Edit plan lists them as one folded row with one box to accept them all, and the report's
   "What-ifs" table shows where combined cash would be in 12 months with them. **Write what-ifs
   this way, directly as `plan.changes` with a scenario name**, not as `scenarios` (the earlier
   Forecast format): profile `scenarios` are copied into `plan.changes` only when a budget is
@@ -204,9 +204,9 @@ Prefer statement balances in the import config (section 2). `plan.balances.accou
 (`{ "joint-savings": 406466 }`, with `accountsAsOf` or per-account `accountDates`) is for an account
 whose export has no balance; `jointCashCents`/`asOf` only when no account balance is known.
 
-### Plan-screen settings (`planUi`)
+### Plan settings (`planUi`)
 
-Optional; each field is the Plan screen's own setting (ARCHITECTURE.md §7, `ui.plan`):
+Optional; each field is one of the plan's own settings (ARCHITECTURE.md §7, `ui.plan`):
 
 ```json
 "planUi": {

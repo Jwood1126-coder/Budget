@@ -278,14 +278,16 @@
    *     pack: a shared name used as the label when every marker in a month has it),
    *   hidden [keys], format, caption, tableCaption, axisTitle (the y-axis title, when not the mode's own),
    *   controls (trusted HTML placed on the title row, e.g. the mode switch), titleHidden,
-   *   captionFold (when set, the caption is folded away under a summary with this text).
+   *   captionFold (when set, the caption is folded away under a summary with this text),
+   *   selectable (true: a click, a tap or Enter on a month dispatches `chart:select` on the figure,
+   *     detail { id, index, month, via: 'mouse'|'touch'|'key' }, so the page can show that month's breakdown).
    */
   function cashChart(spec = {}) {
     const {
       id, title = '', mode: modeIn = 'balance', months: monthsIn = [], todayMonth = null, planStart = null,
       lines = [], columns: columnsIn, net = null, hidden = [], format: formatIn, caption = '', tableCaption,
       controls = '', titleHidden = false, trends: trendsIn = null, markers: markersIn = [], axisTitle: axisTitleIn = '',
-      captionFold = '',
+      captionFold = '', selectable = false,
     } = spec || {};
     const columns = columnsIn || {};
     const mode = modeIn === 'flows' ? 'flows' : modeIn === 'trends' ? 'trends' : 'balance';
@@ -678,6 +680,7 @@
       const planned = (mks.get(i) || []).map(mk => (mk.kind === 'goal' ? '' : 'Planned: ') + markerText(mk));
       return {
         x: Math.round(xc(i) * 10) / 10,
+        m,
         t: fmt.monthLong(m),
         p: plan ? 'Plan' : monthStatus[i] === 'assumed' ? 'Assumed' : 'Actual',
         s: mode === 'flows' ? statusText(monthStatus[i]) : '',
@@ -741,7 +744,7 @@
     if (markerCount) summary += ` ${markerCount} planned change${markerCount === 1 ? ' is' : 's are'} marked on the timeline.`;
     if (goalCount) summary += ` ${goalCount} savings goal${goalCount === 1 ? ' is' : 's are'} reached in these months.`;
     const range = `${fmt.month(months[0])} to ${fmt.month(months[n - 1])}`;
-    const ariaLabel = `${title ? title + '. ' : ''}${axisTitle}, ${range}.${planX !== null ? ' Months from ' + fmt.month(months[planIdx]) + ' are the plan.' : ''} ${summary} Use the left and right arrow keys to read each month. A table follows.`;
+    const ariaLabel = `${title ? title + '. ' : ''}${axisTitle}, ${range}.${planX !== null ? ' Months from ' + fmt.month(months[planIdx]) + ' are the plan.' : ''} ${summary} Use the left and right arrow keys to read each month${selectable ? ', Enter to open its breakdown' : ''}. A table follows.`;
 
     // ---- legend: toggle chips per series + static keys for the line/fill treatments
     const chip = (key, name, swatch, tip = '') => `<button type="button" class="cc-chip" id="${esc(UI.dom.domId(figId + '-chip', key))}" data-cc-key="${esc(key)}" aria-pressed="${hiddenSet.has(key) ? 'false' : 'true'}"${tip ? ` title="${esc(tip)}"` : ''}><span class="key ${swatch}" aria-hidden="true"></span><span class="cc-chip-name">${esc(name)}</span></button>`;
@@ -834,7 +837,7 @@
     // The model rides in an inert JSON block (never executed; '<' escaped so it cannot close the tag).
     const modelJson = JSON.stringify(model, (k, v) => (v === '' && k !== 'v' ? undefined : v))
       .replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
-    return `<figure class="chart cash-chart" id="${esc(figId)}" data-chart="cash" data-mode="${mode}" data-hidden="${esc(JSON.stringify([...hiddenSet]))}" aria-labelledby="${esc(figId)}-title">
+    return `<figure class="chart cash-chart${selectable ? ' is-selectable' : ''}" id="${esc(figId)}" data-chart="cash" data-mode="${mode}"${selectable ? ' data-cc-select="1"' : ''} data-hidden="${esc(JSON.stringify([...hiddenSet]))}" aria-labelledby="${esc(figId)}-title">
       <script type="application/json" class="cc-model">${modelJson}</script>
       ${head(keysHtml, chips)}
       <div class="cc-plot" id="${esc(figId)}-plot" tabindex="0" role="img" aria-label="${esc(ariaLabel.replace(/\s+/g, ' ').trim())}">
@@ -1004,6 +1007,13 @@
       openTips.delete(ctl);
     }
 
+    /** A month chosen (click, tap or Enter) on a selectable chart: the page shows its breakdown. */
+    const selectable = fig.getAttribute('data-cc-select') === '1';
+    function select(i, via) {
+      if (!selectable || i < 0 || i >= n) return;
+      fig.dispatchEvent(new CustomEvent('chart:select', { bubbles: true, detail: { id: fig.id, index: i, month: model.months[i].m, via } }));
+    }
+
     plot.addEventListener('pointermove', ev => {
       if (ev.pointerType === 'mouse' || (state.via === 'touch' && ev.pressure > 0)) show(indexAt(ev.clientX), ev.pointerType === 'mouse' ? 'mouse' : 'touch', ev.clientY);
     });
@@ -1012,7 +1022,12 @@
       if (ev.pointerType === 'mouse') return;
       const i = indexAt(ev.clientX);
       if (!tip.hidden && state.index === i) hide(); // tap again to close
-      else show(i, 'touch', ev.clientY);
+      else { show(i, 'touch', ev.clientY); select(i, 'touch'); }
+    });
+    plot.addEventListener('click', ev => {
+      if (ev.pointerType && ev.pointerType !== 'mouse') return;
+      if (ev.detail === 0) return; // not a mouse click (Enter is handled with the keys below)
+      select(indexAt(ev.clientX), 'mouse');
     });
     plot.addEventListener('keydown', ev => {
       let i = state.index;
@@ -1022,6 +1037,7 @@
       else if (ev.key === 'Home') i = 0;
       else if (ev.key === 'End') i = n - 1;
       else if (ev.key === 'Escape') { if (!tip.hidden) { ev.preventDefault(); hide(); } return; }
+      else if ((ev.key === 'Enter' || ev.key === ' ') && selectable && state.index >= 0) { ev.preventDefault(); select(state.index, 'key'); return; }
       else return;
       ev.preventDefault();
       show(i, 'key');

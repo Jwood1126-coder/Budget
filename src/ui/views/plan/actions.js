@@ -1,17 +1,18 @@
 'use strict';
 /*
- * Plan (#/overview): the plan:* actions. Text boxes and sliders commit on change through
- * app.update (undoable); view choices (mode, Past, Ahead, Trends) are saved without undo; Compare
- * is the route's ?compare= (replaced in place, never saved). An action can ask the next render to
- * focus a control and to announce the new headline (takeNext).
+ * Overview (#/overview) and Edit plan (#/budget): the plan:* actions, and wire(), the behaviour
+ * both screens share after a render. Text boxes and sliders commit on change through app.update
+ * (undoable); view choices (Past, Ahead) are saved without undo; the month whose breakdown is
+ * open is the route's ?month= (replaced in place, never saved). An action can ask the next render
+ * to focus a control and to announce the new monthly figure (takeNext).
  */
 (function (root) {
   const UI = root.BudgetUI;
   const E = root.BudgetEngine;
   const fmt = UI.fmt;
   const P = UI._plan;
-  const { isCents, exact, amt, plural, inputText, todayIso, model, showError, PACKS, groupIdOf } = P;
-  const { pickedOf, shownTimeline, dataAnchorsOf, GROUP_NAME, dialLabel, signedDial, dialResetTo, rowResetTo, setupDials, depositsOf, KIND_LABEL, CHANGE_GROUP_LABEL } = P;
+  const { isCents, exact, amt, plural, inputText, todayIso, model, showError } = P;
+  const { shownTimeline, dataAnchorsOf, GROUP_NAME, dialLabel, signedDial, dialResetTo, rowResetTo, setupDials, depositsOf, KIND_LABEL, CHANGE_GROUP_LABEL, sumOf, valuesOf, showMonth } = P;
   const { txnMap, placeTxns, placeOf, fillTxns, TXN_REASON } = P;
 
   /** Set by a change made on this page: the next render announces the new headline. */
@@ -107,12 +108,6 @@
     if (cur === value) return;
     ctx.app.update(st => E.state.setPath(st, 'ui.plan.' + key, value), { undoable: false });
   };
-  /** Trends settings: a view choice (not undoable, no message). */
-  const setTrends = (ctx, patch) => {
-    const cur = model(ctx).settings.trends;
-    const next = Object.assign({ series: cur.series.slice(), ma: cur.ma, trend: cur.trend }, patch);
-    ctx.app.update(st => E.state.setPath(st, 'ui.plan.trends', next), { undoable: false });
-  };
 
   function dialCommit(ctx, key, cents) {
     const d = model(ctx).dialsByKey[key];
@@ -138,31 +133,10 @@
   }
 
   const actions = {
-    'plan:mode': (ctx, el) => setView(ctx, 'mode', ['flows', 'trends'].includes(el.dataset.value) ? el.dataset.value : 'balance'),
     'plan:past': (ctx, el) => setView(ctx, 'past', choice(el.dataset.value)),
     'plan:horizon': (ctx, el) => setView(ctx, 'horizon', choice(el.dataset.value)),
-    /** Compare: a what-if drawn beside the plan. A view choice kept in the address, not saved. */
-    'plan:compare': (ctx, el) => {
-      const params = Object.assign({}, ctx.route.params, { compare: el.value || undefined });
-      ctx.app.navigate('overview', params, { replace: true, keepFocus: true });
-    },
-    'plan:trend-series': (ctx, el) => {
-      const tl = model(ctx);
-      const picked = pickedOf(tl);
-      if (el.tagName === 'SELECT') {
-        const key = el.value;
-        if (!key || picked.includes(key)) return;
-        focusNext = '#plan-trend-add';
-        setTrends(ctx, { series: picked.concat([key]).slice(0, E.state.LIMITS.planTrendSeries || 16) });
-        return;
-      }
-      const key = el.dataset.series;
-      if (!picked.includes(key) || picked.length < 2) return;
-      focusNext = '#plan-trend-add';
-      setTrends(ctx, { series: picked.filter(k => k !== key) });
-    },
-    'plan:trend-ma': (ctx, el) => setTrends(ctx, { ma: Number(el.dataset.value) || 0 }),
-    'plan:trend-line': (ctx, el) => setTrends(ctx, { trend: !!el.checked }),
+    /** A month's breakdown (a tile, or Close with no month): drawn in place, kept in the address, not saved. */
+    'plan:month': (ctx, el) => showMonth(ctx, el.dataset.month || '', { focus: true }),
     'plan:export-csv': ctx => {
       const tl = model(ctx);
       const name = 'plan-' + todayIso() + '.csv';
@@ -177,6 +151,8 @@
     'plan:cover': (ctx, el) => change(ctx, st => E.state.setPath(st, 'ui.plan.coverFromSavings', !!el.checked),
       el.checked ? 'Checking shortfalls in plan months now come from savings.' : 'Checking shortfalls in plan months are no longer moved from savings.'),
     'plan:goto-balances': () => {
+      const fold = document.getElementById('plan-bal-edit');
+      if (fold) fold.open = true;
       const first = document.querySelector('#plan-balances input[type="text"]');
       const card = document.getElementById('plan-balances');
       if (card) card.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -372,7 +348,6 @@
       const bal = ctx.state.plan.balances || {};
       const dateEl = document.getElementById(el.id + '-date');
       const date = dateEl && E.dates.isDate(dateEl.value) ? dateEl.value : todayIso();
-      const first = model(ctx).balances.mode === 'none' && cents !== null;
       const current = account ? (bal.accounts || {})[account] : bal.jointCashCents;
       if ((current ?? null) === cents) return;
       const message = cents === null ? `${name}: balance removed.` : `${name}: balance ${exact(cents)} as of ${fmt.date(date)}.`;
@@ -385,7 +360,6 @@
           next = E.state.setPath(st, 'plan.balances.jointCashCents', cents);
           next = E.state.setPath(next, 'plan.balances.asOf', cents === null ? null : date);
         }
-        if (first && (!st.ui.plan || st.ui.plan.mode !== 'trends')) next = E.state.setPath(next, 'ui.plan.mode', 'balance');
         return next;
       }, message);
     },
@@ -393,7 +367,7 @@
       const account = el.dataset.account;
       const data = dataAnchorsOf(ctx).get(account);
       if (!account) return;
-      focusNext = `[id="plan-bal-${account}-edit"] > summary`;
+      focusNext = `[id="plan-bal-${account}"]`;
       change(ctx, st => {
         let next = E.state.setPath(st, 'plan.balances.accounts.' + account, undefined);
         next = E.state.setPath(next, 'plan.balances.accountDates.' + account, undefined);
@@ -418,19 +392,6 @@
       focusNext = '#' + el.id;
       change(ctx, st => E.timeline.acceptChanges(st, list.map(ch => ch.id), on),
         on ? `${el.dataset.name}: ${plural(list.length, 'change')} accepted${unset ? `; ${unset} still ${unset === 1 ? 'needs' : 'need'} an amount` : ''}.` : `${el.dataset.name}: listed only, not applied.`);
-    },
-    'plan:change-accept-all': ctx => {
-      const list = model(ctx).changes.list.filter(ch => !ch.readOnly && !ch.accepted);
-      if (!list.length) return;
-      const unset = list.filter(ch => ch.cents === null).length;
-      change(ctx, st => E.timeline.acceptChanges(st, list.map(ch => ch.id), true),
-        `Accepted ${plural(list.length, 'planned change')}${unset ? `; ${unset} still ${unset === 1 ? 'needs' : 'need'} an amount` : ''}.`);
-    },
-    'plan:change-unaccept-all': ctx => {
-      const list = model(ctx).changes.list.filter(ch => !ch.readOnly && ch.accepted);
-      if (!list.length) return;
-      focusNext = '#plan-ch-accept-all';
-      change(ctx, st => E.timeline.acceptChanges(st, list.map(ch => ch.id), false), `${plural(list.length, 'planned change')} no longer applied.`);
     },
     'plan:change-label': (ctx, el) => {
       const ch = changeOf(ctx, el.dataset.change);
@@ -500,52 +461,74 @@
       }
       return undefined;
     },
-    /**
-     * A pack (New baby, Childcare, Kid costs): its items are listed, never accepted for the
-     * household, and tagged with the pack's name as a what-if, so Compare can draw them first.
-     */
-    'plan:add-pack': (ctx, form) => {
-      const key = form.dataset.pack;
-      const stem = form.dataset.stem;
-      const pack = PACKS[key];
-      const make = E.timeline.templates[key];
-      if (!pack || typeof make !== 'function') return;
-      const err = document.getElementById('plan-pack-' + stem + '-date-error');
-      const first = form.querySelector('input');
-      const fail = message => {
-        if (err) { err.textContent = message; err.hidden = false; }
-        if (first) { first.setAttribute('aria-invalid', 'true'); first.focus(); }
-      };
-      if (err) { err.textContent = ''; err.hidden = true; }
-      for (const x of form.querySelectorAll('input')) x.removeAttribute('aria-invalid');
-      const data = new FormData(form);
-      let items;
-      try {
-        if (key === 'childcare') {
-          const start = String(data.get('start') || '');
-          if (!E.months.isMonth(start)) return fail('Choose the month childcare starts.');
-          const raw = typed(data.get('amount'));
-          const cents = raw === '' ? null : E.money.inputToCents(raw, { field: 'monthlyCents' });
-          items = make(start, cents, { scenario: pack.name });
-        } else {
-          const due = String(data.get('due') || '');
-          if (!E.dates.isDate(due)) return fail('Enter the due date first.');
-          items = make(due, { scenario: pack.name });
-        }
-      } catch (e) {
-        if (e && e.name === 'ValidationError') return fail(e.message);
-        throw e;
-      }
-      const box = document.getElementById('plan-add-' + stem);
-      if (box) box.open = false; // closed before the render, so it comes back closed
-      // The pack's row comes up open, with its box focused (a pack of one is a plain line).
-      P.openGroup = pack.name;
-      focusNext = items.length > 1 ? '#' + groupIdOf(pack.name) + '-on' : '#plan-ch-accept-all';
-      change(ctx, st => E.timeline.addChange(st, items),
-        `${pack.name}: ${plural(items.length, 'item')} added, not in the plan yet. Check the amounts, then accept them.`);
-      return undefined;
-    },
   };
 
-  Object.assign(P, { actions, takeNext, keyedCategory });
+  // ------------------------------------------------------------------ behaviour both screens share
+  /** The upgrade note already handled this session (E.timeline.pendingUpgrade is applied once). */
+  let migrated = null;
+
+  /**
+   * Row changes and card/bank amounts saved under the earlier card and bank dials: carried over
+   * once, in one change, with one note (whichever of the two screens renders first).
+   */
+  function applyUpgrade(ctx, tl) {
+    const upgrade = E.timeline.pendingUpgrade(tl);
+    if (!upgrade || migrated === upgrade.note) return;
+    migrated = upgrade.note;
+    const note = String(upgrade.note || '');
+    setTimeout(() => {
+      try {
+        ctx.app.update(upgrade.apply, { message: note, undoable: false });
+      } catch (err) { console.warn('Earlier plan settings were not carried over:', err.message); }
+    }, 0);
+  }
+
+  /**
+   * After a render of either screen: Enter commits a typed amount; a dragged slider moves its own
+   * box (the plan follows on release); transaction lists are drawn when opened; category selects
+   * wait for Enter on keys; the next focus and announcement an action asked for.
+   */
+  function wire(rootEl, ctx) {
+    const tl = model(ctx);
+    applyUpgrade(ctx, tl);
+    rootEl.addEventListener('input', ev => {
+      const el = ev.target;
+      if (!el.matches || !el.matches('input.dial-range')) return;
+      const key = el.dataset.dial;
+      const cents = Math.round(Number(el.value) * 100);
+      const dial = el.closest('.dial');
+      dial.dataset.cents = String(cents);
+      dial.dataset.dirty = '1';
+      const box = document.getElementById('plan-dial-' + key);
+      if (box) { box.value = inputText(cents); showError(box, null); }
+      el.setAttribute('aria-valuetext', amt(cents) + ' a month');
+    });
+    rootEl.addEventListener('keydown', ev => {
+      const el = ev.target;
+      if (ev.key !== 'Enter' || !el.matches || !el.matches('input[data-commit]')) return;
+      ev.preventDefault();
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    // A row's transactions are drawn when their list opens (lists open before a re-render come back drawn).
+    rootEl.addEventListener('toggle', ev => {
+      const d = ev.target;
+      if (d.matches && d.matches('details.plan-txns') && d.open && !d.querySelector('.plan-tx-list')) fillTxns(ctx, d);
+    }, true);
+    keyedCategory(rootEl);
+    // A group's box shows "some accepted" (a property only script can set).
+    for (const box of rootEl.querySelectorAll('input[data-mixed]')) box.indeterminate = true;
+    P.openGroup = null;
+    const next = takeNext();
+    if (next.focus) {
+      const target = typeof next.focus === 'function' ? next.focus(rootEl) : rootEl.querySelector(next.focus);
+      if (target) target.focus({ preventScroll: true });
+    }
+    if (next.announce) {
+      const live = rootEl.querySelector('#plan-live');
+      const text = sumOf(tl, valuesOf(tl)).text;
+      if (live) setTimeout(() => { live.textContent = text; }, 120);
+    }
+  }
+
+  Object.assign(P, { actions, takeNext, keyedCategory, wire });
 })(typeof globalThis !== 'undefined' ? globalThis : this);

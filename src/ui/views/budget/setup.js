@@ -485,10 +485,10 @@
   function savingsArea(ctx, tl) {
     const st = ctx.state;
     const bal = st.plan.balances || {};
-    // The same starting cash as the Plan page: ctx.anchors() is what the timeline starts from.
+    // The same starting cash as the Overview: ctx.anchors() is what the timeline starts from.
     const anchored = ctx.anchors();
     const cash = anchored.accounts.length
-      ? `<p class="fine" id="bud-cash-card">The plan starts from the account balances on the Plan page: <strong>${esc(money(anchored.combined.cents))}</strong> as of ${esc(fmt.date(anchored.combined.asOf))}. <a href="${esc(ctx.href('overview'))}">Change them on Plan</a>.</p>`
+      ? `<p class="fine" id="bud-cash-card">The plan starts from the account balances on the Overview: <strong>${esc(money(anchored.combined.cents))}</strong> as of ${esc(fmt.date(anchored.combined.asOf))}. <a href="${esc(ctx.href('overview'))}">Change them on the Overview</a>.</p>`
       : c.card(`<p class="fine">Bank exports do not include balances. Until you enter one, the plan shows how much joint cash goes up or down, not how much you will have.</p>
       <div class="bud-grid-2">
         ${moneyField({ id: 'bud-cash', label: 'Joint cash today', path: 'plan.balances.jointCashCents', cents: bal.jointCashCents ?? null, allowNegative: true, placeholder: 'Not entered', message: 'Joint cash balance saved.',
@@ -711,7 +711,7 @@
         <div class="bud-area-body" id="bud-section-${key}">${bodies[key]()}</div>
       </details>`).join('');
     return `<section class="card bud-setup" id="bud-setup" aria-labelledby="bud-setup-h">
-      <div class="card-head"><div><h2 id="bud-setup-h">Setup details</h2><p class="card-sub">Pay, bills, debts and goals the plan is built from.</p></div></div>
+      <div class="card-head"><div><h2 id="bud-setup-h">Pay, bills and debts</h2><p class="card-sub">What the plan is built from.</p></div></div>
       <div class="bud-areas">${areas}</div>
     </section>`;
   }

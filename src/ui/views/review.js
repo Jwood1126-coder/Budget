@@ -530,7 +530,7 @@
     const confirm = attention.filter(a => a.route && a.route.startsWith('#/budget') && !(a.id === 'balance' && missingIds.has('jointCash'))
       && !['bill-fund-', 'bill-amt-'].some(p => a.id.startsWith(p) && missingIds.has(a.id.slice(p.length))));
     const AREA = { income: 'Income', bills: 'Bills', targets: 'Targets', savings: 'Savings', balances: 'Balances', debts: 'Debts' };
-    const missList = missing.length ? `<ul class="rv-missing">${missing.map(m => `<li><div><strong>${esc(m.label)}</strong><small>${esc(AREA[m.area] || 'Budget')} · Not set</small></div><a class="btn btn-small btn-secondary" href="${esc(missingHref(ctx, m))}">Fix in Budget<span class="sr-only">: ${esc(m.label)}</span></a></li>`).join('')}</ul>`
+    const missList = missing.length ? `<ul class="rv-missing">${missing.map(m => `<li><div><strong>${esc(m.label)}</strong><small>${esc(AREA[m.area] || 'Budget')} · Not set</small></div><a class="btn btn-small btn-secondary" href="${esc(missingHref(ctx, m))}">Fix in Edit plan<span class="sr-only">: ${esc(m.label)}</span></a></li>`).join('')}</ul>`
       : c.notice({ tone: 'good', title: 'Every budget input is filled in.', body: '' });
     const confirmList = confirm.length ? c.disclosure(`Also worth confirming (${esc(confirm.length)})`, `<ul class="rv-missing">${confirm.map(a => `<li><div><strong>${esc(a.title)}</strong>${a.detail ? `<small>${esc(a.detail)}</small>` : ''}</div><a class="btn btn-small btn-secondary" href="${esc(a.route)}">${esc(a.cta || 'Open')}<span class="sr-only">: ${esc(a.title)}</span></a></li>`).join('')}</ul>`, { cls: 'rv-confirm' }).replace('<details', '<details id="rv-confirm"') : '';
     return c.card(`<p class="fine">Unknown amounts are left out of totals and shown as “Not set”, never as $0. Filling them in makes the budget and forecast complete.</p>${missList}${confirmList}`,
@@ -961,8 +961,8 @@
         ? `${esc(b.label)}: <strong>${money(b.monthlyCents)}</strong> a month (${money(b.monthlyCents * 12)} a year)${b.status === 'planned' ? ', planned' : ''}`
         : `${esc(b.label)}: amount <strong>not set</strong>`);
       const budgetLine = bills.length || typeof target === 'number'
-        ? `In your budget · plan: ${[...bills.map(billText), ...(typeof target === 'number' ? [`target <strong>${money(target)}</strong> a month`] : [])].join('; ')}. <a href="${esc(ctx.href('budget', { section: bills.length ? 'bills' : 'targets' }))}">Open in Budget</a>`
-        : `In your budget · plan: <strong>Not set</strong>. A yearly ${money(latest.totalCents)} is ${money(Math.round(latest.totalCents / 12))} a month if set aside evenly. <a href="${esc(ctx.href('budget', { section: 'bills' }))}">Add it as a bill in Budget</a>`;
+        ? `In your budget · plan: ${[...bills.map(billText), ...(typeof target === 'number' ? [`target <strong>${money(target)}</strong> a month`] : [])].join('; ')}. <a href="${esc(ctx.href('budget', { section: bills.length ? 'bills' : 'targets' }))}">Open in Edit plan</a>`
+        : `In your budget · plan: <strong>Not set</strong>. A yearly ${money(latest.totalCents)} is ${money(Math.round(latest.totalCents / 12))} a month if set aside evenly. <a href="${esc(ctx.href('budget', { section: 'bills' }))}">Add it as a bill in Edit plan</a>`;
       const ms = g.list.map(s => fmt.month(s.month));
       const months = ms.length > 1 ? ms.slice(0, -1).join(', ') + ' and ' + ms[ms.length - 1] : ms[0];
       const body = `<div class="rv-item-head"><h3 id="${esc(headId)}" tabindex="-1">${esc(g.category)}</h3>${c.badge('Yearly bill — not unusual', 'info')}</div>
@@ -971,7 +971,7 @@
         <p class="rv-target-line">${budgetLine}</p>`;
       return item(key, headId, body, { highlight: rows.some(t => t.id === P.txn) });
     }).join('');
-    return c.card(`<p class="fine">A payment that comes back 11 to 13 months later at a similar size, such as a yearly insurance premium, is a regular bill rather than an unusual month. It needs no decision here. It always stays in actual spending; plan for it in Budget as a monthly amount set aside.</p><div class="rv-items">${items}</div>`,
+    return c.card(`<p class="fine">A payment that comes back 11 to 13 months later at a similar size, such as a yearly insurance premium, is a regular bill rather than an unusual month. It needs no decision here. It always stays in actual spending; plan for it in Edit plan as a monthly amount set aside.</p><div class="rv-items">${items}</div>`,
       { title: 'Yearly bills (not unusual)', subtitle: `${count(groups.length, 'category', 'categories')} paid about once a year · not counted as spikes`, id: 'rv-annual' });
   }
 
@@ -1020,7 +1020,7 @@
         <h4 id="${esc(key)}-usual-h">Usual ${esc(s.category)} for planning · history</h4>
         <p class="fine">The average of ${esc(kept.months.length ? E.compare.describeMonths(kept.months) : 'the complete months before')}, as used for ${esc(fmt.monthLong(next))}. It affects the usual amount for ${esc(E.compare.describeMonths(affected))}.</p>
         <div class="rv-tiles">${tile('If kept in', kept.avg, state !== 'exclude')}${tile('If left out', left.avg, state === 'exclude')}</div>
-        <p class="rv-target-line">Your target for ${esc(s.category)} · plan: ${typeof target === 'number' ? `<strong>${money(target)}</strong> a month (set by you, not changed by this)` : `<strong>Not set</strong>. <a href="${esc(ctx.href('budget', { section: 'targets', focus: domId('bud-target', s.category) }))}">Set a target in Budget</a>`}</p>
+        <p class="rv-target-line">Your target for ${esc(s.category)} · plan: ${typeof target === 'number' ? `<strong>${money(target)}</strong> a month (set by you, not changed by this)` : `<strong>Not set</strong>. <a href="${esc(ctx.href('budget', { section: 'targets', focus: domId('bud-target', s.category) }))}">Set a target in Edit plan</a>`}</p>
       </div>
       <p class="rv-effect">Actual spending does not change either way: ${esc(fmt.monthLong(s.month))} still shows <a href="${esc(ctx.href('spending', { period: s.month, cat: s.category }))}">${money(actualMonth)} of ${esc(s.category)}</a>, and <a href="${esc(ctx.href('spending', { period: s.month }))}">the month's total</a> stays ${money(monthTotals(ctx, s.month).spendingCents)}.</p>
       ${decide}`;

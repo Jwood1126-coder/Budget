@@ -1,11 +1,11 @@
 'use strict';
-// Budget view ("this month's plan") checks in a real browser (sample household: Alex & Sam, fictional).
+// Edit plan (#/budget) checks in a real browser (sample household: Alex & Sam, fictional): the one
+// place for the plan's inputs. The dials' drill-down has its own checks in plan.spec.cjs.
 //   node tools/build.cjs --sample --out dist/test/index.html && node tests/browser/run.cjs budget
 //
 // Waiting: never sleep. After a change, `settled` waits until the page shows the current plan (the
 // view stamps each render) and the app is idle. Figures are worked out with the engine in the page
-// (the Plan screen's model, BudgetEngine.timeline.build) and compared with what the page shows, so
-// Budget and Plan are checked to show the same numbers.
+// (BudgetEngine.timeline.build, the build the Overview shares) and compared with what the page shows.
 
 const XSS = '<img src=x onerror=alert(1)>';
 const AREAS = ['income', 'bills', 'debts', 'savings'];
@@ -13,8 +13,8 @@ const AREAS = ['income', 'bills', 'debts', 'savings'];
 const { noHorizontalScroll, state, whole, centsOf } = require('./helpers.cjs');
 
 const text = (page, sel) => page.$eval(sel, el => el.textContent.replace(/\s+/g, ' ').trim());
-/** The planned-amount box on a category's row. */
-const planBox = cat => `input[data-action="budget:set-plan"][data-cat="${cat}"]`;
+/** The amount box on a category's row in the money-out lists (open with ?section=targets). */
+const planBox = cat => `input[data-action="plan:row-cents"][data-name="${cat}"]`;
 
 /** Wait until the page shows the current plan and nothing is left to render. */
 async function settled(t, page = t.page) {
@@ -65,9 +65,6 @@ function models(page) {
   });
 }
 
-/** The hero legend as the page shows it: { key: cents }. */
-const legend = (page, side) => page.$$eval(`#bud-legend-${side} .bud-legend-item`, els => Object.fromEntries(els.map(el => [el.dataset.key, el.querySelector('.bud-legend-amt').textContent.trim()])));
-
 /** Replace the dataset with a changed copy of the sample (loaded in the browser), then reload. */
 async function withDataset(t, change) {
   await t.page.evaluate(src => {
@@ -92,28 +89,6 @@ function partialOctober(ds) {
   add('joint-card', '2026-10-11', -9100, 'Pets', 'Kibble Barn');
 }
 
-/** A balance-only investment account with monthly transfers into it from checking. */
-/** The sample without its investment account (and the transfers into it). */
-function noInvestments(ds) {
-  const ids = new Set(ds.accounts.filter(a => a.type === 'investment').map(a => a.id));
-  ds.accounts = ds.accounts.filter(a => !ids.has(a.id));
-  ds.balances = (ds.balances || []).filter(b => !ids.has(b.accountId));
-  ds.transactions = ds.transactions.filter(x => !(x.kind === 'transfer' && x.subtype === 'investment'));
-}
-
-function investments(ds) {
-  // (withDataset runs this in the page, so it cannot call noInvestments: the same filter, inline.)
-  const ids = new Set(ds.accounts.filter(a => a.type === 'investment').map(a => a.id));
-  ds.accounts = ds.accounts.filter(a => !ids.has(a.id));
-  ds.balances = (ds.balances || []).filter(b => !ids.has(b.accountId));
-  ds.transactions = ds.transactions.filter(x => !(x.kind === 'transfer' && x.subtype === 'investment'));
-  ds.accounts.push({ id: 'joint-invest', label: 'Index fund', type: 'investment', scope: 'joint', ownerId: null, paidInFull: false, coverage: [] });
-  ds.balances = (ds.balances || []).concat([{ accountId: 'joint-invest', date: '2026-03-31', cents: 2050000, source: 'statement' }, { accountId: 'joint-invest', date: '2026-09-30', cents: 2310000, source: 'statement' }]);
-  for (const m of ['2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09']) {
-    ds.transactions.push({ id: 'tx-inv-' + m, accountId: 'joint-checking', date: m + '-20', description: 'TRANSFER TO INDEX FUND', merchant: 'Index fund', amountCents: -25000, kind: 'transfer', subtype: 'investment', category: 'Transfer', sourceCategory: null, categoryReason: 'test', confidence: 'high', flags: [], pairId: null, matchIds: [], sourceFile: 'test.csv', sourceRow: 1, note: '' });
-  }
-}
-
 /** Structural checks: headings in order, unique ids, labelled controls. */
 function structure(page) {
   return page.evaluate(() => {
@@ -132,38 +107,24 @@ function structure(page) {
 
 module.exports = [
   {
-    name: 'the month’s plan: hero, so far, goals, coming up and setup, with the Plan’s numbers and no horizontal scroll',
+    name: 'Edit plan: the one place for inputs, in order: money in and out, planned changes, savings goals, pay, bills and debts, settings',
     viewport: 'both',
     async run(t) {
       await openBudget(t);
       const { view, fresh } = await models(t.page);
       t.assert.deepEqual(view.summary, fresh.summary, 'the view reads the same build as a fresh one');
-      const s = view.summary;
-      t.assert.equal(await text(t.page, '#page-title'), 'October plan');
-      // Hero: money in by person, money out by group, left over; the headline is in − out.
-      const inside = await legend(t.page, 'in');
-      t.assert.deepEqual(inside, { p1: whole(s.inByPerson.p1), p2: whole(s.inByPerson.p2), other: whole(s.inByPerson.other) });
-      const outside = await legend(t.page, 'out');
-      t.assert.deepEqual(outside, {
-        essentials: whole(s.outByGroup.essentials), flexible: whole(s.outByGroup.flexible), irregular: whole(s.outByGroup.irregular),
-        other: whole(s.outByGroup.other), savings: whole(s.savingsCents), investing: whole(s.investingCents), left: whole(s.leftCents),
-      });
-      t.assert.equal(await text(t.page, '#bud-legend-out [data-key="other"] .bud-legend-label'), 'Debt & business');
-      t.assert.equal(await text(t.page, '#bud-net .bud-hero-net-value'), '+' + whole(s.inCents - s.outCents));
-      t.assert.match(await text(t.page, '#bud-flow figcaption'), /^October plan, joint accounts\. Money in \$6,768: Alex \$4,073, Sam \$2,650/);
-      // Both bars are drawn to one scale: each segment's share of its bar is its share of the money in.
-      const shares = await t.page.$$eval('.bud-flow-bar', bars => bars.map(b => {
-        const w = b.getBoundingClientRect().width - (b.children.length - 1) * parseFloat(getComputedStyle(b).columnGap);
-        return Object.fromEntries([...b.children].map(x => [x.dataset.key, x.getBoundingClientRect().width / w]));
-      }));
-      t.assert.ok(Math.abs(shares[1].left - s.leftCents / s.inCents) < 0.02, 'left over: ' + shares[1].left);
-      t.assert.ok(Math.abs(shares[0].p1 - s.inByPerson.p1 / s.inCents) < 0.02, 'Alex: ' + shares[0].p1);
-      t.assert.ok(Math.abs(shares[1].essentials - s.outByGroup.essentials / s.inCents) < 0.02, 'essentials: ' + shares[1].essentials);
-      // Every section is there; the setup details are folded away.
-      for (const id of ['#bud-hero', '#bud-month', '#bud-goals', '#bud-coming', '#bud-setup']) t.assert.ok(await t.page.$(id), id);
+      t.assert.equal(await text(t.page, '#page-title'), 'Edit plan');
+      t.assert.equal(await text(t.page, '.page-subtitle'), 'Joint accounts · amounts a month, from October 2026');
+      const ids = await t.page.$$eval('#plan-root > *', xs => xs.map(x => x.id).filter(Boolean));
+      t.assert.deepEqual(ids, ['plan-dials', 'plan-changes', 'bud-goals', 'bud-setup', 'plan-more', 'plan-live']);
+      // The dials, in this order, each with its value as the plan has it.
+      t.assert.deepEqual(await t.page.$$eval('#plan-dials .dial', ds => ds.map(d => d.dataset.dial)), ['p1', 'p2', 'inOther', 'essentials', 'flexible', 'irregular', 'savings', 'investing', 'other']);
+      for (const [key, d] of Object.entries(view.dials)) t.assert.equal(await t.page.inputValue('#plan-dial-' + key), d.planCents === null ? '' : await t.page.evaluate(c => window.BudgetUI.dom.centsToInputText(c), d.planCents), key);
+      // Not a second dashboard: no hero, no Coming up card, no investments card, no headline, no month card.
+      for (const gone of ['#bud-hero', '#bud-coming', '#bud-invest', '#bud-month', '#plan-headline', '#plan-chart', '#bud-to-chart', '.bud-tt', 'input[name="scope"]']) t.assert.equal(await t.page.$$eval(gone, x => x.length), 0, gone);
       for (const a of AREAS) t.assert.equal(await t.page.$eval('#bud-area-' + a, d => d.open), false, a + ' starts folded');
-      // What went away: no Targets table, no Remaining, no scope toggle.
-      for (const gone of ['.bud-tt', '#bud-sum-remaining', '#bud-fill', 'input[name="scope"]', '.bud-summary']) t.assert.equal(!!(await t.page.$(gone)), false, gone);
+      t.assert.equal(await t.page.$eval('#plan-more', d => d.open), false, 'settings folded');
+      t.assert.ok(!/assistant/i.test(await text(t.page, '#view')), 'no control is labelled for an assistant');
       t.assert.ok(await noHorizontalScroll(t.page), 'no horizontal page scroll');
       const st = await structure(t.page);
       t.assert.equal(st.first, 1);
@@ -171,7 +132,7 @@ module.exports = [
       t.assert.deepEqual(st.dupes, [], 'element ids are unique');
       t.assert.deepEqual(st.unlabelled, [], 'every control has a label');
       t.assert.equal(st.linksWithoutHref, 0);
-      await t.shot('budget');
+      await t.shot('edit-plan');
     },
   },
   {
@@ -194,96 +155,31 @@ module.exports = [
     },
   },
   {
-    name: 'a planned amount typed on its row is the category budget: the plan, the hero and the Plan dial follow, with undo',
+    name: 'a category amount typed on its row is the category budget: the dial and the Overview follow, with undo',
     viewport: 'both',
     async run(t) {
-      await openBudget(t);
-      const before = await models(t.page);
-      t.assert.equal(await t.page.inputValue(planBox('Groceries')), '600');
-      t.assert.equal(await t.page.$eval(planBox('Groceries'), el => el.id), await t.page.evaluate(() => window.BudgetUI.dom.domId('bud-target', 'Groceries')), 'the id other views link to');
-      await commit(t, planBox('Groceries'), '650', () => window.HouseholdBudget.getState().plan.targets.Groceries === 65000);
-      const after = await models(t.page);
-      t.assert.equal(after.view.summary.outByGroup.essentials - before.view.summary.outByGroup.essentials, 5000);
-      t.assert.equal(after.view.dials.essentials.planCents - before.view.dials.essentials.planCents, 5000, 'the Plan’s Essentials dial moves the same');
-      t.assert.deepEqual(after.view.summary, after.fresh.summary);
-      const net = s => s.inCents - s.outCents;
-      t.assert.equal(await text(t.page, '#bud-net .bud-hero-net-value'), '+' + whole(net(after.view.summary)));
-      t.assert.equal(await text(t.page, '#bud-legend-out [data-key="essentials"] .bud-legend-amt'), whole(after.view.summary.outByGroup.essentials));
-      const re = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      t.assert.match(await text(t.page, '#toast'), new RegExp(re(`Groceries plan saved: $650 a month. +${whole(net(before.view.summary))} → +${whole(net(after.view.summary))} a month on this plan.`)));
-      await focusIs(t.page, sel => document.activeElement === document.querySelector(sel), planBox('Groceries'));
-      await t.shot('budget-edited');
-      // Undo from the toast.
-      await t.page.click('#toast button[data-action="undo"]');
-      await t.page.waitForFunction(() => window.HouseholdBudget.getState().plan.targets.Groceries === 60000);
+      await openBudget(t, '#/budget?section=targets');
+      t.assert.ok(await t.page.$eval('#plan-drill-essentials', d => d.open) && await t.page.$eval('#plan-drill-flexible', d => d.open), 'section=targets opens the category lists');
+      const before = (await models(t.page)).view;
+      const row = Object.values(before.dials).flatMap(d => d.rows || []).find(r => r.label === 'Pets');
+      t.assert.ok(row, 'Pets is a category row');
+      await commit(t, planBox('Pets'), '75', () => window.HouseholdBudget.getState().plan.targets.Pets === 7500);
+      const after = (await models(t.page)).view;
+      const key = Object.keys(after.dials).find(k => (after.dials[k].rows || []).some(r => r.label === 'Pets'));
+      t.assert.equal(after.dials[key].planCents - before.dials[key].planCents, 7500 - row.planCents, 'the dial is the new sum of its rows');
+      t.assert.match(await text(t.page, '#toast'), /^Pets set to \$75 a month\./);
+      await t.page.click('#undoBtn');
+      await t.page.waitForFunction(() => window.HouseholdBudget.getState().plan.targets.Pets !== 7500);
       await settled(t);
-      t.assert.equal(await t.page.inputValue(planBox('Groceries')), '600');
+      t.assert.equal(await t.page.inputValue(planBox('Pets')), await t.page.evaluate(c => window.BudgetUI.dom.centsToInputText(c), row.planCents), 'undone');
+      // A link from Transactions or Spending focuses the category's row.
+      const focus = await t.page.evaluate(() => window.BudgetUI.dom.domId('bud-target', 'Groceries'));
+      await t.page.goto(t.url + '#/budget?section=targets&focus=' + focus);
+      await focusIs(t.page, () => document.activeElement && document.activeElement.dataset.name === 'Groceries');
     },
   },
   {
-    name: 'an invalid planned amount is refused inline; a blank one goes back to the category’s history',
-    async run(t) {
-      await openBudget(t);
-      const id = await t.page.$eval(planBox('Fuel'), el => el.id);
-      await t.page.fill(planBox('Fuel'), 'abc');
-      await t.page.press(planBox('Fuel'), 'Enter');
-      await t.page.waitForSelector(`#${id}-error:not([hidden])`);
-      t.assert.equal(await t.page.getAttribute(planBox('Fuel'), 'aria-invalid'), 'true');
-      t.assert.equal((await state(t.page)).plan.targets.Fuel, 13000, 'the last valid value is kept');
-      await t.page.fill(planBox('Fuel'), '-5');
-      await t.page.press(planBox('Fuel'), 'Enter');
-      await t.page.waitForFunction(i => /\$0 or more/.test(document.getElementById(i + '-error').textContent), id);
-      // Blank: the budget is "not set" (null, never $0) and the row plans at its history again.
-      await commit(t, planBox('Fuel'), '', () => window.HouseholdBudget.getState().plan.targets.Fuel === null);
-      const m = await models(t.page);
-      const row = m.view.dials.essentials.rows.find(r => r.label === 'Fuel');
-      t.assert.equal(row.source, 'history');
-      t.assert.equal(await t.page.$eval(planBox('Fuel'), (el, c) => el.value === (c / 100).toLocaleString('en-US', { maximumFractionDigits: 2 }) || el.value === String(c / 100), row.planCents), true, 'the box shows the history amount');
-      t.assert.equal(await t.page.getAttribute(planBox('Fuel'), 'aria-invalid'), null);
-    },
-  },
-  {
-    name: 'a row the Plan screen set an amount on moves into the budget when typed here',
-    async run(t) {
-      await openBudget(t);
-      const rowId = (await models(t.page)).view.dials.flexible.rows.find(r => r.label === 'Pets').id;
-      await t.page.evaluate(id => {
-        const H = window.HouseholdBudget;
-        H.setState(H.engine.state.setPath(H.getState(), 'ui.plan.rows.' + id, { cents: 7000 }));
-      }, rowId);
-      await settled(t);
-      t.assert.equal(await t.page.$eval(planBox('Pets'), el => el.dataset.source), 'set');
-      t.assert.equal(await t.page.inputValue(planBox('Pets')), '70');
-      await commit(t, planBox('Pets'), '65', () => window.HouseholdBudget.getState().plan.targets.Pets === 6500);
-      const st = await state(t.page);
-      t.assert.ok(!st.ui.plan.rows[rowId] || st.ui.plan.rows[rowId].cents === undefined, 'the row’s own amount is gone');
-      t.assert.equal((await models(t.page)).view.dials.flexible.rows.find(r => r.label === 'Pets').source, 'budget');
-    },
-  },
-  {
-    name: 'no data for the plan month yet: the last full month against the plan, labelled',
-    async run(t) {
-      await openBudget(t);
-      const { view } = await models(t.page);
-      t.assert.equal(await t.page.$eval('#bud-month', el => el.dataset.mode), 'last');
-      t.assert.match(await text(t.page, '#bud-month-h'), /^September against the plan i?Last full month$/);
-      const sep = view.months.find(m => m.month === view.lastComplete);
-      t.assert.equal(await text(t.page, '#bud-grp-essentials .bud-row-spent'), whole(sep.out.essentials), 'group spending is the timeline’s');
-      t.assert.equal(await text(t.page, '#bud-grp-essentials .bud-plan-ro'), whole(view.summary.outByGroup.essentials));
-      t.assert.equal(!!(await t.page.$('.bud-meter-pace')), false, 'a whole month has no pace marker');
-      // Categories over their plan stand out.
-      const over = await t.page.$$eval('.bud-cat.is-over', els => els.map(el => el.querySelector('.bud-row-label').textContent));
-      t.assert.ok(over.includes('Household & hardware'), over.join(', '));
-      t.assert.match(await t.page.locator('.bud-cat.is-over', { hasText: 'Household & hardware' }).locator('.bud-row-status').textContent(), /^Over by \$128$/);
-      // The bill the plan adds is listed with its group (read-only).
-      t.assert.match(await t.page.locator('#bud-grp-essentials .bud-cat', { hasText: 'Life insurance' }).textContent(), /Bill.*\$40/s);
-      // The rows add up to the group's spending.
-      const sums = await t.page.$$eval('#bud-grp-flexible .bud-cat .bud-row-spent', els => els.map(e => e.textContent.trim()));
-      t.assert.ok(sums.length > 3);
-    },
-  },
-  {
-    name: 'the plan month’s own spending so far, with a pace marker from the data’s last day',
+    name: 'the plan month’s own spending so far: the Overview’s breakdown of the plan month shows spent of planned',
     viewport: 'both',
     async run(t) {
       await openBudget(t);
@@ -291,45 +187,18 @@ module.exports = [
       const { view } = await models(t.page);
       const oct = view.months.find(m => m.month === '2026-10');
       t.assert.ok(oct.actualSoFar, 'October is partly covered');
-      t.assert.equal(await t.page.$eval('#bud-month', el => el.dataset.mode), 'partial');
-      t.assert.equal(await text(t.page, '#bud-month-h'), 'October so far');
-      t.assert.match(await text(t.page, '#bud-month-sub'), /^Day 12 of 31 · /);
-      t.assert.equal(await text(t.page, '#bud-grp-flexible .bud-row-spent'), whole(oct.actualSoFar.out.flexible));
-      const pace = await t.page.$eval('#bud-grp-flexible .bud-meter-pace', el => parseFloat(el.style.left));
-      t.assert.ok(Math.abs(pace - 100 * 12 / 31) < 0.1, 'the marker sits at day 12 of 31: ' + pace);
-      // Pets: $91 of a $50 plan.
-      const pets = t.page.locator('.bud-cat', { has: t.page.locator(planBox('Pets')) });
-      t.assert.match(await pets.getAttribute('class'), /is-over/);
-      t.assert.equal((await pets.locator('.bud-row-status').textContent()).trim(), 'Over by $41');
-      t.assert.equal(await pets.locator('.bud-meter-over').count(), 1);
-      // Groceries: $413 of $600 by day 12 is ahead of the month (everyday spending only).
-      t.assert.equal((await t.page.locator('.bud-cat', { has: t.page.locator(planBox('Groceries')) }).locator('.bud-row-status').textContent()).trim(), 'Ahead of pace');
-      t.assert.doesNotMatch(await t.page.locator('.bud-cat', { has: t.page.locator(planBox('Mortgage')) }).textContent(), /Ahead of pace/, 'a bill paid on the 1st is not ahead');
+      await t.page.goto(t.url + '#/overview?month=2026-10');
+      await t.page.waitForSelector('#plan-month');
+      t.assert.equal(await text(t.page, '#plan-month-sofar'), 'So far: your data covers 12 days of 31.');
+      t.assert.match(await text(t.page, '#plan-month-grp-flexible > summary'), new RegExp('\\' + whole(oct.actualSoFar.out.flexible) + ' so far'));
+      await t.page.click('#plan-month-grp-flexible > summary');
+      // Pets: $91 of a $50 plan, marked over.
+      const pets = t.page.locator('#plan-month-grp-flexible .ov-mline, #plan-month-grp-essentials .ov-mline', { hasText: 'Pets' });
+      await t.page.click('#plan-month-grp-essentials > summary');
+      t.assert.match((await pets.first().textContent()).replace(/\s+/g, ' '), /Pets \$91 of \$50/);
+      t.assert.match(await pets.first().getAttribute('class'), /is-over/);
       t.assert.ok(await noHorizontalScroll(t.page));
-      await t.shot('budget-so-far');
-    },
-  },
-  {
-    name: 'savings drawn down is money in, never left over; the headline is what the cash accounts move by',
-    async run(t) {
-      await openBudget(t);
-      await t.page.evaluate(() => {
-        const H = window.HouseholdBudget;
-        H.setState(H.engine.timeline.setDial(H.getState(), 'savings', -30000));
-      });
-      await settled(t);
-      const s = (await models(t.page)).view.summary;
-      t.assert.equal(s.savingsCents, -30000);
-      const inside = await legend(t.page, 'in');
-      const outside = await legend(t.page, 'out');
-      t.assert.equal(inside.fromSavings, '$300');
-      t.assert.ok(!('savings' in outside), 'no savings segment on the out side');
-      t.assert.equal(outside.left, whole(s.leftCents));
-      t.assert.equal(await text(t.page, '#bud-net .bud-hero-net-value'), '+' + whole(s.inCents - s.outCents));
-      t.assert.match(await text(t.page, '.bud-hero-chips'), /\$300 from savings/);
-      const sum = o => Object.values(o).reduce((a, v) => a + centsOf(v), 0);
-      t.assert.ok(Math.abs(sum(inside) - sum(outside)) <= 300, 'both sides add up (to the dollar)');
-      await t.shot('budget-savings-draw');
+      await t.shot('overview-so-far');
     },
   },
   {
@@ -361,52 +230,9 @@ module.exports = [
       await commit(t, box, '175', () => window.HouseholdBudget.getState().plan.savings.find(g => g.id === 'emergency').monthlyCents === 17500);
       const s = (await models(t.page)).view.summary;
       t.assert.equal(s.savingsCents, 47500, 'Σ goal monthly amounts is the savings plan');
-      t.assert.equal((await legend(t.page, 'out')).savings, '$475');
+      t.assert.equal(await t.page.inputValue('#plan-dial-savings'), '475', 'net to savings follows');
       t.assert.match(await text(t.page, '#toast'), /Emergency cushion: monthly amount saved\./);
       await t.shot('budget-goals');
-    },
-  },
-  {
-    name: 'investments: the balance, the month’s investing and a sparkline, never counted as cash',
-    async run(t) {
-      await openBudget(t);
-      await withDataset(t, noInvestments);
-      t.assert.equal(await t.page.$$eval('#bud-invest', x => x.length), 0, 'no investment account, no card');
-      await withDataset(t, investments);
-      t.assert.ok(await t.page.$('#bud-invest'));
-      t.assert.equal(await text(t.page, '#bud-invest .bud-invest-balance'), '$23,100');
-      t.assert.match(await text(t.page, '#bud-invest'), /Balance on Sep 30, 2026/);
-      t.assert.equal(await t.page.locator('#bud-invest svg.bud-spark path').count() >= 1, true);
-      const s = (await models(t.page)).view.summary;
-      t.assert.ok(s.investingCents > 0, 'transfers to the fund are the investing plan');
-      t.assert.match(await text(t.page, '#bud-invest .bud-invest-monthly'), new RegExp('^\\+\\' + whole(s.investingCents) + ' a month on this plan'));
-      t.assert.equal((await legend(t.page, 'out')).investing, whole(s.investingCents));
-      t.assert.match(await text(t.page, '.bud-hero-chips'), new RegExp('\\' + whole(s.investingCents) + ' to investments'));
-      await t.shot('budget-investments');
-    },
-  },
-  {
-    name: 'coming up: the plan’s changes in month order with their amounts, and a link to the chart',
-    async run(t) {
-      await openBudget(t);
-      // The sample's what-ifs (copied from its profile's scenarios) are set aside: this test starts
-      // from what Budget adds (bills, goals) and one pack added below.
-      await t.page.evaluate(() => { const s = window.HouseholdBudget.getState(); s.plan.changes = []; window.HouseholdBudget.setState(s); });
-      await settled(t);
-      const items = () => t.page.$$eval('#bud-coming .bud-up-item', els => els.map(el => el.textContent.replace(/\s+/g, ' ').trim()));
-      let list = await items();
-      t.assert.match(list[0], /^Oct 2026 Life insurance \(being considered\) Essentials Bill \$40 a month$/);
-      t.assert.match(list[1], /^Sep 2027 Anniversary trip: spent from savings Irregular · once Goal \$2,400$/);
-      await t.page.evaluate(() => {
-        const H = window.HouseholdBudget;
-        H.setState(H.engine.timeline.addChange(H.getState(), H.engine.timeline.templates.childcare('2027-02', 130000)));
-      });
-      await settled(t);
-      list = await items();
-      t.assert.match(list[1], /^Feb 2027 Childcare.* i?Idea \$1,300 a month$/, 'a pack’s change not accepted yet is an idea');
-      t.assert.equal(await t.page.getAttribute('#bud-coming-chart', 'href'), '#/overview');
-      await t.page.click('#bud-coming-chart');
-      await t.page.waitForFunction(() => location.hash.startsWith('#/overview'));
     },
   },
   {
@@ -420,10 +246,10 @@ module.exports = [
       await openBudget(t, `#/budget?section=bills&focus=${bill}`, { clear: false });
       await focusIs(t.page, i => document.activeElement && document.activeElement.id === i, bill);
       t.assert.equal(await t.page.$eval('#bud-area-bills', d => d.open), true);
-      // Review's "Set a target in Budget" link lands on the category's planned amount.
+      // Review's "Set a target in Edit plan" link lands on the category's amount in the lists.
       const target = await t.page.evaluate(() => window.BudgetUI.dom.domId('bud-target', 'Groceries'));
       await openBudget(t, `#/budget?section=targets&focus=${target}`, { clear: false });
-      await focusIs(t.page, i => document.activeElement && document.activeElement.id === i, target);
+      await focusIs(t.page, () => document.activeElement && document.activeElement.dataset.action === 'plan:row-cents' && document.activeElement.dataset.name === 'Groceries');
       // A debt's payment link opens the bill's amount, keeping focus somewhere useful.
       await openArea(t, 'debts');
       const link = t.page.locator('.bud-debt-card', { has: t.page.locator('h3', { hasText: /^Mortgage$/ }) }).locator('.card-sub a');
@@ -592,7 +418,7 @@ module.exports = [
   {
     name: 'reload keeps edits',
     async run(t) {
-      await openBudget(t);
+      await openBudget(t, '#/budget?section=targets');
       await commit(t, planBox('Pets'), '55', () => window.HouseholdBudget.getState().plan.targets.Pets === 5500);
       await openArea(t, 'bills');
       await select(t, 'select[data-bind="plan.bills[id=p2-car].fundedFrom"]', 'p2', () => window.HouseholdBudget.getState().plan.bills.find(b => b.id === 'p2-car').fundedFrom === 'p2');
@@ -602,23 +428,25 @@ module.exports = [
       const st = await state(t.page);
       t.assert.equal(st.plan.targets.Pets, 5500);
       t.assert.equal(st.plan.bills.find(b => b.id === 'p2-car').fundedFrom, 'p2');
+      await openBudget(t, '#/budget?section=targets', { clear: false });
       t.assert.equal(await t.page.inputValue(planBox('Pets')), '55');
+      await openArea(t, 'bills');
       t.assert.equal(await t.page.$eval('#bud-area-bills', d => d.open), true, 'the area named in the address opens again');
     },
   },
   {
-    name: 'keyboard only: tab to a planned amount, type and press Enter',
+    name: 'keyboard only: tab to a category amount, type and press Enter',
     async run(t) {
-      await openBudget(t);
-      await t.page.focus('#bud-to-chart');
+      await openBudget(t, '#/budget?section=targets');
+      await t.page.focus('#plan-dial-flexible');
       let found = false;
-      for (let i = 0; i < 60 && !found; i++) {
+      for (let i = 0; i < 120 && !found; i++) {
         await t.page.keyboard.press('Tab');
-        found = await t.page.evaluate(() => document.activeElement && document.activeElement.dataset.cat === 'Groceries');
+        found = await t.page.evaluate(() => document.activeElement && document.activeElement.dataset.action === 'plan:row-cents' && document.activeElement.dataset.name === 'Groceries');
       }
       t.assert.ok(found, 'the Groceries planned amount is reachable with Tab');
       const id = await t.page.evaluate(() => document.activeElement.id);
-      t.assert.equal(await t.page.evaluate(i => document.querySelector(`label[for="${i}"]`).textContent, id), 'Groceries: planned a month');
+      t.assert.equal(await t.page.getAttribute('#' + id, 'aria-label'), 'Groceries, dollars a month in the plan');
       await t.page.keyboard.press(`${t.mod}+A`);
       await t.page.keyboard.type('640');
       await t.page.keyboard.press('Enter');
@@ -638,7 +466,7 @@ module.exports = [
       await t.page.waitForSelector('#bud-root');
       await settled(t);
       t.assert.ok(await t.page.$('#bud-empty'));
-      t.assert.equal(!!(await t.page.$('#bud-hero')), false);
+      t.assert.equal(await t.page.$$eval('#plan-dials', x => x.length), 0, 'no dials without a plan');
       await t.page.evaluate(() => document.querySelectorAll('#view details').forEach(d => { d.open = true; }));
       t.assert.doesNotMatch(await text(t.page, '#view'), /NaN|undefined|\bnull\b/, 'no broken values');
       // Goals keep their monthly amount in the setup list while there are no goal cards.

@@ -1,7 +1,8 @@
 /* ==========================================================================
-   Plan (#/overview, src/ui/views/overview.js and src/ui/views/plan/*.js): the tiles, the chart
-   card, Coming up, the dials with their drill-down, the balances and More options. Base tokens
-   only (plus the chart's --series-5/6), so dark mode follows base.css and chart.css.
+   The plan parts (src/ui/views/plan/*.js) on the Overview (#/overview: tiles, chart card,
+   balances, breakdown, Coming up) and Edit plan (#/budget: the dials with their drill-down, the
+   planned changes, Settings). Base tokens only (plus the chart's --series-5/6), so dark mode
+   follows base.css and chart.css.
    ========================================================================== */
 .plan { display: flex; flex-direction: column; gap: var(--space-4); }
 .plan-h { margin: 0 0 var(--space-3); font-size: 1.02rem; font-weight: 700; letter-spacing: -.01em; }
@@ -22,18 +23,12 @@
 .kpi { position: relative; display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: var(--space-3) var(--space-4) var(--space-3); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
 /* A thin accent across the top: the colour of the line the tile is about. */
 .kpi::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--kpi-accent, var(--border-strong)); }
-.kpi-brand { --kpi-accent: var(--brand); }
-.kpi-combined { --kpi-accent: var(--series-1); }
-.kpi-savings { --kpi-accent: var(--series-3); }
-.kpi-invest { --kpi-accent: var(--series-4); }
 .kpi-bad { --kpi-accent: var(--bad); background: var(--bad-soft); border-color: transparent; }
 .kpi p { margin: 0; }
 .kpi-label { font-size: .78rem; font-weight: 650; color: var(--text-2); letter-spacing: .01em; }
 .kpi-value { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; font-size: 1.62rem; font-weight: 750; line-height: 1.15; letter-spacing: -.025em; font-variant-numeric: tabular-nums; color: var(--text); white-space: nowrap; }
 .kpi.tone-warn .kpi-value { color: var(--warn); }
 .kpi.tone-bad .kpi-value { color: var(--bad); }
-.kpi-from { font-size: 1.05rem; font-weight: 650; color: var(--text-3); letter-spacing: -.01em; }
-.kpi-arrow { font-size: 1rem; font-weight: 600; color: var(--text-3); }
 .kpi-sub { font-size: .8rem; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .kpi-sub:empty { display: none; }
 .kpi.tone-bad .kpi-sub { color: var(--bad); font-weight: 600; }
@@ -43,121 +38,45 @@
   .kpi { padding: 9px var(--space-3) 7px; border-radius: 10px; }
   .kpi-label { font-size: .72rem; }
   .kpi-value { font-size: 1.3rem; }
-  .kpi-from { font-size: .86rem; }
-  .kpi-arrow { font-size: .82rem; }
   .kpi-sub { font-size: .72rem; }
 }
 @media (max-width: 374px) {
   .kpi-value { font-size: 1.16rem; }
-  .kpi-from { font-size: .78rem; }
 }
 
 /* ------------------------------------------------------------- 1. chart card */
 .plan-chart-card { padding: var(--space-4) var(--space-5) var(--space-3); }
-.plan-chart-card .cash-chart .cc-controls { align-items: center; }
-.plan-chart-card .cash-chart .cc-controls .segmented-options { flex-wrap: nowrap; }
-.plan-prompt { display: inline-flex; align-items: center; min-height: 40px; font-weight: 650; }
-/* Compare: a quiet select beside the mode switch; the difference it makes, right after it. */
-.plan-compare { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px var(--space-2); min-width: 0; font-size: .84rem; }
-.plan-compare label { font-weight: 650; color: var(--text-2); }
-.plan-compare select { min-height: 34px; max-width: 13rem; padding: 4px 28px 4px 10px; border: 1px solid var(--control-border); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-weight: 600; }
-.plan-compare.is-on select { border-color: var(--series-6); box-shadow: inset 0 0 0 1px var(--series-6); }
-.plan-compare-diff { display: inline-flex; align-items: baseline; gap: 4px; padding: 2px 10px; border-radius: 999px; background: var(--surface-3); color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.plan-compare-diff strong { color: var(--text); }
-.plan-compare-diff.is-down strong { color: var(--bad); }
-.plan-compare-diff.is-up strong { color: var(--good); }
-.plan-compare-unset { font-size: .78rem; font-weight: 600; color: var(--warn); }
+
 .plan-ranges { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-5); margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border); }
 .plan-ranges .segmented { display: flex; align-items: center; gap: var(--space-2); }
 .plan-ranges .segmented-legend { float: left; margin: 0; font-size: .8rem; color: var(--text-3); }
 .plan-ranges .segmented label { padding: 4px 10px; font-size: .82rem; }
 .plan-ranges .plan-export { margin-left: auto; }
-.plan-chart-card .notice { margin-top: var(--space-3); }
-.plan-chart-card .notice-body strong { margin: 0; }
 @media (max-width: 599px) {
   .plan-chart-card { padding: var(--space-3) var(--space-3) var(--space-3); }
   .plan-ranges { gap: var(--space-2) var(--space-3); }
   .plan-ranges .plan-export { margin-left: 0; }
-  /* Phones: Compare shares the mode switch's row (its label is the select's own first line). */
-  .plan-chart-card .cc-controls { flex-wrap: wrap; align-items: center; gap: var(--space-2); width: 100%; }
-  .plan-chart-card .cc-controls .segmented label { padding: 6px 9px; }
-  .plan-compare { flex: 1 1 0; min-width: 6.5rem; font-size: .8rem; }
-  .plan-compare label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-  .plan-compare select { min-height: 40px; min-width: 0; width: 100%; padding: 4px 22px 4px 8px; }
-  .plan-compare-diff, .plan-compare-unset { flex: 0 0 auto; }
-  .plan-compare.is-on { flex-basis: 100%; }
-  .plan-compare.is-on select { width: auto; flex: 0 1 11rem; }
-  .plan-compare-diff { padding: 2px 8px; }
   /* The tiles: the number and its label only (the line under it is in the readout and the dials). */
   .kpi:not(.tone-bad) .kpi-sub { display: none; }
   /* The line keys (actual, plan) are explained under "About this chart". */
   .plan-chart-card .cc-keys { display: none; }
-  /* No known balance: the prompt and the mode switch share one row, so the plot still starts high. */
-  .plan-chart-card .cc-controls:has(> .plan-prompt) { flex: 1 1 100%; flex-wrap: nowrap; align-items: center; justify-content: space-between; }
-  .plan-chart-card .plan-prompt { flex: 1 1 auto; min-width: 0; font-size: .9rem; line-height: 1.3; }
-  .plan-chart-card .cc-controls:has(> .plan-prompt) .segmented { flex: 0 0 auto; }
 }
 
-/* ---- Trends: the picker sits in its own row under the title; its chips are the legend */
-.plan-chart-card[data-mode="trends"] .cc-controls { display: contents; }
-.plan-chart-card[data-mode="trends"] .cc-legend { display: none; }
-.plan-trend-pick { flex: 1 0 100%; order: 3; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-5); min-width: 0; }
-.plan-trend-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
-.plan-trend-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; max-width: 100%; padding: 3px 8px 3px 10px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-size: .82rem; font-weight: 600; overflow-wrap: anywhere; text-align: left; }
-button.plan-trend-chip { cursor: pointer; }
-button.plan-trend-chip:hover { background: var(--surface-3); }
-.plan-trend-chip.is-only { padding-right: 10px; }
-.plan-trend-x { color: var(--text-3); font-size: .78rem; }
-.plan-trend-add select { min-height: 32px; max-width: 13rem; padding: 3px 8px; border: 1px dashed var(--border-strong); border-radius: 999px; background: var(--surface); color: var(--brand); font: inherit; font-size: .82rem; font-weight: 600; }
-.plan-trend-opts { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); }
-.plan-trend-opts .segmented { display: flex; align-items: center; gap: var(--space-2); }
-.plan-trend-opts .segmented-legend { float: left; margin: 0; font-size: .82rem; }
-.plan-trend-opts .segmented label { padding: 4px 10px; font-size: .82rem; }
-.plan-trend-line { align-items: center; min-height: 32px; font-size: .86rem; }
-.plan-trend-line input { margin-top: 0; }
-@media (max-width: 599px), (pointer: coarse) {
-  .plan-trend-chip, .plan-trend-add select, .plan-trend-line { min-height: 40px; }
-}
 
 
 /* ------------------------------------------------------------- 2. coming up */
 .plan-coming { padding: var(--space-4) var(--space-5) var(--space-4); }
-/* The strip: one lane per item across the plan's months (SVG drawn at a fixed width per screen size). */
-.cu-strip { margin: 0 0 var(--space-3); }
-.cu-svg { display: block; width: 100%; height: auto; overflow: visible; font-family: var(--font); }
-.cu-axis { stroke: var(--border-strong); stroke-width: 1; }
-.cu-tick { stroke: var(--border-strong); }
-.cu-year-rule { stroke: var(--grid); stroke-dasharray: 2 3; }
-.cu-month { fill: var(--text-3); font-size: 10.5px; font-weight: 600; }
-.cu-year { fill: var(--text-2); font-size: 10.5px; font-weight: 700; }
-.cu-label { font-size: 11px; }
-.cu-name { fill: var(--text); font-weight: 700; }
-.cu-amt { fill: var(--text-2); font-weight: 600; font-variant-numeric: tabular-nums; }
-.cu-item .cu-bar, .cu-item .cu-mark { fill: var(--cu, var(--text-3)); stroke: var(--surface); stroke-width: 1.5; }
-.cu-item .cu-dot { fill: var(--surface); stroke: var(--cu, var(--text-3)); stroke-width: 2; }
-.cu-item .cu-open { fill: var(--cu, var(--text-3)); }
-.cu-item.series-1 { --cu: var(--series-1); }
-.cu-item.series-3 { --cu: var(--series-3); }
-.cu-item.series-4 { --cu: var(--series-4); }
-.cu-item.series-5 { --cu: var(--series-5); }
-.cu-item.series-6 { --cu: var(--series-6); }
-.cu-item.series-muted { --cu: var(--text-3); }
-.cu-item.is-pack .cu-bar { fill-opacity: .9; }
-/* Listed, not in the plan yet: an outline only, and quieter text. */
-.cu-item.is-off .cu-bar, .cu-item.is-off .cu-mark { fill: var(--surface); fill-opacity: 1; stroke: var(--cu, var(--text-3)); stroke-width: 1.5; stroke-dasharray: 3 2; }
-.cu-item.is-off .cu-name { fill: var(--text-2); }
-.cu-item.is-part .cu-bar { fill-opacity: .55; }
+
+
 
 /* Add: the packs and a change of your own, as a row of pill buttons; each opens its little form. */
 .plan-add { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-2); margin: 0 0 var(--space-3); }
-.plan-add-h { align-self: center; margin-right: 2px; font-size: .78rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-3); }
 .plan-add-item { min-width: 0; }
 .plan-add-item[open] { flex: 1 1 100%; order: 2; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
 .plan-add-btn { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 4px 14px 4px 10px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface); color: var(--text); font-size: .86rem; font-weight: 650; cursor: pointer; list-style: none; user-select: none; }
 .plan-add-btn::-webkit-details-marker { display: none; }
 .plan-add-btn:hover { background: var(--surface-3); }
 .plan-add-item[open] > .plan-add-btn { border-color: var(--brand); color: var(--brand); background: var(--surface); margin-bottom: var(--space-2); }
-.plan-add-dot { width: 10px; height: 10px; border-radius: 50%; }
 .plan-add-plus { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; background: var(--brand); color: var(--surface); font-size: .8rem; font-weight: 800; line-height: 1; }
 .plan-add-form { display: flex; flex-direction: column; gap: var(--space-2); }
 .plan-add-form .field-error { margin: 0; }
@@ -219,7 +138,6 @@ button.plan-trend-chip:hover { background: var(--surface-3); }
 .plan-ch-sublist > .plan-ch-item:last-child { border-bottom: 0; }
 .plan-ch-unset { margin: 0 0 0 54px; font-size: .8rem; font-weight: 600; color: var(--warn); }
 .plan-ch-item .field-error { margin: 0 0 0 54px; }
-.plan-ch-bulk { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-3) 0 0; }
 .plan-ch-empty { margin: 0; padding: var(--space-3) 0 var(--space-1); color: var(--text-3); font-size: .88rem; }
 .plan-ch-addrow { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-2) var(--space-3); }
 .plan-ch-field { display: flex; flex-direction: column; gap: 2px; font-size: .78rem; font-weight: 650; color: var(--text-2); min-width: 0; }
@@ -309,14 +227,6 @@ button.plan-trend-chip:hover { background: var(--surface-3); }
   .dial-info-body { top: 48px; }
 }
 
-.plan-sum-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); margin-top: var(--space-4); padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); background: var(--surface-2); border: 1px solid var(--border); }
-.plan-sum { flex: 1 1 320px; min-width: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.plan-sum p { margin: 0; }
-.plan-headline { font-size: 1rem; font-weight: 600; color: var(--text); }
-.plan-headline strong { font-size: 1.25rem; white-space: nowrap; }
-.plan-headline strong.tone-warn { color: var(--warn); }
-.plan-checking { margin-top: 2px; font-size: .88rem; color: var(--text-2); }
-.plan-addup { margin-top: var(--space-1); font-size: .76rem; color: var(--text-3); }
 .plan-carried { margin-top: var(--space-1); font-size: .8rem; color: var(--text-2); }
 
 /* ---- drill-down under essentials, flexible and irregular */
@@ -423,16 +333,7 @@ button.plan-trend-chip:hover { background: var(--surface-3); }
 .plan-bal-err { grid-area: err; }
 .plan-bal-derr { grid-area: derr; }
 .plan-bal-usedata { font-weight: 600; }
-/* A balance the data knows: its figure, where it comes from, and a way to enter a different one. */
-.plan-bal.is-data { grid-template-columns: auto auto; grid-template-areas: "name figure" "src src" "edit edit"; justify-content: start; column-gap: var(--space-3); }
-.plan-bal-figure { grid-area: figure; font-size: 1.15rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-.plan-bal-edit { grid-area: edit; }
-.plan-bal-edit > summary { display: inline-flex; align-items: center; min-height: 32px; cursor: pointer; color: var(--brand); font-size: .86rem; font-weight: 600; }
-.plan-bal-editbody { display: grid; grid-template-columns: auto 9.5rem auto 10.5rem; grid-template-areas: "alabel amt asof date" ". err err err" ". derr derr derr"; align-items: center; column-gap: var(--space-2); row-gap: 2px; margin-top: var(--space-1); }
-.plan-bal-amtlabel { grid-area: alabel; font-size: .86rem; color: var(--text-2); }
-.plan-bal-editbody .plan-amount { grid-area: amt; }
-.plan-bal-total { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; min-height: 40px; margin: 0; color: var(--text-2); }
-.plan-bal-total strong { color: var(--text); font-variant-numeric: tabular-nums; }
+
 .plan-bal-notes { margin: var(--space-3) 0 0; }
 .plan-amount input { width: 100%; min-height: 40px; padding: 6px 10px 6px 22px; border: 1px solid var(--control-border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; font-weight: 650; text-align: right; font-variant-numeric: tabular-nums; }
 .plan-amount input::placeholder { font-weight: 400; color: var(--text-3); }
@@ -441,10 +342,6 @@ button.plan-trend-chip:hover { background: var(--surface-3); }
   .plan-balances { padding: var(--space-4); }
   .plan-bal-list { flex-direction: column; align-items: stretch; gap: var(--space-4); }
   .plan-bal { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "name asof" "amt date" "src src" "err err" "derr derr"; column-gap: var(--space-3); }
-  .plan-bal.is-data { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name figure" "src src" "edit edit"; }
-  .plan-bal-editbody { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "alabel asof" "amt date" "err err" "derr derr"; column-gap: var(--space-3); }
-  .plan-bal-edit > summary { min-height: 40px; }
-  .plan-bal-total { min-height: 0; }
 }
 
 /* ------------------------------------------------------------- 5. more options, sample line */
@@ -457,3 +354,129 @@ button.plan-trend-chip:hover { background: var(--surface-3); }
 .plan-links { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); margin: 0; }
 .plan-links a { display: inline-flex; align-items: center; min-height: 40px; font-weight: 600; }
 .plan-sample { margin: 0; }
+
+/* ==========================================================================
+   Overview (#/overview): balances, the plan month's three tiles, the two chart panels, a
+   month's breakdown on demand and the short Coming up list. Calm: one accent per figure.
+   ========================================================================== */
+.ov-h { margin: 0; font-size: 1.05rem; font-weight: 700; letter-spacing: -.01em; }
+.ov-h:focus { outline: none; }
+.ov-h:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 4px; }
+.ov-h-sub { font-size: .88rem; font-weight: 500; color: var(--text-3); letter-spacing: 0; }
+
+/* ---- balances: checking and savings apart, then the combined total */
+.ov-balances { padding: var(--space-4) var(--space-5); }
+.ov-bal-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--space-3); margin-top: var(--space-3); }
+.ov-bal { position: relative; display: flex; flex-direction: column; gap: 1px; min-width: 0; padding: var(--space-3) var(--space-4) var(--space-3) calc(var(--space-4) + 2px); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); overflow: hidden; }
+.ov-bal::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--ov-accent, var(--border-strong)); }
+.ov-bal.is-checking { --ov-accent: var(--series-2); }
+.ov-bal.is-savings { --ov-accent: var(--series-3); }
+.ov-bal.is-total { --ov-accent: var(--series-1); background: var(--surface); }
+.ov-bal-kind { font-size: .7rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text-3); }
+.ov-bal-name { font-size: .86rem; color: var(--text-2); overflow-wrap: anywhere; }
+.ov-bal-figure { font-size: 1.4rem; font-weight: 750; letter-spacing: -.02em; line-height: 1.2; font-variant-numeric: tabular-nums; color: var(--text); }
+.ov-bal-figure.tone-bad { color: var(--bad); }
+.ov-bal.is-unknown .ov-bal-figure { font-size: 1.05rem; font-weight: 650; color: var(--text-3); }
+.ov-bal-asof { font-size: .78rem; color: var(--text-3); }
+.ov-bal-edit { margin-top: var(--space-3); }
+.ov-bal-edit > summary { display: inline-flex; align-items: center; min-height: 36px; cursor: pointer; color: var(--brand); font-size: .86rem; font-weight: 600; }
+.ov-bal-edit[open] > summary { margin-bottom: var(--space-2); }
+.ov-bal-edit .plan-bal-list { display: flex; flex-direction: column; gap: var(--space-3); }
+
+/* ---- the plan month: three tiles, each opening the month's breakdown */
+.ov-month-tiles { display: flex; flex-direction: column; gap: var(--space-2); }
+.plan-kpis.kpis-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.kpi-btn { width: 100%; margin: 0; font: inherit; color: inherit; text-align: left; align-items: flex-start; cursor: pointer; }
+.kpi-btn:hover { border-color: var(--border-strong); box-shadow: var(--shadow), 0 0 0 1px var(--border-strong); }
+.kpi-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.kpi-in { --kpi-accent: var(--series-1); }
+.kpi-out { --kpi-accent: var(--series-5); }
+.kpi-margin { --kpi-accent: var(--series-3); }
+
+/* ---- the chart card: two panels on one month axis */
+.ov-chart-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-1) var(--space-4); margin-bottom: var(--space-2); }
+.ov-hint { margin: 0; }
+.ov-panel + .ov-panel { margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--border); }
+.ov-warn { margin: 0 0 var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); font-size: .9rem; line-height: 1.45; }
+.ov-warn.is-bad { background: var(--bad-soft); color: var(--text); box-shadow: inset 3px 0 0 var(--bad); }
+.ov-warn.is-bad strong { color: var(--bad); }
+.ov-warn.is-warn { background: var(--warn-soft); color: var(--text); box-shadow: inset 3px 0 0 var(--warn); }
+.ov-nobal { padding: var(--space-2) 0; }
+
+/* ---- a month's breakdown */
+.ov-month { padding: var(--space-4) var(--space-5); }
+.ov-month-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.ov-month-head .badge { margin-left: 6px; vertical-align: 2px; }
+.ov-month-close { min-width: 40px; min-height: 40px; color: var(--text-2); }
+.ov-mfigs { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-6); margin-top: var(--space-3); }
+.ov-mfig { display: flex; flex-direction: column; margin: 0; }
+.ov-mfig span { font-size: .76rem; font-weight: 650; color: var(--text-3); }
+.ov-mfig strong { font-size: 1.25rem; font-weight: 750; letter-spacing: -.02em; }
+.ov-mfig.tone-bad strong { color: var(--bad); }
+.ov-msav, .ov-mso { margin: var(--space-1) 0 0; }
+.ov-mcols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: var(--space-3) var(--space-6); margin-top: var(--space-4); }
+.ov-mh { margin: 0 0 var(--space-1); font-size: .74rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); }
+.ov-mlist { list-style: none; margin: 0; padding: 0; }
+.ov-mline { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); min-height: 36px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.ov-mline-name { min-width: 0; overflow-wrap: anywhere; }
+.ov-mline-name a { font-weight: 600; }
+.ov-mline-amt { flex: 0 0 auto; font-weight: 650; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ov-mline-of { font-weight: 500; color: var(--text-3); }
+.ov-mline.is-over .ov-mline-amt { color: var(--warn); }
+.ov-mline.is-change .ov-mline-name { color: var(--text-2); }
+.ov-mgroup-details > summary { list-style: none; cursor: pointer; }
+.ov-mgroup-details > summary::-webkit-details-marker { display: none; }
+.ov-mgroup-head .ov-mline-name { display: inline-flex; align-items: center; gap: 8px; font-weight: 650; }
+.ov-mgroup-details > summary .ov-mline-name::before { content: ""; width: 6px; height: 6px; border-right: 2px solid var(--text-3); border-bottom: 2px solid var(--text-3); transform: rotate(-45deg); transition: transform .15s; }
+.ov-mgroup-details[open] > summary .ov-mline-name::before { transform: rotate(45deg); }
+.ov-mgroup > .ov-mgroup-head .ov-mline-name { padding-left: 14px; }
+.ov-mgroup-details > summary:hover .ov-mline-name { color: var(--brand); }
+.ov-mcats { margin: 0 0 var(--space-2); padding-left: var(--space-4); border-left: 2px solid var(--border); }
+.ov-mcats .ov-mline { min-height: 32px; font-size: .9rem; border-bottom-style: dashed; }
+.ov-mrest { margin: var(--space-2) 0 0; }
+.ov-mmore { margin: var(--space-3) 0 0; font-size: .9rem; }
+.ov-mmore a { display: inline-flex; align-items: center; min-height: 40px; font-weight: 600; }
+
+/* ---- coming up */
+.ov-coming { padding: var(--space-4) var(--space-5); }
+.ov-coming .plan-card-head { margin-bottom: var(--space-2); }
+.ov-link { display: inline-flex; align-items: center; min-height: 36px; font-size: .88rem; font-weight: 600; }
+.ov-up-list { list-style: none; margin: 0; padding: 0; }
+.ov-up { display: grid; grid-template-columns: 5.2rem 10px minmax(0, 1fr) auto; align-items: baseline; gap: 2px var(--space-3); padding: 9px 0; border-top: 1px solid var(--border); }
+.ov-up-month { font-size: .82rem; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ov-up-dot { width: 10px; height: 10px; border-radius: 50%; align-self: center; }
+.ov-up-label { min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+.ov-up-meta { font-size: .78rem; font-weight: 500; color: var(--text-3); }
+.ov-up-amt { font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ov-up.is-off .ov-up-label, .ov-up.is-off .ov-up-amt { color: var(--text-2); }
+.ov-up.is-off .ov-up-dot { opacity: .45; }
+
+@media (max-width: 599px) {
+  .ov-balances, .ov-month, .ov-coming { padding: var(--space-4) var(--space-3); }
+  .ov-bal-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+  .ov-bal.is-total { grid-column: 1 / -1; }
+  .ov-bal { padding: var(--space-2) var(--space-3) var(--space-2) calc(var(--space-3) + 2px); }
+  .ov-bal-figure { font-size: 1.15rem; }
+  .plan-kpis.kpis-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); }
+  .plan-kpis.kpis-3 .kpi { padding: 8px 10px 7px; }
+  .plan-kpis.kpis-3 .kpi-value { font-size: 1.08rem; }
+  .plan-kpis.kpis-3 .kpi-margin .kpi-sub { display: block; }
+  .ov-mcols { grid-template-columns: minmax(0, 1fr); }
+  .ov-mfigs { gap: var(--space-2) var(--space-5); }
+  .ov-up { grid-template-columns: 4.4rem 10px minmax(0, 1fr) auto; gap: 2px var(--space-2); }
+}
+@media (max-width: 374px) {
+  .plan-kpis.kpis-3 .kpi-value { font-size: .98rem; }
+  .ov-up { grid-template-columns: 10px minmax(0, 1fr) auto; }
+  .ov-up-month { grid-column: 1 / -1; }
+}
+
+/* ==========================================================================
+   Edit plan (#/budget): the dials card head, the settings card.
+   ========================================================================== */
+.plan-h-sub { font-size: .8rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); }
+.plan-dials .plan-card-head .btn { flex: 0 0 auto; }
+.plan-carried { margin: 0 0 var(--space-3); font-size: .86rem; color: var(--text-2); }
+@media (max-width: 599px) {
+  .plan-kpis.kpis-3 > .kpi:last-child { grid-column: auto; }
+}

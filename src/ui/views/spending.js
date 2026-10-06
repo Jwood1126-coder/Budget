@@ -859,12 +859,12 @@
     const link = text => `<a href="${esc(ctx.href('budget', { section }))}">${esc(text)}</a>`;
     if (!p.sources.length) {
       return `<div class="sp-tile sp-tile-target" id="sp-plan-tile"><span class="sp-tile-tag">Your target · plan</span>
-        <span class="sp-tile-value">Not set</span><small><a href="${esc(ctx.href('budget', { section: 'targets' }))}">Set a target in Budget</a></small></div>`;
+        <span class="sp-tile-value">Not set</span><small><a href="${esc(ctx.href('budget', { section: 'targets' }))}">Set a target in Edit plan</a></small></div>`;
     }
     const parts = p.sources.map(s => `${s.label} ${s.cents === null ? 'unknown' : fmt.money(s.cents)}`).join(' + ');
     return `<div class="sp-tile sp-tile-target" id="sp-plan-tile"><span class="sp-tile-tag">${bills ? 'Your plan · budget' : 'Your target · plan'}</span>
       <span class="sp-tile-value">${p.cents === null ? 'Unknown' : money(p.cents)}</span>
-      <small>${p.cents === null ? `${esc(parts)}. ${link('Enter the amount in Budget')}` : bills ? `a month: ${esc(parts)}. ${link('Edit in Budget')}` : `a month, from your budget. ${link('Edit in Budget')}`}</small></div>`;
+      <small>${p.cents === null ? `${esc(parts)}. ${link('Enter the amount in Edit plan')}` : bills ? `a month: ${esc(parts)}. ${link('Change in Edit plan')}` : `a month, from your budget. ${link('Change in Edit plan')}`}</small></div>`;
   }
 
   /**
@@ -1338,7 +1338,7 @@
     for (const n of P.notes) notes.push(c.notice({ tone: 'warn', title: 'Part of this link was not understood', body: esc(n) }));
     if (P.basis === 'bank' && level !== 'txn') notes.push(c.notice({ tone: 'info', title: "Showing the bank's original categories", body: 'Your household rules and category corrections are not applied to category names here. Amounts, exclusions and splits still are. Rows without a bank category (most checking rows) are grouped as “No bank category”.' }));
     if (P.scope && !P.acct && level !== 'txn') {
-      notes.push(c.notice({ tone: 'info', title: P.scope === 'joint' ? 'Joint accounts only' : 'Personal accounts only', body: P.scope === 'joint' ? 'Shared household accounts only, as on the Plan page. Pay and bills that go through personal accounts are not here.' : 'Personal accounts only. Whether a month is complete still depends on every spending account.' }));
+      notes.push(c.notice({ tone: 'info', title: P.scope === 'joint' ? 'Joint accounts only' : 'Personal accounts only', body: P.scope === 'joint' ? 'Shared household accounts only, as on the Overview. Pay and bills that go through personal accounts are not here.' : 'Personal accounts only. Whether a month is complete still depends on every spending account.' }));
     }
     if (P.acct && level !== 'txn') {
       const a = ctx.dataset.accounts.find(x => x.id === P.acct);

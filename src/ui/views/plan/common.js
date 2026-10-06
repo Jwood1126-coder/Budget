@@ -1,20 +1,22 @@
 'use strict';
 /*
- * Plan (route #/overview): what its parts share, in the private BudgetUI._plan namespace. The view
- * is split by section; each file adds its part to the namespace, in src/manifest.json order:
- *   plan/common.js    this file: the model (one BudgetEngine.timeline.build per render, ctx.memo,
- *                     with the what-if the route's ?compare= names), formatting, the dial swatches,
- *                     the planned changes' packs and short labels, field errors
- *   plan/tiles.js     0. the numbers above the chart (KPI tiles)
- *   plan/chart.js     1. the chart card: Balance / Flows / Trends, Compare, Past and Ahead, the
- *                     Trends picker, Export CSV
- *   plan/changes.js   2. Coming up: the timeline strip of planned changes, packs, bills and goals,
- *                     the list to edit them, the packs and a change to add
- *   plan/dials.js     3. the dials, their drill-downs, the irregular list, who paid in, the headline
- *   plan/balances.js  4. the balances strip
- *   plan/actions.js   the plan:* actions, and what the next render focuses and announces
- *   views/overview.js the view itself: render composition, 5. More options, afterRender, upgrades
- * Nothing outside the Plan view reads BudgetUI._plan.
+ * Overview (route #/overview) and Edit plan (route #/budget): what their plan parts share, in the
+ * private BudgetUI._plan namespace. Each file adds its part, in src/manifest.json order:
+ *   plan/common.js    this file: the model (one BudgetEngine.timeline.build per render, ctx.memo),
+ *                     formatting, the dial swatches, the planned changes' groups and short labels,
+ *                     field errors
+ *   plan/tiles.js     Overview: the plan month's income, outgoing and margin (three tiles)
+ *   plan/chart.js     Overview: two stacked panels on one month axis (balances; money in and out
+ *                     each month), Past and Ahead, Export CSV, the below-$0 warning
+ *   plan/balances.js  Overview: checking and savings, each with its date and source, the combined
+ *                     total, and the balance editors (folded)
+ *   plan/month.js     Overview: one month's breakdown (a month chosen on the chart, or a tile)
+ *   plan/dials.js     Edit plan: the dials and their drill-downs (categories → places →
+ *                     transactions), the irregular list, who paid in
+ *   plan/changes.js   Edit plan: the planned changes to edit; Overview: the short Coming up list
+ *   plan/actions.js   the plan:* actions (both screens), wire() (the behaviour both screens share)
+ *                     and what the next render focuses and announces
+ * views/overview.js and views/budget.js compose the two screens. Nothing else reads BudgetUI._plan.
  */
 (function (root) {
   const UI = root.BudgetUI;
@@ -50,14 +52,14 @@
   const badgeWithId = (id, text, tone, opts) => c.badge(text, tone, opts).replace('<span class="badge', `<span id="${esc(id)}" class="badge`);
 
   // ------------------------------------------------------------------ model
-  /** The what-if the Compare control shows (the route's ?compare=, a view choice never saved), or ''. */
-  const compareOf = ctx => String((ctx.route && ctx.route.params && ctx.route.params.compare) || '').trim().slice(0, 60);
-
+  /**
+   * The plan, worked out once per render (ctx.memo('timeline'): Edit plan's helpers read the same
+   * build). A ?compare= left in an address by the retired Compare control is ignored.
+   */
   function model(ctx) {
-    const compare = compareOf(ctx);
-    return ctx.memo(compare ? 'timeline:' + compare : 'timeline', () => E.timeline.build({
+    return ctx.memo('timeline', () => E.timeline.build({
       txns: ctx.realTxns || ctx.txns, dataset: ctx.dataset, plan: ctx.state.plan, settings: ctx.state.ui.plan,
-      today: todayIso(), coverageMap: ctx.coverageMap, compare: compare || undefined,
+      today: todayIso(), coverageMap: ctx.coverageMap,
     }));
   }
 
@@ -110,5 +112,5 @@
     if (box) { box.textContent = message || ''; box.hidden = !message; }
   }
 
-  UI._plan = { DIAL_CLS, isCents, whole, exact, amt, plural, inputText, todayIso, shortDate, badgeWithId, model, compareOf, PACKS, packOf, SCENARIO_CLS, groupKeyOf, groupIdOf, shortLabel, compact, showError };
+  UI._plan = { DIAL_CLS, isCents, whole, exact, amt, plural, inputText, todayIso, shortDate, badgeWithId, model, PACKS, packOf, SCENARIO_CLS, groupKeyOf, groupIdOf, shortLabel, compact, showError };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -4,7 +4,7 @@
  * Back/Forward buttons, bookmarks and reloads all work. Views never read location directly;
  * they receive { view, params } and build links with href().
  * Retired views (REDIRECTS) parse as the view that replaced them, with `redirectFrom` set, so the
- * app can rewrite the address (and carry over what still applies): #/forecast is now the Plan.
+ * app can rewrite the address: #/forecast is now the Overview.
  */
 (function (root) {
   const UI = root.BudgetUI || (root.BudgetUI = {});

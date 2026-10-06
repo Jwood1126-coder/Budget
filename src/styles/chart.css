@@ -91,6 +91,7 @@
 
 /* ------------------------------------------------------------- plot */
 .cc-plot { position: relative; border-radius: 6px; touch-action: pan-y; -webkit-tap-highlight-color: transparent; }
+.cash-chart.is-selectable .cc-plot { cursor: pointer; }
 .cc-plot:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .cash-chart .cc-svg { width: 100%; height: auto; display: block; overflow: visible; user-select: none; -webkit-user-select: none; }
 .cash-chart .cc-plan-band { fill: var(--text-2); fill-opacity: .06; }
