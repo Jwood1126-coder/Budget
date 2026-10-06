@@ -394,7 +394,7 @@ module.exports = [
     name: 'a Flexible amount saved before imported names were resolved stays as saved; the Plan adds what moved, once',
     async run(t) {
       const { page, assert } = t;
-      await t.open('#/overview');
+      await t.open('#/budget');
       await t.settled();
       // A budget saved before groupsRead existed: the sample's heating bills recategorized as an
       // imported "Natural gas" (planned as flexible then, essentials now) and Flexible set directly.
