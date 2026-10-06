@@ -403,7 +403,7 @@
     { name: 'groups', rule: rule('enummap', { max: LIMITS.planGroups, keyMax: LIMITS.groupKey, values: SPEND_GROUPS, def: {}, noun: 'spending groups' }),
       doc: '{ [categoryName | \'merchant:\' + merchant]: \'essentials\'|\'flexible\' } the household\'s own grouping (the taxonomy\'s `essential` flag otherwise)' },
     { name: 'irregularOff', rule: rule('boolmap', { max: LIMITS.planIrregular, keyMax: LIMITS.txnId, def: {} }),
-      doc: '{ [txnId]: true } one-time costs left out of the irregular allowance' },
+      doc: '{ [txnId]: boolean } the Plan\'s choice per one-time cost: true = left out of the irregular allowance; false = put back in on purpose (one left out of planning by its planningBaseline \'exclude\' ledger edit is out by default)' },
     { name: 'trends', rule: fieldGroup(TRENDS_FIELDS), doc: 'the Trends chart: which series (TREND_SERIES), a moving average of 0/3/6 months, and a trend line' },
     { name: 'otherDial', rule: oneOf(['debt', 'withInvesting'], 'debt'),
       doc: 'what dials.other holds: \'debt\' = debt & business (investments have their own dial, dials.investing); \'withInvesting\' = an amount saved before that, still including investments, which the plan screen splits once (timeline.splitOther)' },

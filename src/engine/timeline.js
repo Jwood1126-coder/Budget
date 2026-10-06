@@ -47,7 +47,8 @@
  * (about once a month, every charge within 10% of the median) counts at its latest charge; the
  * dial's baseline is the sum of the rows as they stand by default. Nothing is left out of the plan
  * automatically: every one-time cost is in the irregular allowance, counted as regular spending
- * (the planningBaseline 'include' edit) or left out by the household (ui.plan.irregularOff).
+ * (the planningBaseline 'include' edit) or left out by the household (ui.plan.irregularOff, or
+ * the planningBaseline 'exclude' edit, which the Plan can override with irregularOff[id] false).
  *
  * Planned changes (plan.changes): accepted changes with an amount add to plan months from their
  * start month (one-time: that month only; monthly: through the end month when set). A change

@@ -1725,27 +1725,15 @@
     /** Revert every correction on one transaction (history kept). */
     'review:revert': (ctx, el) => {
       const id = el.dataset.txn;
-      const edit = ctx.state.ledgerEdits[id];
-      if (!edit) return;
-      // Only real edit fields are cleared (categoryReason/kindReason go with category/kind);
-      // data-fields limits it (e.g. undoing a transfer answer keeps a reimbursement decision).
+      // review.revertChanges: real edit fields only, and a reimbursement decision on both linked
+      // rows; data-fields limits it (e.g. undoing a transfer answer keeps a reimbursement decision).
       const only = el.dataset.fields ? el.dataset.fields.split(',') : null;
-      const fields = E.review.EDIT_FIELDS.filter(f => edit[f] !== undefined && edit[f] !== null && (!only || only.includes(f)));
-      if (!fields.length) return;
+      const changes = E.review.revertChanges(ctx.state.ledgerEdits, ctx.txns, id, { only });
+      if (!changes.length) return;
       if (el.dataset.focus) focusAfter = el.dataset.focus;
       else setFocusNext(el, el.dataset.stay === '1');
-      const changes = fields.map(field => ({ txnId: id, field, value: null, reason: 'Reverted to the imported value' }));
-      // A reimbursement decision applies to the charge and its matched deposit together, so
-      // reverting it on one side also clears it on the linked side.
-      if (fields.includes('reimbursement')) {
-        const t = ctx.txns.find(x => x.id === id);
-        const linked = new Set([...((t && t.matchIds) || []), ...ctx.txns.filter(x => (x.matchIds || []).includes(id)).map(x => x.id)]);
-        for (const other of linked) {
-          const oe = ctx.state.ledgerEdits[other];
-          if (oe && oe.reimbursement !== undefined && oe.reimbursement !== null) changes.push({ txnId: other, field: 'reimbursement', value: null, reason: 'Reverted together with the linked charge or deposit' });
-        }
-      }
-      sh().editMany(ctx.app, changes, { message: el.dataset.message || (changes.length > fields.length ? 'Correction reverted on both linked rows. The history is kept.' : 'Correction reverted to the imported values. The history is kept.') });
+      const both = changes.some(ch => ch.txnId !== id);
+      sh().editMany(ctx.app, changes, { message: el.dataset.message || (both ? 'Correction reverted on both linked rows. The history is kept.' : 'Correction reverted to the imported values. The history is kept.') });
     },
 
     /** Add a reconciliation reference (state.references) and open its comparison. */

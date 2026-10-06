@@ -517,6 +517,46 @@ test('editRecord output is understood by applyEdits', () => {
   assert.deepEqual(t.parts.map(p => p.category), ['Groceries', 'Pets']);
 });
 
+test('revertChanges: only real edit fields (the category and kind reasons go with them), so editRecord takes every change', () => {
+  const ds = build([tx('2026-05-06', -4200, { id: 'meal', category: 'Groceries' }), tx('2026-05-07', -9000, { id: 'move', accountId: 'chk' })]);
+  let meal = R.editRecord(null, 'category', 'Dining & takeout', 'It was a lunch out', AT(1));
+  meal = R.editRecord(meal, 'note', 'Team lunch', '', AT(2));
+  const edits = { meal, move: R.editRecord(null, 'kind', 'transfer', 'Moved to savings', AT(3)) };
+  assert.ok('categoryReason' in edits.meal && 'kindReason' in edits.move, 'the reasons are stored beside their fields');
+  const txns = L.applyEdits(ds, edits);
+  const changes = R.revertChanges(edits, txns, 'meal');
+  assert.deepEqual(changes, [{ txnId: 'meal', field: 'category', value: null, reason: 'Reverted to the imported value' }, { txnId: 'meal', field: 'note', value: null, reason: 'Reverted to the imported value' }]);
+  assert.deepEqual(R.revertChanges(edits, txns, 'move').map(ch => ch.field), ['kind']);
+  // Applied as the screens apply them: every correction gone, the history kept.
+  const next = Object.assign({}, edits);
+  for (const ch of changes.concat(R.revertChanges(edits, txns, 'move'))) next[ch.txnId] = R.editRecord(next[ch.txnId], ch.field, ch.value, ch.reason, AT(4));
+  assert.deepEqual(Object.keys(next.meal), ['history']);
+  assert.deepEqual(Object.keys(next.move), ['history']);
+  assert.equal(next.meal.history.length, 4);
+  const back = L.applyEdits(ds, next);
+  assert.deepEqual(back.map(t => [t.id, t.category, t.kind]), [['meal', 'Groceries', 'spend'], ['move', 'Groceries', 'spend']]);
+  // `only` limits the fields; nothing set (or no edit) → [].
+  assert.deepEqual(R.revertChanges(edits, txns, 'meal', { only: ['kind', 'note'] }).map(ch => ch.field), ['note']);
+  assert.deepEqual(R.revertChanges(next, back, 'meal'), []);
+  assert.deepEqual(R.revertChanges(edits, txns, 'none'), []);
+  assert.deepEqual(R.revertChanges(edits, txns, 'toString'), [], 'never an inherited key');
+});
+
+test('revertChanges: a reimbursement decision is cleared on the linked charge or deposit too', () => {
+  const ds = build([
+    tx('2026-07-08', -48660, { id: 'air', category: 'Travel', flags: ['reimbursement_candidate'] }),
+    tx('2026-08-21', 48660, { id: 'dep', accountId: 'chk', kind: 'income', subtype: 'other', matchIds: ['air'] })
+  ]);
+  const edits = {
+    air: R.editRecord(R.editRecord(null, 'reimbursement', 'confirmed', 'Repaid by the club', AT(1)), 'note', 'Trip for the club', '', AT(2)),
+    dep: R.editRecord(null, 'reimbursement', 'confirmed', 'Repaid by the club', AT(1))
+  };
+  const txns = L.applyEdits(ds, edits);
+  assert.deepEqual(R.revertChanges(edits, txns, 'air').map(ch => [ch.txnId, ch.field]), [['air', 'reimbursement'], ['air', 'note'], ['dep', 'reimbursement']]);
+  assert.deepEqual(R.revertChanges(edits, txns, 'dep').map(ch => [ch.txnId, ch.field]), [['dep', 'reimbursement'], ['air', 'reimbursement']]);
+  assert.deepEqual(R.revertChanges(edits, txns, 'air', { only: ['note'] }).map(ch => [ch.txnId, ch.field]), [['air', 'note']], 'the linked side only goes with the decision');
+});
+
 // ======================================================================= hardening
 
 test('hardening: business items carry a status field (default pending) that consumers read', () => {

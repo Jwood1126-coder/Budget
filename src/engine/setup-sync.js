@@ -57,7 +57,7 @@
     { path: 'ui.plan.dials', kind: 'map', label: (k, _, names) => (names[k] ? names[k] + '’s money in' : words(k)) + ' on the plan' },
     { path: 'ui.plan.rows', kind: 'map', label: () => 'a spending row on the plan' },
     { path: 'ui.plan.groups', kind: 'map', label: k => String(k).replace(/^merchant:/, '') + ' grouping' },
-    { path: 'ui.plan.irregularOff', kind: 'map', label: () => 'a one-time cost left out' },
+    { path: 'ui.plan.irregularOff', kind: 'map', label: () => 'a one-time cost in or out of the plan' },
     { path: 'ui.plan.baselineMonths', kind: 'value', label: () => 'months averaged' },
     { path: 'ui.plan.coverFromSavings', kind: 'value', label: () => 'cover from savings' },
     { path: 'ui.plan.investReturnPct', kind: 'value', label: () => 'investment return' }

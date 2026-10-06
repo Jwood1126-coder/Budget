@@ -224,7 +224,9 @@ Optional; each field is the Plan screen's own setting (ARCHITECTURE.md §7, `ui.
   monthly amounts).
 - `groups`: move a category, or every purchase of one place (`"merchant:<place>"`), to
   `essentials` or `flexible`.
-- `irregularOff`: one-time costs (by transaction id) left out of the irregular allowance.
+- `irregularOff`: one-time costs (by transaction id) left out of the irregular allowance (`true`).
+  A purchase the household left out of planning in Transactions or Spending is out of the
+  allowance already; `false` puts it back in on purpose.
 - `rows`: changes to single drill-down rows (`{ "included": false }` or `{ "cents": 2500 }`). Row
   ids are in the Plan's Export CSV (`row.<id>.label`); for whole categories use `targets` instead.
 

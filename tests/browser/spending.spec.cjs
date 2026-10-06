@@ -414,6 +414,52 @@ module.exports = [
     },
   },
   {
+    name: 'spending revert clears a category correction and a kind correction (their reasons go with them), history kept',
+    async run(t) {
+      const { page, assert } = t;
+      const errors = [];
+      page.on('pageerror', e => errors.push(e.message));
+      await open(t, '#/spending?period=2026-09&cat=Groceries&merchant=Kroger');
+      await page.click('#sp-txns tbody tr:first-child a');
+      await page.waitForFunction(() => /[?&]txn=/.test(location.hash));
+      await settled(page);
+      const id = (await params(page)).txn;
+      const edit = () => page.evaluate(i => window.HouseholdBudget.getState().ledgerEdits[i] || null, id);
+      // A category correction through the form: stored with its reason (categoryReason).
+      await page.selectOption(`#sp-cat-${id}-sel`, 'Household & hardware');
+      await page.fill(`#sp-cat-${id}-reason`, 'Checked the receipt');
+      await page.click('#sp-txn-actions button[type="submit"]');
+      await page.waitForFunction(i => window.HouseholdBudget.getState().ledgerEdits[i]?.category === 'Household & hardware', id);
+      await settled(page);
+      assert.equal((await edit()).categoryReason, 'Checked the receipt');
+      await page.click('#sp-revert');
+      await page.waitForFunction(i => !window.HouseholdBudget.getState().ledgerEdits[i]?.category, id);
+      await settled(page);
+      await page.waitForSelector('#toast:not([hidden])');
+      assert.match(await page.textContent('#toast'), /Correction reverted/);
+      assert.deepEqual(Object.keys(await edit()), ['history'], 'the category and its reason are gone');
+      assert.equal((await edit()).history.length, 2, 'history kept');
+      assert.ok(!(await page.textContent('#sp-details')).includes('Changed by you'));
+      assert.ok(!(await page.$$eval('#sp-revert', x => x.length)), 'nothing left to revert');
+      await page.waitForFunction(i => document.activeElement && document.activeElement.id === `sp-cat-${i}-sel`, id);
+      // A kind correction (stored with kindReason), then revert: it counts as spending again.
+      await setStateWith(page, i => {
+        const st = window.HouseholdBudget.getState();
+        st.ledgerEdits[i] = window.HouseholdBudget.engine.review.editRecord(st.ledgerEdits[i], 'kind', 'transfer', 'Moved between our accounts', new Date().toISOString());
+        window.__spReplace(st);
+      }, id);
+      assert.equal((await edit()).kindReason, 'Moved between our accounts');
+      await page.click('#sp-revert');
+      await page.waitForFunction(i => !window.HouseholdBudget.getState().ledgerEdits[i]?.kind, id);
+      await settled(page);
+      assert.deepEqual(Object.keys(await edit()), ['history'], 'the kind and its reason are gone');
+      assert.equal((await edit()).history.length, 4);
+      const t2 = await page.evaluate(i => window.HouseholdBudget.context().txns.find(x => x.id === i), id);
+      assert.deepEqual([t2.kind, t2.category, t2.edited], ['spend', 'Groceries', false]);
+      assert.deepEqual(errors, [], 'no page errors');
+    },
+  },
+  {
     name: 'spending split purchases count only their part in each category, and totals still reconcile',
     async run(t) {
       const { page, assert } = t;

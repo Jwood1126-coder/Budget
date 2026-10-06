@@ -442,5 +442,30 @@
     return out;
   }
 
-  E.review = { EDIT_FIELDS, REASON_REQUIRED, queues, duplicateCandidates, spikes, reimbursementPairs, editRecord, similarity };
+  /**
+   * The changes that take one transaction back to its imported values (its history is kept):
+   * `[{ txnId, field, value: null, reason }]` for each real edit field it holds (EDIT_FIELDS only:
+   * categoryReason and kindReason go with their fields), limited to `only` when given. A
+   * reimbursement decision covers a charge and its matched deposit together, so reverting it clears
+   * it on the linked side too (`txns`: effective transactions with matchIds). [] = nothing to revert.
+   */
+  function revertChanges(edits, txns, id, { only } = {}) {
+    const own = (o, k) => (isObj(o) && Object.prototype.hasOwnProperty.call(o, k) && isObj(o[k]) ? o[k] : null);
+    const edit = own(edits, id);
+    if (!edit) return [];
+    const fields = EDIT_FIELDS.filter(f => edit[f] !== undefined && edit[f] !== null && (!only || only.includes(f)));
+    const changes = fields.map(field => ({ txnId: id, field, value: null, reason: 'Reverted to the imported value' }));
+    if (fields.includes('reimbursement')) {
+      const list = Array.isArray(txns) ? txns : [];
+      const t = list.find(x => x.id === id);
+      const linked = new Set([...((t && t.matchIds) || []), ...list.filter(x => (x.matchIds || []).includes(id)).map(x => x.id)]);
+      for (const other of linked) {
+        const oe = own(edits, other);
+        if (oe && oe.reimbursement !== undefined && oe.reimbursement !== null) changes.push({ txnId: other, field: 'reimbursement', value: null, reason: 'Reverted together with the linked charge or deposit' });
+      }
+    }
+    return changes;
+  }
+
+  E.review = { EDIT_FIELDS, REASON_REQUIRED, queues, duplicateCandidates, spikes, reimbursementPairs, editRecord, revertChanges, similarity };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

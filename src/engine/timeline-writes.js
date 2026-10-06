@@ -109,7 +109,8 @@
 
   /**
    * Put one dial back to its baseline: its direct amount and every change to its rows are removed
-   * (for irregular: every one-time cost left out is back in the allowance). With the current
+   * (for irregular: every one-time cost is back to its default, in the allowance unless left out
+   * of planning in Transactions or Spending). With the current
    * timeline `tl`, changes saved under the earlier card/bank dials that its rows use go too.
    */
   function resetDial(state, key, tl) {
@@ -165,10 +166,19 @@
     return next;
   }
 
-  /** Leave one one-time cost out of the irregular allowance (included false), or put it back (true). */
+  /**
+   * Leave one one-time cost out of the irregular allowance (included false), or put it in (true).
+   * Only a choice that differs from the cost's default is kept: one the household left out of
+   * planning (its planningBaseline 'exclude' ledger edit) is out by default, so putting it in
+   * stores false; any other is in by default, so leaving it out stores true. The edit stays.
+   */
   function setIrregular(state, id, included) {
     if (typeof id !== 'string' || !id.trim()) fail('Choose a one-time cost.', 'id');
-    return E.state.setPath(state, 'ui.plan.irregularOff.' + id.trim(), included === false ? true : undefined);
+    const key = id.trim();
+    const edit = isObj(state.ledgerEdits) ? own(state.ledgerEdits, key) : undefined;
+    const outByDefault = isObj(edit) && edit.planningBaseline === 'exclude';
+    const value = outByDefault ? (included === false ? undefined : false) : (included === false ? true : undefined);
+    return E.state.setPath(state, 'ui.plan.irregularOff.' + key, value);
   }
 
   /** Add one planned change, or a list of them (e.g. templates.babyFirstYear(dueDate)); each gets an id. */
