@@ -2,6 +2,7 @@
 // Saving, several tabs, damaged or unavailable storage, Undo and keyboard/touch access, setup sync, in a real browser.
 const fs = require('node:fs');
 const path = require('node:path');
+const { boxText } = require('./helpers.cjs');
 
 const KEY = 'household-budget:v5:sample';
 // The planned amounts typed on Budget's category rows (they write plan.targets).
@@ -385,6 +386,53 @@ module.exports = [
       } finally {
         for (const f of [first, later]) fs.rmSync(f, { force: true });
       }
+    },
+  },
+  {
+    name: 'a Flexible amount saved before imported names were resolved stays as saved; the Plan adds what moved, once',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      await t.settled();
+      // A budget saved before groupsRead existed: the sample's heating bills recategorized as an
+      // imported "Natural gas" (planned as flexible then, essentials now) and Flexible set directly.
+      const sample = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'fixtures', 'sample-data.json'), 'utf8'));
+      const gasIds = sample.transactions.filter(x => x.category === 'Gas & heating').map(x => x.id);
+      assert.ok(gasIds.length > 6, 'the sample has heating bills to recategorize');
+      await page.evaluate(([k, ids]) => {
+        const st = window.HouseholdBudget.getState();
+        st.ledgerEdits = Object.assign({}, st.ledgerEdits);
+        for (const id of ids) st.ledgerEdits[id] = { category: 'Natural gas', categoryReason: 'Invented test edit' };
+        st.ui.plan.dials = { flexible: 250000 };
+        delete st.ui.plan.groupsRead;
+        delete st.ui.plan.dialShift;
+        localStorage.setItem(k, JSON.stringify(st));
+      }, [KEY, gasIds]);
+      await page.reload();
+      await page.waitForSelector('#page-title');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().ui.plan.groupsRead === 'resolved');
+      await t.settled();
+      const saved = () => page.evaluate(k => JSON.parse(localStorage.getItem(k)), KEY);
+      const st = await saved();
+      assert.deepEqual(st.ui.plan.dials, { flexible: 250000 }, 'the amount set stays as saved');
+      assert.equal(st.ui.plan.groupsRead, 'resolved');
+      const shift = st.ui.plan.dialShift && st.ui.plan.dialShift.flexible;
+      assert.ok(shift && shift.cents < 0, 'what moved to Essentials comes off Flexible: ' + JSON.stringify(st.ui.plan.dialShift));
+      assert.deepEqual(shift.categories, ['Natural gas']);
+      const notes = st.meta.migrationNotes;
+      assert.ok(notes.some(n => /^ui\.plan\.dials: imported category names are now read as the category they stand for/.test(n)), 'the mark is noted');
+      const note = notes.filter(n => /^ui\.plan\.dialShift\.flexible: /.test(n));
+      assert.equal(note.length, 1, JSON.stringify(notes));
+      assert.match(note[0], /^ui\.plan\.dialShift\.flexible: Flexible is planned at \$[\d,]+\.\d\d: the \$2,500\.00 you set, less \$[\d,]+\.\d\d for “Natural gas”, now read as Gas & heating and planned in Essentials, so it is not counted twice\.$/);
+      // The dial shows the amount planned: what was set less what moved.
+      assert.equal(await page.inputValue('#plan-dial-flexible'), boxText(250000 + shift.cents));
+      // Opened again: nothing more changes.
+      await page.reload();
+      await page.waitForSelector('#page-title');
+      await t.settled();
+      const again = await saved();
+      assert.deepEqual([again.ui.plan, again.meta.migrationNotes], [st.ui.plan, st.meta.migrationNotes]);
+      assert.equal(await page.inputValue('#plan-dial-flexible'), boxText(250000 + shift.cents));
     },
   },
   {

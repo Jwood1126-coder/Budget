@@ -378,6 +378,9 @@
   // fromCard / fromBank: the earlier card / bank amount it was carried over from (until kept or changed).
   const CARD_SPLIT_FIELDS = [['cents', rule('cents', { signed: true, required: true })], ['card', rule('cents', { signed: true, required: true })],
     ['fromCard', optional(rule('cents', { signed: true }))], ['fromBank', optional(rule('cents', { signed: true }))]];
+  // A regrouping adjustment: signed cents, and the categories whose moves it holds (a short list).
+  const DIAL_SHIFT_CATEGORIES = 20;
+  const DIAL_SHIFT_FIELDS = [['cents', rule('cents', { signed: true, required: true })], ['categories', rule('strings', { def: [], maxItems: DIAL_SHIFT_CATEGORIES })]];
   const TRENDS_FIELDS = [
     ['series', rule('keylist', { max: LIMITS.planTrendSeries, def: PS.TREND_DEFAULTS.series.slice(), values: TREND_SERIES })],
     ['ma', oneOf(PS.TREND_MA, PS.TREND_DEFAULTS.ma)],
@@ -411,11 +414,16 @@
       doc: 'a yearly growth rate (%) the household entered for the investments line, compounded monthly and labelled illustrative; null = none assumed' },
     { name: 'scenariosCopied', rule: bool(true),
       doc: 'true once the Forecast scenarios\' events have been copied into plan.changes as what-ifs (absent in budgets saved before that: the copy runs once, V5_UPGRADES)' },
+    { name: 'groupsRead', rule: oneOf(['exact', 'resolved'], 'resolved'),
+      doc: 'how category names were grouped when dials.essentials / dials.flexible were set: \'resolved\' = as now (an imported name is read as the category it stands for, categories.resolve); \'exact\' = an amount saved before that, when only exact taxonomy names counted as essential, which the plan screen carries over once by what moved between the two groups, in dialShift (timeline.regroupDials; set by the ui.plan.groupsRead upgrade)' },
     { name: 'legacyDials', rule: optional(rule('object', { fields: LEGACY_DIAL_FIELDS })),
       doc: '(absent unless needed) { card?, bank? } signed cents set for the earlier card and bank dials, waiting to be carried over to essentials, flexible and irregular (timeline.migrateDials)' },
     { name: 'cardSplit', rule: optional(rule('objmap', { max: SPEND_DIALS.length, keys: SPEND_DIALS, fields: CARD_SPLIT_FIELDS, noun: 'card parts of plan amounts' })),
       keysMessage: 'A card part can be kept for: ' + SPEND_DIALS.join(', ') + '.',
-      doc: '(absent unless needed) { [essentials|flexible|irregular]: { cents, card, fromCard?, fromBank? } } the card part of a direct amount, used while the dial still holds exactly `cents`; fromCard / fromBank mark it as carried over from the earlier card / bank amount until it is kept' }
+      doc: '(absent unless needed) { [essentials|flexible|irregular]: { cents, card, fromCard?, fromBank? } } the card part of a direct amount, used while the dial still holds exactly `cents`; fromCard / fromBank mark it as carried over from the earlier card / bank amount until it is kept' },
+    { name: 'dialShift', rule: optional(rule('objmap', { max: SPEND_GROUPS.length, keys: SPEND_GROUPS, fields: DIAL_SHIFT_FIELDS, noun: 'regrouping adjustments' })),
+      keysMessage: 'A regrouping adjustment can be kept for: ' + SPEND_GROUPS.join(', ') + '.',
+      doc: '(absent unless needed) { [essentials|flexible]: { cents, categories } } what categories moved between the two groups add to (+) or take from (−) an amount set directly for that dial, so the plan\'s total stays what the household set: applied only while dials[key] is set (plan amount = dials[key] + cents, never below $0), the saved amount itself never changes. Written by timeline.setGroup (one of the two set directly) and by timeline.regroupDials (an amount set before imported category names were resolved); setDial, resetDial and resetPlan remove it' }
   ];
   const PLAN_UI_FIELDS = PLAN_UI.map(d => [d.name, d.rule]);
   const PLAN_UI_DEFAULT = emptyOf(PLAN_UI_FIELDS);
@@ -1530,6 +1538,25 @@
       applies: raw => planUiOpen(raw) && !(isObj(raw.ui) && isObj(raw.ui.plan) && has(raw.ui.plan, 'scenariosCopied')) && isObj(raw.plan)
         && Array.isArray(raw.scenarios) && raw.scenarios.some(sc => isObj(sc) && sc.id !== BASELINE_ID && Array.isArray(sc.events) && sc.events.length > 0),
       apply: raw => copyScenarioChanges(raw)
+    }),
+    Object.freeze({
+      // Essentials or Flexible set directly before imported category names were read as the
+      // category they stand for (when only exact taxonomy names were essential): marked to be
+      // carried over on the plan screen, which knows what moved between the two groups
+      // (timeline.regroupDials, which leaves the note of what changed). Budgets saved since carry
+      // groupsRead already; one with neither amount set is never marked.
+      id: 'ui.plan.groupsRead',
+      applies: raw => isObj(raw) && isObj(raw.ui) && isObj(raw.ui.plan) && !has(raw.ui.plan, 'groupsRead') && isObj(raw.ui.plan.dials)
+        && SPEND_GROUPS.some(k => Number.isSafeInteger(raw.ui.plan.dials[k])),
+      apply: raw => {
+        const set = SPEND_GROUPS.filter(k => Number.isSafeInteger(raw.ui.plan.dials[k])).map(k => (k === 'essentials' ? 'Essentials' : 'Flexible') + ' (' + money(raw.ui.plan.dials[k]) + ')');
+        return {
+          raw: withUi(raw, Object.assign({}, raw.ui, { plan: Object.assign({}, raw.ui.plan, { groupsRead: 'exact' }) })),
+          note: 'ui.plan.dials: imported category names are now read as the category they stand for (an imported “Natural gas” is Gas & heating, an essential), so spending may have moved between Essentials and Flexible since you set '
+            + set.join(' and ') + (set.length > 1 ? '. Together they still hold all of it, so both stay as you set them.'
+              : '. The next time Plan opens, the plan adds or takes off what moved, once, so nothing is counted twice or left out; the amount you set stays as it is.')
+        };
+      }
     })
   ]);
 

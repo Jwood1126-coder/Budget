@@ -638,14 +638,26 @@ State = {
                 scenariosCopied: boolean (true),                 // the Forecast scenarios' events were copied into plan.changes
                                                                   // (absent in budgets saved before: the plan.changes.scenarios
                                                                   // upgrade copies them once and sets it)
+                groupsRead: 'exact'|'resolved' ('resolved'),     // how category names were grouped when dials.essentials /
+                                                                  // flexible were set: 'exact' = before imported names were read
+                                                                  // as the category they stand for (only exact taxonomy names were
+                                                                  // essential; set by the ui.plan.groupsRead upgrade), carried over
+                                                                  // once on the plan screen (timeline.regroupDials)
                 legacyDials?: { card?: signed cents, bank?: signed cents },  // absent unless waiting: amounts set for the
                                                                   // earlier card/bank dials, until Plan carries them over
                 cardSplit?: { [essentials|flexible|irregular]: { cents: signed cents, card: signed cents,
-                              fromCard?: signed cents, fromBank?: signed cents } } },
+                              fromCard?: signed cents, fromBank?: signed cents } },
                                                                   // absent unless needed: the card part of a direct amount,
                                                                   // used while dials[key] === cents (set by migrateDials);
                                                                   // fromCard/fromBank mark it as carried over from the
                                                                   // earlier card/bank amount until kept (acceptCarriedOver)
+                dialShift?: { [essentials|flexible]: { cents: signed cents, categories: string[] (up to 20) } } },
+                                                                  // absent unless needed: what categories moved between the two
+                                                                  // groups add to (+) or take off (−) an amount set directly, so
+                                                                  // the plan's total stays as set; applied only while dials[key] is
+                                                                  // set (plan amount = dials[key] + cents, never below $0), the
+                                                                  // saved amount never changes. Written by timeline.setGroup and
+                                                                  // timeline.regroupDials; setDial/resetDial/resetPlan remove it
                                                  // the plan screen (BudgetEngine.timeline). Replaces the earlier ui.home:
                                                  // sanitize moves p1InCents/p2InCents/cardCents/bankCents/savedCents to
                                                  // dials p1/p2/card/bank/savings and baselineMonths/horizon to their
@@ -712,9 +724,16 @@ the frequency are known, else no amount, bill_change and target_change → month
 and a note saying what they set; savings-goal events and events with no (start) month are not
 copied and are named in the note; up to the planned-change limit. The scenarios stay as they are.
 `scenariosCopied` is true by default, so the upgrade never runs on a new budget: `state.defaults` makes
-the same copy itself when it creates one, so new and saved budgets hold the same what-ifs). Upgrades that need the data run
-on the plan screen instead, under the same rules: `timeline.pendingUpgrade(tl)` names them
-(`migrateRows`, `migrateDials`, `splitOther`).
+the same copy itself when it creates one, so new and saved budgets hold the same what-ifs) and
+`ui.plan.groupsRead` (when `ui.plan.groupsRead` is absent and `dials.essentials` or `dials.flexible`
+holds an amount: the amount was set while only exact taxonomy names were essential, so an imported
+'Natural gas' or the energy aggregate was planned as flexible; marked `groupsRead: 'exact'`, with a
+note that, for an amount set for only one of the two, the plan adds or takes off what moved once
+the next time Plan opens (`ui.plan.dialShift`; the amount itself stays as saved); a budget
+with neither amount set is never marked, and `groupsRead` is 'resolved' by default, so a new budget
+never is). Upgrades that need the data run on the plan screen instead, under the same rules:
+`timeline.pendingUpgrade(tl)` names them (`migrateRows`, `regroupDials`, `migrateDials`,
+`splitOther`).
 
 **Forward compatibility.** A budget saved by a newer copy of the app may hold fields this copy does
 not know, and the page saves the budget as soon as it opens. So when loading (`sanitize`,
@@ -810,6 +829,9 @@ transactions from `ledger.applyEdits`.
   budget once for all of its members (timeline `drill`, category budgets).
 - `groupOf`, `isSeasonal` and `isEssential` look up the category a name resolves to (an aggregate:
   its members), so an imported 'Natural gas' is a seasonal Utilities essential like Gas & heating.
+  `isEssentialByName(name)` is the reading before imported names were resolved (a taxonomy category
+  of exactly that name, or 'Debt payment'; anything else flexible): used only to carry over amounts
+  set under it (timeline `migration.regroupDials`).
 - `essential` marks spending that is hard to cut; the plan screen plans it as **essentials** and
   everything else as **flexible**: Mortgage, Home maintenance & repairs, Property tax & HOA, every
   utility (Gas & heating, Electric, Water & sewer, Trash & municipal, Internet & phone), Groceries,
@@ -1369,11 +1391,11 @@ files, split by section and loaded in this order (`src/manifest.json`):
 | --- | --- |
 | `engine/timeline-core.js` | the shared helpers (`isObj`, `isCents`, `has`, `own`, `plural`, `sumKnown`, `roundCents`, `fail`, `median`, `late`), the constants (the `planSettings` lists, `BALANCE_SERIES`, `BALANCE_SERIES_PREFIX`, `LEGACY_DIALS`, `IN_KEYS`, `MERCHANT_KEY`, `DIAL_LABEL`) and `settings`; creates `BudgetEngine._timeline` |
 | `engine/timeline-balances.js` | known balances (`anchors`), mirrored savings (`mirrorPlan`), the balance lines with their assumed and illustrative points (`balancesFor`), the investments line (`investmentsFor`), `prorate`; `RULE`, `SIMPLE_RULE`, `SIMPLE_LABEL`, `ILLUSTRATIVE`, `INVEST_RULE` |
-| `engine/timeline-spending.js` | spending by group (`spendGroups`, row ids: `rowIdOf`), the essentials and flexible drill-down with its pattern badges (`drillFor`), the irregular items (`irregularFor`); `TINY_CATEGORY_CENTS`, `STABLE_MIN_CHARGES`, `STABLE_SPREAD`, `OTHER_CATEGORY` |
-| `engine/timeline-dials.js` | observed deposits (`depositHint`), the dials and `carriedOver` (`buildDials`), one plan month (`planMonth`), the carry-over of the earlier card/bank dials (`legacyDialsPlan`) |
+| `engine/timeline-spending.js` | spending by group (`spendGroups`, row ids: `rowIdOf`), the essentials and flexible drill-down with its pattern badges (`drillFor`), the categories planned in another group than by exact name (`regroupedByName`), the irregular items (`irregularFor`); `TINY_CATEGORY_CENTS`, `STABLE_MIN_CHARGES`, `STABLE_SPREAD`, `OTHER_CATEGORY` |
+| `engine/timeline-dials.js` | observed deposits (`depositHint`), the dials and `carriedOver` (`buildDials`), one plan month (`planMonth`), the carry-over of the earlier card/bank dials (`legacyDialsPlan`) and of an Essentials or Flexible amount set before imported names were resolved (`regroupDialsPlan`) |
 | `engine/timeline-changes.js` | planned changes (`readChanges`, `changeActiveIn`, `applyChange`, `summarizeChanges`), the changes worked out from Budget (`billChanges`, `goalChanges`, `incomeChanges`) and `templates` (the packs) |
 | `engine/timeline-export.js` | `toCSV` |
-| `engine/timeline-writes.js` | the state writes (below), `migrateRows`, `migrateDials`, `splitOther`, `pendingUpgrade`, `acceptCarriedOver` |
+| `engine/timeline-writes.js` | the state writes (below), `migrateRows`, `migrateDials`, `splitOther`, `regroupDials`, `pendingUpgrade`, `acceptCarriedOver` |
 | `engine/timeline.js` | `build`, the Trends series catalogue, and `BudgetEngine.timeline`, assembled from the parts |
 
 `BudgetEngine._timeline` is private to these files; the public API is `BudgetEngine.timeline`
@@ -1493,6 +1515,16 @@ naming what is missing, when a public name has not been added), the parts in bet
     `flexible`; `settings.groups[category]` overrides it, and `settings.groups['merchant:' + place]` moves every
     purchase of that place (all its categories) into a synthetic category row named after the place
     in the chosen group. One-time costs are never in these groups: they are the `irregular` dial.
+    **Regrouping with a dial set directly**: an amount set directly for Essentials or Flexible stays
+    exactly as saved; what categories moved between the two groups since add to it or take off it
+    (`settings.dialShift[key]: { cents, categories }`), applied only while the dial is set directly:
+    `planCents` = the amount set + `cents` (never below $0; an amount already below $0 is not
+    lowered), and the dial gets `shift: { cents, categories, setCents }` (else null) and its basis
+    ends "Set here: $300.00, less $200.00 for Groceries & meal kits, now planned in Flexible" ("…,
+    plus $50.00 for Dining & drinks, now planned here"). `setGroup` writes it when exactly one of the
+    two is set directly; an amount set before names were resolved (when only exact taxonomy names
+    were essential; `settings.groupsRead` 'exact') is carried over once the same way
+    (`migration.regroupDials`, `regroupDials`).
   - **Category budgets** (`plan.targets`): a level-1 row of one category plans at its change in
     `ui.plan.rows` when that has an amount (`source: 'set'`), else at its budget when that is a
     number (`source: 'budget'`), else at what its rows give (`source: 'history'`); `budgetCents` is
@@ -1636,13 +1668,13 @@ naming what is missing, when a public name has not been added), the parts in bet
     would give one of the fixed keys has no series of its own. Every key can be saved in
     `ui.plan.trends.series`: `planSettings.BALANCE_SERIES` lists the fixed balance keys, and
     `TREND_SERIES.includes` also accepts `balance-` + any account id (`planSettings.isBalanceSeries`).
-  - `migration`: null, or `{ rows: [{ from, to }], dropped, superseded, rowsNote, dials, other, note }`
+  - `migration`: null, or `{ rows: [{ from, to }], dropped, superseded, rowsNote, dials, other, regroupDials, note }`
     when `settings.rows` still holds changes saved under the earlier card/bank dials or under the
     other group for a category now planned by its name (see `drill`; after the card/bank ones in
     `rows`, never `dropped`; the row note then adds "N changes to spending rows moved with their
     categories to the other group: an imported category name is now read as the category it stands
     for."),
-    `settings.legacyDials` holds amounts set for them, or a `dials.other` amount waits to be split
+    `settings.legacyDials` holds amounts set for them, `settings.groupsRead` is 'exact', or a `dials.other` amount waits to be split
     (`other`: `{ fromCents, investingCents, otherCents, investingSet, note }`, note "ui.plan.dials.other:
     your amount for debt, business and investments ($600.00) was split now that investments have a
     dial of their own: Investing is set to $200.00, its average; Debt & business is set to
@@ -1650,7 +1682,29 @@ naming what is missing, when a public name has not been added), the parts in bet
     (`<group>` instead of `card`/`bank` in its id) when that row is paid only that way and is not the
     grouped "Other"; `migrateRows` makes that permanent. `rowsNote`: the row note
     ('ui.plan.rows: …', recorded by `migrateRows`) or null. `note`: what to show once — the row note
-    without its path, then `dials.note`.
+    without its path, then `dials.note`, `other.note` and `regroupDials.note` (both without their path).
+    `regroupDials`: null unless `settings.groupsRead` is 'exact' (an Essentials or Flexible amount
+    set before imported category names were read as the category they stand for), else `{ moved:
+    [{ category, from, to }], set: 'essentials'|'flexible'|null, cents: d|null, shift: { dial,
+    setCents, cents, categories, plannedCents }|null, note|null }` — how `regroupDials` carries it
+    over once, as a regrouping adjustment (`settings.dialShift`; the amount set never changes).
+    `moved`: the categories of the baseline's everyday spending (split parts included) and the
+    category budgets with an amount whose group now (taxonomy, `categories.isEssential`) differs from
+    the group by exact name (`categories.isEssentialByName`); a category the household grouped in
+    `settings.groups` is never moved. `set`: the one spending group set directly (null when both or
+    neither are: their total is right, only the mark changes). d (`cents`) is what moved from
+    Flexible to Essentials, measured on the group not set directly at what it plans (rows, else
+    baseline) now and with `settings.groups` holding each moved category's earlier group: Essentials
+    now − then, or Flexible then − now (negative: the other way). `shift.cents`: Flexible alone −d
+    (Essentials now holds d too, so it was counted twice); Essentials alone +d (Flexible no longer
+    holds it, so it was left out); d = 0 → null. `setCents`: the saved amount it is for;
+    `plannedCents`: the dial's plan amount with it (never below $0). Until the upgrade runs the plan
+    uses the dials as saved. Note, e.g. "ui.plan.dialShift.flexible: Flexible is planned at $180.00:
+    the $300.00 you set, less $120.00 for “Natural gas”, now read as Gas & heating and planned in
+    Essentials, so it is not counted twice." (Essentials: "…, plus $120.00 for …, so it is not left
+    out."; several: "“Natural gas” (Gas & heating) and “Electricity” (Electric), now read as the
+    categories they stand for and planned in Essentials, so they are …"; an aggregate is read as
+    its members, "Gas & heating + Electric").
     `dials`: null, or `{ from: { card?, bank? }, to: { essentials, flexible, irregular },
     parts: { [dial]: { card, bank }|null }, skipped: string[], note }` — how `migrateDials` carries
     the amounts over. A card amount X is shared over the three dials' `baselineCardCents` (sum C):
@@ -1758,7 +1812,9 @@ naming what is missing, when a public name has not been added), the parts in bet
   changes saved from it (`template: 'baby'`) are ordinary changes and stay exactly as saved.
 - State writes (return a new State, validated through `state.setPath` / `addItem` / `updateItem`):
   `setDial(state, key, cents|null)` (setting `other` while `otherDial` is 'withInvesting' makes it
-  'debt'), `setRow(state, rowId, { included?, cents? }, tl?)` (on a level-1 row of one category —
+  'debt'; setting essentials or flexible while `groupsRead` is 'exact' makes it 'resolved': the new
+  amount is chosen as the groups are read now; it removes the dial's `cardSplit` and `dialShift`
+  entries, so `resetDial` and "Use the rows" do too), `setRow(state, rowId, { included?, cents? }, tl?)` (on a level-1 row of one category —
   not the grouped "Other", not a place moved as a whole; found in `tl`, else from the row id against
   the budget's keys and the taxonomy — an amount of 0 or more is the category's budget:
   `plan.targets[category]` is set and the row's `cents` in `ui.plan.rows` removed, its `included`
@@ -1768,14 +1824,20 @@ naming what is missing, when a public name has not been added), the parts in bet
   also the earlier card/bank row changes its rows use), `resetRow(state, rowId, tl?)` (the row's
   change in `ui.plan.rows`; with `tl`, also its earlier card/bank change; never `plan.targets`, so
   a category row goes back to its budget when one is set, else its history: the Plan's row Reset),
-  `resetPlan(state)` (dials, rows and `irregularOff`, and `cardSplit` cleared; groups, budgets and
+  `resetPlan(state)` (dials, rows and `irregularOff`, and `cardSplit` and `dialShift` cleared; groups, budgets and
   planned changes stay). A reset puts each key it covers back to what the setup file supplied for
   it when it was last applied (`setupSync.baseValue`, section 3: the dial's amount, a row's change,
   a one-time cost left out), and removes the keys it did not supply (back to the rows, baseline or
   history); a key the setup file supplied is never removed by a reset, so its later values still
   flow (S = B). `setGroup(state, key, 'essentials'|
   'flexible'|null, tl?)` (key = category or 'merchant:' + place; with the current `tl` a category's
-  row changes follow it to the other group), `setIrregular(state, txnId, included)` (keeps only a choice that differs from the default: `true` to leave out one in by default, `false` to put back one left out of planning by its `planningBaseline: 'exclude'` ledger edit; the edit is never touched),
+  row changes follow it to the other group, and when exactly one of essentials and flexible is set
+  directly the category's plan amount in the group it leaves — its level-1 row in `tl`; $0 when
+  left out, grouped into "Other" or without `tl` — goes into `ui.plan.dialShift`: taken off the
+  dial set directly when it is the one left, added to it when it is the one joined; the category
+  joins the adjustment's `categories`, or leaves them when it moves back; an adjustment back at $0
+  with no category is removed, and `dialShift` with its last entry. The plan month's total stays the same and `ui.plan.dials` is
+  untouched. A place moved as a whole gets no adjustment), `setIrregular(state, txnId, included)` (keeps only a choice that differs from the default: `true` to leave out one in by default, `false` to put back one left out of planning by its `planningBaseline: 'exclude'` ledger edit; the edit is never touched),
   `addChange(state, item | item[])`, `setChange(state, id, patch)` (switching to one-time clears
   `endMonth`, away from income clears `personId`, unless the patch sets them),
   `removeChange(state, id)`, `acceptChanges(state, id | ids, accepted = true)`, `splitOther(state,
@@ -1783,6 +1845,13 @@ naming what is missing, when a public name has not been added), the parts in bet
   other to the saved amount minus it, `otherDial` 'debt', the note appended to
   `meta.migrationNotes`; with no investments in the baseline only `otherDial` changes, no note;
   `otherDial` 'withInvesting' with no other amount: just 'debt'; safe to run twice),
+  `regroupDials(state, tl)` (`tl.migration.regroupDials`: while `groupsRead` is 'exact' and the dial
+  set directly still holds exactly `shift.setCents` (changed since: left as it is), `shift.cents` is
+  added to `ui.plan.dialShift[shift.dial]` with the moved categories, and the note is appended to
+  `meta.migrationNotes`; `ui.plan.dials` never changes (a `cardSplit` entry stays as saved, applying
+  only while the plan amount equals it); `groupsRead` becomes 'resolved'; nothing to carry over:
+  only `groupsRead`, no note; not marked, or a timeline built without the mark: the same state; safe
+  to run twice),
   `migrateRows(state, tl)` (moves the earlier card/bank row changes, and the ones saved under the
   other group for a category now planned by its name, that `tl.migration` matched, removes
   the rest, and appends `tl.migration.rowsNote` to `meta.migrationNotes`; returns the same state
@@ -1792,9 +1861,9 @@ naming what is missing, when a public name has not been added), the parts in bet
   `tl.migration.dials.note` to `meta.migrationNotes`; returns the same state when nothing is
   waiting). The plan screen runs `migrateDials(migrateRows(state, tl), tl)` once, as one change,
   and shows `tl.migration.note`; `pendingUpgrade(tl)` names that: null when nothing is waiting,
-  else `{ steps, note, apply }` — `steps` ⊆ `['migrateRows', 'migrateDials', 'splitOther']` in that order, `note`
-  = `tl.migration.note`, `apply(state)` runs the steps (safe to run twice; section 7, upgrades). `setDial` removes the dial's `cardSplit` entry; `resetPlan` clears
-  `cardSplit`. `acceptCarriedOver(state, key | keys)` ("Keep") removes only the
+  else `{ steps, note, apply }` — `steps` ⊆ `['migrateRows', 'regroupDials', 'migrateDials', 'splitOther']` in that order (`regroupDials` before `migrateDials`, whose amounts follow the groups as read now), `note`
+  = `tl.migration.note`, `apply(state)` runs the steps (safe to run twice; section 7, upgrades). `setDial` removes the dial's `cardSplit` and `dialShift` entries; `resetPlan` clears
+  `cardSplit` and `dialShift`. `acceptCarriedOver(state, key | keys)` ("Keep") removes only the
   `fromCard`/`fromBank` marker: the amount and its card part stay, so card and bank totals do not
   move; nothing marked → the same state.
 - `settings(raw)` — `ui.plan` as the screen reads it: `state.cleanPlanUi(raw)` (the one validator,

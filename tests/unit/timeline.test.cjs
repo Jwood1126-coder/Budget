@@ -792,7 +792,7 @@ test('build needs today and the data set; settings fall back to the defaults', (
     groups: { Pets: 'essentials', 'merchant:Bayside Club': 'flexible', Travel: 'sometimes' }, irregularOff: { t1: true, t2: false }, trends: { series: ['card', 'card', 'nope', 'in-p2'], ma: 4 } }),
   { baselineMonths: 'all', horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: { flexible: -4 }, rows: { b: {} }, hidden: null,
     groups: { Pets: 'essentials', 'merchant:Bayside Club': 'flexible' }, irregularOff: { t1: true, t2: false }, legacyDials: {}, cardSplit: {}, trends: { series: ['card', 'in-p2'], ma: 3, trend: true },
-    otherDial: 'debt', investReturnPct: null, scenariosCopied: true });
+    otherDial: 'debt', investReturnPct: null, scenariosCopied: true, groupsRead: 'resolved' });
   // A card or bank amount still among the dials (not yet checked by state.sanitize) waits to be carried over, and is newer.
   assert.deepEqual(T.settings({ dials: { card: 5000, essentials: 7 }, legacyDials: { card: 1, bank: 2, x: 3 }, cardSplit: { essentials: { cents: 7, card: 3 }, flexible: { cents: 1 }, card: { cents: 1, card: 1 } } }),
     Object.assign(T.settings({}), { dials: { essentials: 7 }, legacyDials: { card: 5000, bank: 2 }, cardSplit: { essentials: { cents: 7, card: 3 } } }));

@@ -5,7 +5,7 @@
  *
  * Adds to E._timeline: setDial, setRow, setTarget, resetDial, resetRow, resetPlan, setGroup,
  * setIrregular, addChange, setChange, removeChange, acceptChanges, migrateRows, migrateDials,
- * splitOther, pendingUpgrade, acceptCarriedOver.
+ * splitOther, regroupDials, pendingUpgrade, acceptCarriedOver.
  * Uses, when called: rowIdOf (timeline-spending.js), BudgetEngine.setupSync.baseValue (the resets).
  */
 (function (root) {
@@ -20,15 +20,30 @@
 
   /**
    * Set one dial directly (cents, may be negative), or clear it with null/undefined (back to rows
-   * or baseline). A card part kept for the dial's earlier amount (ui.plan.cardSplit) is removed.
-   * Setting `other` while an earlier amount still waits to be split (ui.plan.otherDial
-   * 'withInvesting') makes the new amount debt & business only (otherDial 'debt').
+   * or baseline). A card part kept for the dial's earlier amount (ui.plan.cardSplit) and what
+   * categories moved between the groups added to or took off it (ui.plan.dialShift) are removed:
+   * the new amount is chosen as the groups are now. Setting `other` while an earlier amount still
+   * waits to be split (ui.plan.otherDial 'withInvesting') makes the new amount debt & business only
+   * (otherDial 'debt'). Setting essentials or flexible while an amount set before imported names
+   * were resolved waits to be carried over (ui.plan.groupsRead 'exact') ends that wait (groupsRead
+   * 'resolved'): with it set as the groups are read now, there is nothing left to carry over.
    */
   function setDial(state, key, cents) {
     let next = E.state.setPath(state, 'ui.plan.dials.' + key, cents === null ? undefined : cents);
     if (has(planUi(next).cardSplit, key)) next = E.state.setPath(next, 'ui.plan.cardSplit.' + key, undefined);
-    if (key === 'other' && planUi(next).otherDial === 'withInvesting' && cents !== null && cents !== undefined) next = E.state.setPath(next, 'ui.plan.otherDial', 'debt');
+    next = dropShift(next, key);
+    const amount = cents !== null && cents !== undefined;
+    if (key === 'other' && planUi(next).otherDial === 'withInvesting' && amount) next = E.state.setPath(next, 'ui.plan.otherDial', 'debt');
+    if (SPEND_GROUPS.includes(key) && planUi(next).groupsRead === 'exact' && amount) next = E.state.setPath(next, 'ui.plan.groupsRead', 'resolved');
     return next;
+  }
+
+  /** ui.plan.dialShift without `key`'s entry, and without the field once no entry is left. */
+  function dropShift(state, key) {
+    const cur = planUi(state).dialShift;
+    if (!has(cur, key)) return state;
+    const rest = Object.keys(cur).filter(k => k !== key);
+    return E.state.setPath(state, 'ui.plan.dialShift' + (rest.length ? '.' + key : ''), undefined);
   }
 
   /** Append a note to meta.migrationNotes once (kept within the limit). */
@@ -169,8 +184,8 @@
 
   /**
    * Every dial, row and one-time cost back as resetDial puts one back (the setup file's values,
-   * else the baseline); the kept card parts go. Groups, planned changes, budgets and other
-   * settings stay.
+   * else the baseline); the kept card parts and the regrouping adjustments (ui.plan.dialShift) go.
+   * Groups, planned changes, budgets and other settings stay.
    */
   function resetPlan(state) {
     const p = planUi(state);
@@ -182,7 +197,23 @@
       for (const id of resetKeys(state, field, base)) next = resetKey(next, field, id, base);
     }
     for (const k of Object.keys(isObj(p.cardSplit) ? p.cardSplit : {})) next = E.state.setPath(next, 'ui.plan.cardSplit.' + k, undefined);
+    if (has(planUi(next), 'dialShift')) next = E.state.setPath(next, 'ui.plan.dialShift', undefined);
     return next;
+  }
+
+  /**
+   * Add `cents` to the regrouping adjustment of a spending dial set directly (ui.plan.dialShift[key])
+   * for `category`'s move: the category joins its list, or leaves it when it moves back; an
+   * adjustment that comes to $0 with no category left is removed (and the field with the last one).
+   */
+  function addShift(state, key, cents, category) {
+    const cur = own(planUi(state).dialShift, key);
+    const total = (isObj(cur) && isCents(cur.cents) ? cur.cents : 0) + cents;
+    const names = isObj(cur) && Array.isArray(cur.categories) ? cur.categories.slice() : [];
+    const at = names.indexOf(category);
+    if (at >= 0) names.splice(at, 1); else names.push(category);
+    if (total === 0 && !names.length) return dropShift(state, key);
+    return E.state.setPath(state, 'ui.plan.dialShift.' + key, { cents: total, categories: names.slice(-20) });
   }
 
   /**
@@ -190,6 +221,11 @@
    * 'flexible'; null/undefined goes back to the default (the taxonomy, or the place's categories).
    * With the current timeline `tl`, changes to the category's rows follow them to the other group
    * (row ids carry the group); without it only the category and "everything else" rows do.
+   * The plan's total stays the same: when exactly one of the two spending dials is set directly,
+   * the category's plan amount in the group it leaves (its row in `tl`; $0 when left out, grouped
+   * into "Other" or not in `tl`) is taken off that dial when it is the one set directly, or added
+   * to the receiving one, as a regrouping adjustment (ui.plan.dialShift); the amount set stays as
+   * saved, and moving it back takes the adjustment back. A place moved as a whole gets none.
    */
   function setGroup(state, key, group, tl) {
     if (typeof key !== 'string' || !key.trim()) fail('Choose a category or a place to move.', 'key');
@@ -203,6 +239,12 @@
     const from = SPEND_GROUPS.includes(before) ? before : fallback;
     const to = group || fallback;
     if (from === to) return next;
+    const direct = SPEND_GROUPS.filter(g => isCents(own(p.dials, g)));
+    const fromDrill = tl && isObj(tl.dialsByKey) && tl.dialsByKey[from] ? tl.dialsByKey[from].drill : null;
+    const row = direct.length === 1 && fromDrill && Array.isArray(fromDrill.rows)
+      ? fromDrill.rows.find(r => r.level === 1 && !r.synthetic && r.groupKey === k) : null;
+    const moving = row && row.included && isCents(row.planCents) ? row.planCents : 0;
+    if (moving !== 0) next = addShift(next, direct[0], direct[0] === from ? 0 - moving : moving, k);
     const rows = isObj(p.rows) ? p.rows : {};
     const moves = [rowIdOf(from, 'c', k), rowIdOf(from, 'r', k)];
     const d = tl && isObj(tl.dialsByKey) ? tl.dialsByKey[from] : null;
@@ -337,18 +379,44 @@
     return mig.note ? recordNote(next, mig.note) : next;
   }
 
+  /**
+   * Carry over an Essentials or Flexible amount set before imported category names were read as
+   * the category they stand for (ui.plan.groupsRead 'exact'; tl.migration.regroupDials from build):
+   * while the dial set directly still holds exactly the amount the timeline was built with
+   * (`shift.setCents`; changed since: left alone), what moved is added to its regrouping adjustment
+   * (ui.plan.dialShift[dial]: cents, and the moved categories) and the note is appended to
+   * meta.migrationNotes; the amount set itself never changes. groupsRead becomes 'resolved'.
+   * Nothing to carry over (no category moved, both or neither dial set directly): only groupsRead
+   * changes, no note. Not marked, or a timeline built without the mark: the state is returned as it
+   * is (safe to run twice).
+   */
+  function regroupDials(state, tl) {
+    const p = planUi(state);
+    const mig = tl && isObj(tl.migration) && isObj(tl.migration.regroupDials) ? tl.migration.regroupDials : null;
+    if (p.groupsRead !== 'exact' || !mig) return state;
+    let next = E.state.setPath(state, 'ui.plan.groupsRead', 'resolved');
+    const sh = isObj(mig.shift) ? mig.shift : null;
+    if (!sh || own(p.dials, sh.dial) !== sh.setCents) return next;
+    const cur = own(p.dialShift, sh.dial);
+    const names = (isObj(cur) && Array.isArray(cur.categories) ? cur.categories : []).concat(sh.categories.filter(c => !(isObj(cur) && Array.isArray(cur.categories) && cur.categories.includes(c))));
+    next = E.state.setPath(next, 'ui.plan.dialShift.' + sh.dial, { cents: (isObj(cur) && isCents(cur.cents) ? cur.cents : 0) + sh.cents, categories: names.slice(-20) });
+    return mig.note ? recordNote(next, mig.note) : next;
+  }
+
   // ------------------------------------------------------------------ upgrades the plan screen applies
   // Upgrades inside saved-state version 5 that need a built plan (row ids depend on the data), so
   // state.sanitize cannot run them (its own are BudgetEngine.state.V5_UPGRADES). Like those, each
   // is safe to run twice and leaves a note in meta.migrationNotes.
-  const SCREEN_UPGRADES = { migrateRows, migrateDials, splitOther };
+  const SCREEN_UPGRADES = { migrateRows, regroupDials, migrateDials, splitOther };
 
   /**
    * What the plan screen must apply once, as one change, for the timeline `tl` it just built:
    * null when nothing is waiting, else { steps, note, apply }:
    *   steps  the upgrades, in order: 'migrateRows' (row changes saved under the earlier card/bank
-   *          dials), 'migrateDials' (amounts set for those dials, from ui.plan.legacyDials) and
-   *          'splitOther' (an amount saved for other before investments had their own dial)
+   *          dials), 'regroupDials' (an Essentials or Flexible amount set before imported category
+   *          names were resolved, ui.plan.groupsRead 'exact'), 'migrateDials' (amounts set for the
+   *          earlier card/bank dials, from ui.plan.legacyDials) and 'splitOther' (an amount saved
+   *          for other before investments had their own dial)
    *   note   tl.migration.note: what to tell the household, once (also the key for "already done")
    *   apply  state => the state with every step applied (in order, each given `tl`);
    *          safe to run twice (the second run changes nothing)
@@ -359,6 +427,10 @@
     if (!mig) return null;
     const steps = [];
     if ((Array.isArray(mig.rows) && mig.rows.length) || (Array.isArray(mig.dropped) && mig.dropped.length)) steps.push('migrateRows');
+    // Before migrateDials: an amount it carries over from the earlier card/bank dials follows the
+    // groups as read now, and setting it would end the wait (setDial) before the household's own
+    // earlier amount was carried over.
+    if (isObj(mig.regroupDials)) steps.push('regroupDials');
     if (isObj(mig.dials)) steps.push('migrateDials');
     if (isObj(mig.other)) steps.push('splitOther');
     if (!steps.length) return null;
@@ -381,6 +453,6 @@
 
   Object.assign(T, {
     setDial, setRow, setTarget, resetDial, resetRow, resetPlan, setGroup, setIrregular, addChange, setChange, removeChange, acceptChanges, migrateRows, migrateDials,
-    splitOther, pendingUpgrade, acceptCarriedOver,
+    splitOther, regroupDials, pendingUpgrade, acceptCarriedOver,
   });
 })(typeof globalThis !== 'undefined' ? globalThis : this);
