@@ -456,7 +456,8 @@ module.exports = [
       await t.open('#/review');
       const links = await page.$$eval('#rv-missing .rv-missing a', as => as.map(a => a.getAttribute('href')));
       assert.ok(links.length >= 3, 'several missing inputs in the sample');
-      for (const h of links) assert.match(h, /^#\/budget\?section=(income|bills|targets|savings|debts)/);
+      // Setup areas by section; a what-if's missing amounts open Edit plan's planned changes.
+      for (const h of links) assert.match(h, /^#\/budget\?(section=(income|bills|targets|savings|debts)|focus=plan-changes-h$)/);
       assert.match(await page.textContent('#rv-missing'), /Not set/);
     },
   },
