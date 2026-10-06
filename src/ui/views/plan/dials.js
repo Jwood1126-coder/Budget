@@ -86,10 +86,11 @@
    */
   function shortBasis(tl, d) {
     const text = String(d.basis || '');
+    // Set directly with a regrouping adjustment (timeline dialShift): what moved, in the short line too.
+    if (d.shift && d.shift.cents) return `Set here, ${d.shift.cents < 0 ? 'less' : 'plus'} ${whole(Math.abs(d.shift.cents))} for ${d.shift.categories.length === 1 ? d.shift.categories[0] : 'categories'} ${d.shift.cents < 0 ? 'moved out' : 'moved in'}`;
     if (d.basisKind === 'budget' || /^From Budget/.test(text)) return d.key === 'savings' ? 'From your savings goals' : d.group === 'in' ? 'From your pay' : 'From your bills and budgets';
     if (d.basisKind === 'average' && d.group === 'in') return 'Deposit average';
-    // Set here with a regrouping adjustment (timeline dialShift): what moved, in the short line too.
-    if (/^Set here/.test(text)) return d.shift && d.shift.cents ? `Set here, ${d.shift.cents < 0 ? 'less' : 'plus'} ${whole(Math.abs(d.shift.cents))} for ${d.shift.categories.length === 1 ? d.shift.categories[0] : 'categories'} ${d.shift.cents < 0 ? 'moved out' : 'moved in'}` : 'Set here';
+    if (/^Set here/.test(text)) return 'Set here';
     if (d.key === 'irregular' && d.drill && d.drill.count) return plural(d.drill.count, 'one-time cost') + ', spread';
     if (/^Average of/.test(text) && tl.baseline.count) return tl.baseline.count + '-month average';
     return text.split(/;| \(| — /)[0];
