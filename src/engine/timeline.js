@@ -311,8 +311,8 @@
       return manual.concat(autoOneTime.filter(o => o.month === m && !seen.has(o.id)));
     };
     const changes = readChanges(plan);
-    // Baby-cost defaults covered by a pack or the household's own choice are held back (counted once).
-    const guard = E.babyDefaults ? E.babyDefaults.guard(changes) : { held: new Set(), alternatives: new Set(), overlaps: [] };
+    // Baby-cost defaults covered by a pack or the household's own choice are held back in the months it covers (counted once).
+    const guard = E.babyDefaults ? E.babyDefaults.guard(changes) : { held: new Set(), heldIn: () => false, alternatives: new Set(), overlaps: [] };
     // Worked out from Budget: bills that start or end (fromBills, above), savings goals spent at
     // their target. Part of the plan as it stands (the ghost has them too), read-only on the screen.
     // Pay in Budget that starts or ends later in the plan moves that person's money in from then on.
@@ -365,7 +365,7 @@
         oneOffs: [], oneOffCents: 0, actualSoFar, changesApplied: [], baseline: null,
       };
       for (const ch of changes.concat(derived)) {
-        if (!ch.accepted || ch.cents === null || !changeActiveIn(ch, m) || overridden(ch) || guard.held.has(ch.id)) continue;
+        if (!ch.accepted || ch.cents === null || !changeActiveIn(ch, m) || overridden(ch) || guard.heldIn(ch.id, m)) continue;
         const cents = centsIn(ch, m);
         applyChange(row, cents === ch.cents ? ch : Object.assign({}, ch, { cents }), people);
         row.changesApplied.push({ id: ch.id, label: ch.label, group: ch.group, cents, source: ch.source });

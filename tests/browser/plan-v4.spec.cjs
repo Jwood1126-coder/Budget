@@ -103,8 +103,9 @@ module.exports = [
       const before = await lines();
       const baby = before.find(l => l.key === 'group-Baby arrives (May 2027)');
       assert.ok(baby, 'the baby group is one line: ' + before.map(l => l.text).join(' | '));
-      assert.match(baby.text, /^May 2027 Baby arrives \(May 2027\) 0 of \d+ in the plan/);
-      assert.ok(baby.off, 'not in the plan yet: quieter');
+      // The baby-cost estimates (setup in Apr 2027, the month before the birth) are in the plan; the rest of the what-if is not yet.
+      assert.match(baby.text, /^Apr 2027 Baby arrives \(May 2027\) 3 of \d+ in the plan/);
+      assert.ok(!baby.off, 'partly in the plan: not quieter');
       assert.ok(before.some(l => l.key === 'bill-life-insurance' && /Bill/.test(l.text)), 'a bill from Edit plan, labelled');
       // A goal reached within the plan: a line here and a diamond on the chart.
       await page.evaluate(() => {

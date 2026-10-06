@@ -514,9 +514,9 @@ module.exports = [
       await settled(t);
       const after = (await state(page)).plan.changes;
       assert.deepEqual(['baby-default-setup', 'baby-default-supplies', 'sc-childcare'].map(id => after.find(c => c.id === id).startMonth), ['2027-05', '2027-06', '2027-08']);
-      await t.nav('overview');
-      await page.waitForSelector('#plan-baby-caveat');
+      // The planned changes are listed on this page (Edit plan), under the baby group.
       await t.settled();
+      await page.waitForSelector('#plan-baby-caveat', { state: 'attached' });
       assert.match(await text(page, '#plan-baby-caveat'), /medical costs, insurance premium changes and parental-leave pay are unknown, not \$0/);
       assert.match(await text(page, '#plan-ch-sc-childcare-yearly'), /plus \$150(\.00)? a year \(membership fee\) in Aug 2027 and every 12 months after/);
       assert.equal(await page.$$eval('#plan-baby-overlap', x => x.length), 0, 'nothing planned twice');
@@ -524,6 +524,16 @@ module.exports = [
       await page.click('#undoBtn');
       await page.waitForFunction(() => window.HouseholdBudget.getState().plan.settings.babyDueDate === '2027-05-14');
       assert.equal((await state(page)).plan.changes.find(c => c.id === 'sc-childcare').startMonth, '2027-06');
+      // An explicit $0 for childcare: no yearly fee line either (the saved fee stays for a later amount).
+      await page.evaluate(() => {
+        const s = window.HouseholdBudget.getState();
+        s.plan.changes.find(c => c.id === 'sc-childcare').cents = 0;
+        window.HouseholdBudget.setState(s);
+      });
+      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.changes.find(c => c.id === 'sc-childcare').cents === 0);
+      await t.settled();
+      assert.equal(await page.$$eval('#plan-ch-sc-childcare-yearly', x => x.length), 0, 'no "plus $150 a year" at $0');
+      assert.equal((await state(page)).plan.changes.find(c => c.id === 'sc-childcare').yearlyCents, 15000);
     },
   },
 ];

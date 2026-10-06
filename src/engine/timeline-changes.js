@@ -28,8 +28,9 @@
         scenario: typeof c.scenario === 'string' && c.scenario.trim() ? c.scenario.trim() : null,
         note: typeof c.note === 'string' ? c.note : '',
         source: 'plan', readOnly: false,
-        // A yearly amount on a monthly change (childcare's membership fee): in its first month and every 12th after.
-        yearlyCents: c.kind === 'monthly' && isCents(c.yearlyCents) && c.yearlyCents !== 0 ? c.yearlyCents : null,
+        // A yearly amount on a monthly change (childcare's membership fee): in its first month and every 12th after,
+        // only while the monthly amount is above $0 (an explicit $0, or no amount, means no fee either).
+        yearlyCents: c.kind === 'monthly' && isCents(c.yearlyCents) && c.yearlyCents !== 0 && isCents(c.cents) && c.cents > 0 ? c.yearlyCents : null,
         // The baby-cost default it is (BudgetEngine.babyDefaults), with how exact its timing is.
         babyRole: isObj(c.derived) && typeof c.derived.role === 'string' ? c.derived.role : null,
         precision: isObj(c.derived) && (c.derived.precision === 'day' || c.derived.precision === 'month') ? c.derived.precision : null,
@@ -38,9 +39,9 @@
 
   const changeActiveIn = (c, m) => (c.kind === 'oneTime' ? m === c.startMonth : m >= c.startMonth && (c.endMonth === null || m <= c.endMonth));
 
-  /** A change's amount in month `m` (active): its amount, plus its yearly amount in its first month and every 12th after. */
+  /** A change's amount in month `m` (active): its amount, plus its yearly amount in its first month and every 12th after (amount above $0 only). */
   function centsIn(c, m) {
-    if (c.cents === null || !c.yearlyCents || c.kind !== 'monthly') return c.cents;
+    if (c.cents === null || c.cents <= 0 || !c.yearlyCents || c.kind !== 'monthly') return c.cents;
     const after = (Number(m.slice(0, 4)) - Number(c.startMonth.slice(0, 4))) * 12 + Number(m.slice(5, 7)) - Number(c.startMonth.slice(5, 7));
     return after >= 0 && after % 12 === 0 ? c.cents + c.yearlyCents : c.cents;
   }
@@ -96,7 +97,7 @@
     const held = guard && guard.held ? guard.held : new Set();
     const list = changes.map(c => {
       const monthsApplied = applied.get(c.id) || 0;
-      // 'overlap': a baby-cost default held back because a pack or the household's own choice covers it (guard).
+      // 'overlap': a baby-cost default held back in every plan month because a pack or the household's own choice covers it (guard).
       const status = c.cents === null ? 'unset' : !c.accepted ? 'notAccepted' : monthsApplied ? 'applied' : held.has(c.id) ? 'overlap' : overridden && overridden(c) ? 'overridden' : 'outside';
       return Object.assign({}, c, { status, monthsApplied, appliedCents: monthsApplied ? appliedCents.get(c.id) : 0 });
     });

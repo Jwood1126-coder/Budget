@@ -220,17 +220,19 @@ test('an alternative childcare quote stays unaccepted, is never added on top of 
   assert.equal(changeOf(tl, 'sc-care').status, 'applied');
   const cmp = build(st, GROUP).compare;
   assert.ok(!cmp.addedIds.includes('quote-oaks'), 'the what-if comparison does not add the alternative on top either');
-  // Chosen: the quote counts, the default is held back (its fee too), and the overlap is named.
+  // Chosen: the quote counts, the default is held back (its fee too) in the months the quote runs, and the overlap is named.
   const chosen = E.timeline.acceptChanges(st, ['quote-oaks']);
   tl = build(chosen);
-  assert.equal(changeOf(tl, 'sc-care').status, 'overlap');
-  assert.deepEqual(tl.changes.overlaps.map(o => [o.kind, o.role, o.id, o.with]), [['alternative', 'childcare', 'sc-care', ['quote-oaks']]]);
+  assert.deepEqual([changeOf(tl, 'sc-care').status, changeOf(tl, 'sc-care').monthsApplied], ['applied', 1], 'only July, before the quote starts');
+  assert.deepEqual(tl.changes.overlaps.map(o => [o.kind, o.role, o.id, o.with, o.from, o.until]), [['alternative', 'childcare', 'sc-care', ['quote-oaks'], '2031-08', null]]);
   const base = tl.plan.out.total;
+  assert.equal(monthOf(tl, '2031-07').out.total - base, 45000 + 180000 + 15000, 'the default (and its fee) before the quote starts');
   assert.equal(monthOf(tl, '2031-08').out.total - base, 45000 + 210000, 'supplies and the chosen quote, no default childcare, no second fee');
+  assert.equal(monthOf(tl, '2032-07').out.total - base, 45000 + 210000, 'the default’s yearly fee is held back with it');
   assert.ok(byId(chosen.plan.changes, 'sc-care'), 'nothing removed');
 });
 
-test('a New baby pack accepted beside the defaults is flagged and counted once (the defaults it covers are held back)', () => {
+test('a New baby pack accepted beside the defaults is flagged and counted once (the defaults it covers are held back while it runs)', () => {
   const st = B.ensure(opened(profile({ due: '2031-06-10' }))).state;
   const pack = E.timeline.templates.babyFirstYear('2031-06-10', { scenario: 'New baby' }).map(x => Object.assign(x, { accepted: true }));
   const withPack = E.timeline.addChange(st, pack);
@@ -239,11 +241,150 @@ test('a New baby pack accepted beside the defaults is flagged and counted once (
   assert.deepEqual(held, [['setup', 'baby-default-setup', 'babyFirstYear'], ['supplies', 'baby-default-supplies', 'babyFirstYear']]);
   assert.equal(changeOf(tl, 'baby-default-setup').status, 'overlap');
   assert.equal(changeOf(tl, 'baby-default-childcare').status, 'applied', 'the pack has no childcare');
-  for (const r of tl.months) assert.ok(!r.changesApplied.some(a => a.id === 'baby-default-supplies'), r.month + ': supplies counted once (the pack’s)');
+  for (const r of tl.months.filter(x => x.month >= tl.planStart)) {
+    const counted = r.changesApplied.some(a => a.id === 'baby-default-supplies');
+    assert.equal(counted, r.month > '2032-05', r.month + ': supplies counted once (the pack’s through May 2032, then the default)');
+  }
   assert.equal(withPack.plan.changes.length, st.plan.changes.length + pack.length, 'nothing deleted');
   // Unaccepted, the pack no longer holds anything back.
   const off = E.timeline.acceptChanges(withPack, withPack.plan.changes.filter(c => c.template).map(c => c.id), false);
   assert.deepEqual(build(off).changes.overlaps, []);
+});
+
+/** Every plan month applies each change once, and the applied amounts are the whole difference from the plan's base. */
+function onceEach(tl) {
+  const base = tl.plan.out.total;
+  for (const r of tl.months.filter(x => x.month >= tl.planStart)) {
+    const seen = r.changesApplied.map(a => a.id);
+    assert.equal(new Set(seen).size, seen.length, r.month + ': nothing applied twice');
+    assert.equal(r.changesApplied.reduce((s, a) => s + a.cents, 0), r.out.total - base, r.month + ': the applied amounts are the whole difference');
+  }
+}
+/** The items of pack `template` applied in a plan month, and their total. */
+function packIn(tl, m, template) {
+  const items = monthOf(tl, m).changesApplied.filter(a => (changeOf(tl, a.id) || {}).template === template);
+  return { ids: items.map(a => a.id), cents: items.reduce((s, a) => s + a.cents, 0) };
+}
+const counts = (tl, m, id) => monthOf(tl, m).changesApplied.some(a => a.id === id);
+
+test('an explicit $0 childcare amount: no yearly membership fee either (the saved fee is kept for a later amount)', () => {
+  let st = B.ensure(opened(profile({ due: '2031-05-20' }))).state; // childcare from Jul 2031
+  st = E.timeline.setChange(st, 'baby-default-childcare', { cents: 0 });
+  assert.equal(byId(st.plan.changes, 'baby-default-childcare').yearlyCents, 15000, 'not erased');
+  const tl = build(st);
+  const base = tl.plan.out.total;
+  for (const m of ['2031-07', '2031-08', '2032-06', '2032-07', '2033-03']) assert.equal(monthOf(tl, m).out.total - base, 45000, m + ': supplies only, no $150 fee');
+  const care = changeOf(tl, 'baby-default-childcare');
+  assert.deepEqual([care.cents, care.yearlyCents, care.appliedCents], [0, null, 0], 'no "plus $150 a year" line on the Plan (yearlyCents null)');
+  assert.equal(byId(monthOf(tl, '2031-07').changesApplied, 'baby-default-childcare').cents, 0);
+  onceEach(tl);
+  // An amount above $0 again: the fee is back in the first care month and 12 months later.
+  const back = build(E.timeline.setChange(st, 'baby-default-childcare', { cents: 90000 }));
+  assert.equal(monthOf(back, '2031-07').out.total - back.plan.out.total, 45000 + 90000 + 15000);
+  assert.equal(monthOf(back, '2032-07').out.total - back.plan.out.total, 45000 + 90000 + 15000);
+  assert.equal(changeOf(back, 'baby-default-childcare').yearlyCents, 15000);
+});
+
+test('the household’s own Daycare outside the baby group covers the childcare default: not added, or held back in the months they overlap', () => {
+  const daycare = fields => Object.assign({ id: 'my-daycare', label: 'Daycare', kind: 'monthly', group: 'essentials', personId: null, startMonth: '2031-11', endMonth: null, cents: 150000, accepted: true, template: null, scenario: null, note: '' }, fields);
+  // Before the defaults are made: childcare is not added (setup and supplies are); "Office supplies" are not baby supplies.
+  const st0 = copy(opened(profile({ due: '2031-08-03' })));
+  st0.plan.changes.push(daycare(), daycare({ id: 'my-office', label: 'Office supplies', startMonth: '2031-04', cents: 3000 }));
+  const r = B.ensure(st0);
+  assert.deepEqual(ids(r.state).filter(id => id.startsWith('baby-default-')), ['baby-default-setup', 'baby-default-supplies']);
+  assert.deepEqual(byId(r.state.plan.changes, 'my-daycare'), daycare(), 'the household’s row is left as it is');
+  const tl0 = build(r.state);
+  assert.deepEqual(tl0.changes.overlaps, []);
+  assert.equal(monthOf(tl0, '2031-11').out.total - tl0.plan.out.total, 3000 + 45000 + 150000, 'office supplies, baby supplies and their Daycare: once each');
+  onceEach(tl0);
+  // A Daycare that ended before the care month (an older child's) does not cover it.
+  const ended = copy(opened(profile({ due: '2031-08-03' })));
+  ended.plan.changes.push(daycare({ startMonth: '2031-04', endMonth: '2031-06' }));
+  assert.ok(byId(B.ensure(ended).state.plan.changes, 'baby-default-childcare'));
+
+  // Made already, then the household adds its own Daycare (Nov 2031 to Oct 2032): the default is held back in those months only.
+  const made = copy(B.ensure(opened(profile({ due: '2031-08-03' }))).state); // childcare from Sep 2031 (3 Aug + 42 days)
+  made.plan.changes.push(daycare({ endMonth: '2032-10' }));
+  const tl = build(made);
+  const extra = m => monthOf(tl, m).out.total - tl.plan.out.total;
+  assert.equal(extra('2031-09'), 45000 + 180000 + 15000, 'the default (and its fee) before their own care starts');
+  assert.equal(extra('2031-10'), 45000 + 180000);
+  assert.equal(extra('2031-11'), 45000 + 150000, 'their Daycare, not the default too');
+  assert.equal(extra('2032-09'), 45000 + 150000, 'the default’s yearly fee is held back with it');
+  assert.equal(extra('2032-10'), 45000 + 150000);
+  assert.equal(extra('2032-11'), 45000 + 180000, 'their Daycare ended: the default counts again');
+  for (const m of E.months.range('2031-09', '2033-03')) assert.equal(counts(tl, m, 'baby-default-childcare'), m < '2031-11' || m > '2032-10', m);
+  assert.deepEqual(tl.changes.overlaps.map(o => [o.kind, o.role, o.id, o.with, o.from, o.until]), [['alternative', 'childcare', 'baby-default-childcare', ['my-daycare'], '2031-11', '2032-10']]);
+  assert.deepEqual([changeOf(tl, 'baby-default-childcare').status, changeOf(tl, 'baby-default-childcare').monthsApplied], ['applied', 2 + 5]);
+  onceEach(tl);
+  // Whatever its what-if; unaccepted, it covers nothing.
+  const other = copy(made);
+  byId(other.plan.changes, 'my-daycare').scenario = 'Back to work (invented)';
+  assert.deepEqual(build(other).changes.overlaps.map(o => [o.id, o.with]), [['baby-default-childcare', ['my-daycare']]]);
+  const off = E.timeline.acceptChanges(made, ['my-daycare'], false);
+  assert.deepEqual(build(off).changes.overlaps, []);
+  assert.ok(counts(build(off), '2031-11', 'baby-default-childcare'));
+});
+
+test('due 2031-08-03 with the New baby pack: to Jul 2032 its items count and not the supplies default; from Aug 2032 the default counts again', () => {
+  const st = B.ensure(opened(profile({ due: '2031-08-03' }))).state;
+  const pack = E.timeline.templates.babyFirstYear('2031-08-03', { scenario: 'New baby' }).map(x => Object.assign(x, { accepted: true }));
+  const tl = build(E.timeline.addChange(st, pack));
+  const extra = m => monthOf(tl, m).out.total - tl.plan.out.total;
+  const firstYear = 8000 + 15000 + 5000 + 4000; // diapers, feeding, health, clothes (the leave row has no amount)
+  for (const m of E.months.range('2031-08', '2033-03')) {
+    const p = packIn(tl, m, 'babyFirstYear');
+    if (m <= '2032-07') {
+      assert.equal(counts(tl, m, 'baby-default-supplies'), false, m + ': the pack’s supplies, not the default');
+      assert.equal(p.cents - (m === '2031-09' ? 300000 : 0), firstYear, m + ': the pack’s monthly items');
+    } else {
+      assert.equal(counts(tl, m, 'baby-default-supplies'), true, m + ': the pack ended, the default counts again');
+      assert.deepEqual(p.ids, [], m + ': no pack items');
+    }
+  }
+  assert.equal(extra('2031-07'), 50000, 'the pack’s starter basics; the setup default is held back');
+  assert.equal(extra('2031-08'), firstYear);
+  assert.equal(extra('2031-09'), firstYear + 300000 + 180000 + 15000);
+  assert.equal(extra('2032-07'), firstYear + 180000);
+  assert.equal(extra('2032-08'), 45000 + 180000);
+  assert.equal(extra('2032-09'), 45000 + 180000 + 15000);
+  assert.equal(extra('2033-03'), 45000 + 180000);
+  assert.deepEqual(tl.changes.overlaps.map(o => [o.role, o.template, o.from, o.until]), [['setup', 'babyFirstYear', '2031-07', '2031-07'], ['supplies', 'babyFirstYear', '2031-08', '2032-07']]);
+  assert.deepEqual([changeOf(tl, 'baby-default-supplies').status, changeOf(tl, 'baby-default-supplies').monthsApplied], ['applied', 8], 'Aug 2032 to Mar 2033');
+  assert.equal(changeOf(tl, 'baby-default-setup').status, 'overlap');
+  onceEach(tl);
+  // The Childcare pack the same way: held back while it runs, counted again after.
+  const care = E.timeline.templates.childcare('2032-01', 130000, { scenario: 'New baby' }).map(x => Object.assign(x, { accepted: true, endMonth: '2032-12' }));
+  const tc = build(E.timeline.addChange(st, care));
+  for (const m of E.months.range('2031-09', '2033-03')) assert.equal(counts(tc, m, 'baby-default-childcare'), m < '2032-01' || m > '2032-12', m);
+  assert.deepEqual(tc.changes.overlaps.map(o => [o.role, o.template, o.from, o.until]), [['childcare', 'childcare', '2032-01', '2032-12']]);
+  onceEach(tc);
+});
+
+test('a Kid costs pack (from age 1) holds the supplies default back in the months it runs and is flagged; with the New baby pack too, supplies count once in every month', () => {
+  const st = B.ensure(opened(profile({ due: '2031-08-03' }))).state;
+  const kid = E.timeline.templates.kidCosts('2031-08-03', { scenario: 'New baby' }).map(x => Object.assign(x, { accepted: true }));
+  const kidMonthly = 20000 + 8000 + 7000 + 6000 + 10000;
+  let tl = build(E.timeline.addChange(st, kid));
+  const extra = m => monthOf(tl, m).out.total - tl.plan.out.total;
+  assert.equal(extra('2032-07'), 45000 + 180000, 'the default until the Kid costs start');
+  assert.equal(extra('2032-08'), kidMonthly + 180000, 'Kid costs, not the default too');
+  assert.equal(extra('2032-09'), kidMonthly + 180000 + 15000);
+  assert.equal(extra('2033-03'), kidMonthly + 180000);
+  for (const m of E.months.range('2031-08', '2033-03')) assert.equal(counts(tl, m, 'baby-default-supplies'), m < '2032-08', m);
+  assert.deepEqual(tl.changes.overlaps.map(o => [o.kind, o.role, o.id, o.template, o.from, o.until]), [['pack', 'supplies', 'baby-default-supplies', 'kidCosts', '2032-08', null]]);
+  assert.deepEqual([changeOf(tl, 'baby-default-supplies').status, changeOf(tl, 'baby-default-supplies').monthsApplied], ['applied', 12]);
+  onceEach(tl);
+  // Both packs: the first year's items, then Kid costs; the default never on top, never a month without supplies.
+  const first = E.timeline.templates.babyFirstYear('2031-08-03', { scenario: 'New baby' }).map(x => Object.assign(x, { accepted: true }));
+  tl = build(E.timeline.addChange(E.timeline.addChange(st, first), kid));
+  for (const m of E.months.range('2031-08', '2033-03')) {
+    assert.equal(counts(tl, m, 'baby-default-supplies'), false, m);
+    assert.ok(packIn(tl, m, m <= '2032-07' ? 'babyFirstYear' : 'kidCosts').cents > 0, m + ': supplies counted by a pack');
+  }
+  assert.equal(changeOf(tl, 'baby-default-supplies').status, 'overlap');
+  assert.deepEqual(tl.changes.overlaps.filter(o => o.role === 'supplies').map(o => [o.template, o.from, o.until]), [['babyFirstYear', '2031-08', '2032-07'], ['kidCosts', '2032-08', null]]);
+  onceEach(tl);
 });
 
 // ------------------------------------------------------------------ keeping the household's edits

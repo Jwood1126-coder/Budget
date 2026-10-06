@@ -116,6 +116,8 @@ module.exports = [
       await page.click('.mainnav a[data-nav="review"]');
       await page.waitForFunction(() => location.hash.startsWith('#/review'));
       assert.equal(await page.evaluate(k => localStorage.getItem(k), KEY), before, 'changing page does not rewrite the budget');
+      // The page is noted once its render is done: wait for it before opening the page again.
+      await t.settled();
       await page.goto(t.url);
       await page.waitForSelector('#page-title');
       assert.ok((await page.evaluate(() => location.hash)).startsWith('#/review'), 'opening the page again returns to the last page');
@@ -362,7 +364,7 @@ module.exports = [
       };
       const first = page_('setup-reset-first.html', 123400);
       const later = page_('setup-reset-later.html', 131500);
-      const visit = async file => { await page.goto('file://' + file + '#/overview'); await page.waitForSelector('#page-title'); await t.settled(); };
+      const visit = async file => { await page.goto('file://' + file + '#/budget'); await page.waitForSelector('#page-title'); await t.settled(); };
       const stored = () => page.evaluate(k => JSON.parse(localStorage.getItem(k)).ui.plan.dials.flexible, KEY);
       try {
         await visit(first);

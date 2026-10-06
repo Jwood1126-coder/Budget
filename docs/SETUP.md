@@ -218,8 +218,9 @@ after it); with neither, nothing is added until the date is known. The household
 in Budget's setup details (Baby); a date saved there wins over the setup file's (the merge rule
 below). A new date moves only the estimates whose start month nobody changed. Amounts, dates and
 inclusion the household changes are kept, and a default they remove is not added again. Do not also
-accept the New baby or Childcare pack for the same costs: the plan counts them once (the defaults
-are held back) and the Plan says so.
+accept the New baby, Childcare or Kid costs pack for the same costs: the plan counts them once (the
+defaults are held back in the months the pack runs) and the Plan says so. Childcare at $0 has no
+yearly fee either.
 
 ### Balances in the plan (`plan.balances`)
 
