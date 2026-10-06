@@ -156,8 +156,9 @@
    * for `other` before investments had their own dial), that amount is read as debt & business
    * plus investments at their baseline (other = amount − the investing baseline) until the plan
    * screen makes the split permanent (timeline.splitOther). `seenDebtCents` (billChanges): the
-   * current debt-payment bills the baseline months hold; when there are any, they are the debt
-   * part of the other dial's baseline, lower or higher than the average of debt payments (a bill
+   * current debt-payment bills the baseline months hold (null: none); when there are any ($0
+   * included), they are the debt part of the other dial's baseline, lower or higher than the
+   * average of debt payments (a bill
    * is the current amount: a payment lowered or refinanced replaces the older, higher history;
    * the history cannot be split by bill, so none of it is added on top). When the average is
    * more, the dial's `debtCheck` says so ({ billsCents, averageCents }; else null): a debt paid
@@ -249,12 +250,13 @@
     }
     // Debt payments: the current debt bills the history holds (an explicit current amount), else their average.
     const debtAvg = avg(T.debt);
-    const debtBills = isCents(seenDebtCents) && seenDebtCents > 0 && debtAvg !== null ? seenDebtCents : null;
+    const debtBills = isCents(seenDebtCents) && debtAvg !== null ? seenDebtCents : null;
     const debtCheck = debtBills !== null && debtAvg > debtBills ? { billsCents: debtBills, averageCents: debtAvg } : null;
     parts.debt = debtBills !== null ? debtBills : debtAvg;
     parts.business = avg(T.business);
     const otherBase = debtBills !== null ? debtBills + parts.business : avg(T.debt + T.business);
-    if ((otherBase !== null && otherBase !== 0) || isCents(own(setDials, 'other'))) {
+    // Shown at $0 too when the history paid debts the bills do not plan (debtCheck).
+    if ((otherBase !== null && otherBase !== 0) || isCents(own(setDials, 'other')) || debtCheck) {
       dials.push(Object.assign({ key: 'other', group: 'out', label: DIAL_LABEL.other, baselineCents: otherBase }, resolve('other', otherBase), {
         basis: windowText + (n ? ' (debt payments and business purchases)' : '')
           + (debtBills !== null ? '; debt payments at your current debt bills from Budget (' + E.money.format(debtBills) + ' a month, not the average of ' + E.money.format(debtAvg) + ')' : '')

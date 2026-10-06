@@ -219,6 +219,29 @@ test('debt: a payment lowered on purpose plans at the current bill, keeping none
   assert.equal(build(ds, planOf({ bills: [installment({ monthlyCents: 15000 })] })).dialsByKey.other.debtCheck, null, 'the bills are more: nothing to check');
 });
 
+test('debt: an explicit $0 debt bill is a current amount (no fallback to the history); with no debt in the history a bill is added; personal bills stay out', () => {
+  const ds = dataset([['Groceries', 200]], [paid([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], 200)]);
+  // Paid off (or paused) at $0: the history's $200 is not planned.
+  const zero = build(ds, planOf({ bills: [installment({ monthlyCents: 0 })] }));
+  assert.equal(zero.dialsByKey.other.baselineCents, 0);
+  assert.deepEqual(zero.dialsByKey.other.debtCheck, { billsCents: 0, averageCents: 20000 });
+  assert.deepEqual(zero.bills.map(b => b.status), ['seen']);
+  assert.equal(zero.months.find(m => m.month === '2032-01').out.debt, 0);
+  // Ended in the window: its last payment is in the history, so nothing of it is left after.
+  const ended = build(ds, planOf({ bills: [installment({ endMonth: '2031-12' })] }));
+  assert.equal(ended.months.find(m => m.month === '2032-01').out.debt, 0);
+  // No debt payment in the history at all: the bill is added from the plan start.
+  const none = dataset([['Groceries', 200]]);
+  const added = build(none, planOf({ bills: [installment()] }));
+  assert.deepEqual(added.bills.map(b => b.status), ['added']);
+  assert.equal(added.months.find(m => m.month === '2032-01').out.debt, 8000);
+  assert.equal(build(none, planOf({ bills: [installment({ monthlyCents: 0 })] })).months.find(m => m.month === '2032-01').out.debt, 0);
+  // A personal bill (paid from one person's own money) never enters joint spending: the history stays.
+  const personal = build(ds, planOf({ bills: [installment({ fundedFrom: 'p2', monthlyCents: 0 })] }));
+  assert.equal(personal.dialsByKey.other.baselineCents, 20000);
+  assert.equal(personal.dialsByKey.other.debtCheck, null);
+});
+
 test('debt: without double counting — the bills are the debt payments (a larger average is flagged, not added); an ending bill takes out exactly what it counts', () => {
   // Another debt with no bill is paid every month too: the average (80×3/12 + 150) is more than the
   // bill. The history cannot be split by bill, so the bill is the debt part and the dial says so.

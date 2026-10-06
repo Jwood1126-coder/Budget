@@ -1410,12 +1410,13 @@ naming what is missing, when a public name has not been added), the parts in bet
     `billChanges` → `seenDebtCents`, their monthly amounts added up) are in the history, but
     the window's average misstates them: a debt that started recently is diluted (three $80
     payments in twelve months average $20), and a payment lowered or refinanced keeps its older,
-    higher amount there. When `seenDebtCents` is more than $0, it is the debt part of the `other`
+    higher amount there. When there is one (`seenDebtCents` not null; a debt bill at an explicit $0,
+    paid off or paused, is seen at $0 and counts), their total is the debt part of the `other`
     dial's baseline (`parts.debt`), lower or higher than the average of debt payments — instead of
     the average, never on top of it — and an `ends` change takes out exactly what it counted. The
     history cannot be split by bill (a debt bill has no category, payee or account), so none of a
     larger average is kept: the dial's `debtCheck` (`{ billsCents, averageCents }`, else null) says
-    the history paid more, and the basis adds "; debt payments at your current debt bills from
+    the history paid more (the dial is then shown even at $0), and the basis adds "; debt payments at your current debt bills from
     Budget ($80.00 a month, not the average of $170.00). Your history paid more toward debts than
     these bills: if a debt payment is missing from your bills, add it in Edit plan, or set this
     amount here". A dial set directly still wins.
