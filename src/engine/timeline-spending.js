@@ -4,8 +4,8 @@
  * places, pattern badges) and the irregular dial's items (timeline-core.js says how the timeline
  * files fit together).
  *
- * Adds to E._timeline: rowIdOf, spendGroups, drillFor, irregularFor, and the constants
- * TINY_CATEGORY_CENTS, STABLE_MIN_CHARGES, STABLE_SPREAD and OTHER_CATEGORY.
+ * Adds to E._timeline: rowIdOf, spendGroups, regroupedByName, drillFor, irregularFor, and the
+ * constants TINY_CATEGORY_CENTS, STABLE_MIN_CHARGES, STABLE_SPREAD and OTHER_CATEGORY.
  */
 (function (root) {
   const E = root.BudgetEngine || (root.BudgetEngine = {});
@@ -73,6 +73,31 @@
     const parts = t ? E.ledger.partsOf(t) : [];
     const moved = merchantGroup(x.merchant, cfg);
     return allocate(cents, parts, t ? t.category : null).map(sh => ({ category: sh.category, cents: sh.cents, group: moved || categoryGroup(sh.category, cfg).group, moved: !!moved }));
+  }
+
+  /**
+   * Categories planned in another group now than when category names were read by their exact
+   * names only (categories.isEssentialByName: an imported 'Natural gas' or the energy aggregate was
+   * flexible then): each category of the baseline's everyday spending (split parts included; not a
+   * place moved as a whole) and each category budget with an amount, whose group comes from the
+   * taxonomy (a group the household chose in ui.plan.groups is never treated as moved).
+   * [{ category, from, to }] (from: the group then, to: the group now), by name.
+   */
+  function regroupedByName(base, byId, cfg, targets) {
+    const names = new Set();
+    for (const x of base.spends || []) {
+      if (x.kind === 'oneTime') continue;
+      for (const sh of sharesOf(x, x.planCents, byId, cfg)) if (!sh.moved) names.add(sh.category);
+    }
+    for (const [k, v] of Object.entries(isObj(targets) ? targets : {})) if (isCents(v) && v >= 0) names.add(k);
+    const out = [];
+    for (const category of names) {
+      const now = categoryGroup(category, cfg);
+      if (now.source !== 'taxonomy') continue;
+      const then = E.categories.isEssentialByName(category) ? 'essentials' : 'flexible';
+      if (then !== now.group) out.push({ category, from: then, to: now.group });
+    }
+    return out.sort((a, b) => (a.category < b.category ? -1 : a.category > b.category ? 1 : 0));
   }
 
   /**
@@ -451,5 +476,5 @@
     };
   }
 
-  Object.assign(T, { rowIdOf, spendGroups, drillFor, irregularFor, TINY_CATEGORY_CENTS, STABLE_MIN_CHARGES, STABLE_SPREAD, OTHER_CATEGORY });
+  Object.assign(T, { rowIdOf, spendGroups, regroupedByName, drillFor, irregularFor, TINY_CATEGORY_CENTS, STABLE_MIN_CHARGES, STABLE_SPREAD, OTHER_CATEGORY });
 })(typeof globalThis !== 'undefined' ? globalThis : this);

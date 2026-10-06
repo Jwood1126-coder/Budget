@@ -9,7 +9,9 @@
  *                                               -> private/plan-report.md and private/plan-report.json
  *   node tools/plan-report.cjs --sample         the fictional sample; prints the report (Markdown)
  *   node tools/plan-report.cjs --workbook f.json  a workbook exported from the app (Data & privacy):
- *                                               the household's in-browser edits count, then setup sync
+ *                                               the household's in-browser edits count, then setup sync,
+ *                                               then the upgrades the Plan screen applies once when it
+ *                                               opens (named under "Setup sync")
  *   node tools/plan-report.cjs --months 24      plan months in the month-by-month tables (1-60; default 12)
  *   node tools/plan-report.cjs --json           print the JSON instead of the Markdown (a private report
  *                                               is still written to its files)
@@ -151,11 +153,19 @@ function buildReport(input) {
   }
 
   const horizon = E.timeline.HORIZONS.find(h => h >= Math.max(months, 12)) || E.timeline.HORIZONS[E.timeline.HORIZONS.length - 1];
-  const settings = Object.assign({}, state.ui.plan, { horizon });
   const txns = E.ledger.applyEdits(dataset, state.ledgerEdits);
   const coverageMap = E.ledger.coverageMap(dataset);
-  const build = compare => E.timeline.build({ txns, dataset, plan: state.plan, settings, today, coverageMap, compare });
-  const tl = build();
+  const build = compare => E.timeline.build({ txns, dataset, plan: state.plan, settings: Object.assign({}, state.ui.plan, { horizon }), today, coverageMap, compare });
+  let tl = build();
+  // The upgrades the Plan screen applies once when it opens (E.timeline.pendingUpgrade), applied
+  // here the same way, so the report shows the plan the app shows.
+  const pending = E.timeline.pendingUpgrade(tl);
+  let upgrade = null;
+  if (pending) {
+    state = pending.apply(state);
+    tl = build();
+    upgrade = { steps: pending.steps.slice(), note: pending.note || null };
+  }
   const people = tl.people;
   const planStart = tl.planStart;
   const in12 = E.months.add(planStart, 11);
@@ -248,7 +258,7 @@ function buildReport(input) {
       missing: tl.balances.missing, assumed: tl.balances.assumed, notes: tl.balances.notes,
     },
     baseline: { setting: tl.baseline.setting, count: tl.baseline.count, label: tl.baseline.label },
-    setup: { notes: setupNotes, report: setupReport, loadNotes },
+    setup: { notes: setupNotes, report: setupReport, loadNotes, upgrade },
   };
   report.toCheck = toCheck(E, report, state, first);
   return report;
@@ -453,6 +463,7 @@ function toMarkdown(E, r) {
 
   L.push('## Setup sync', '');
   const notes = r.setup.notes.concat(r.setup.loadNotes);
+  if (r.setup.upgrade) notes.push('Applied as the Plan screen does when it opens (' + r.setup.upgrade.steps.join(', ') + ')' + (r.setup.upgrade.note ? ': ' + r.setup.upgrade.note : '.'));
   if (!notes.length) L.push('Nothing to report: the budget already matches the setup file.');
   for (const n of notes) L.push('- ' + n);
   L.push('');

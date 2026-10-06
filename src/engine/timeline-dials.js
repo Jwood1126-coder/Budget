@@ -1,17 +1,18 @@
 'use strict';
 /*
- * BudgetEngine.timeline: observed deposits (hints), the dials, one plan month from them, and the
- * carry-over of the amounts set for the earlier card and bank dials (timeline-core.js says how
- * the timeline files fit together).
+ * BudgetEngine.timeline: observed deposits (hints), the dials, one plan month from them, the
+ * carry-over of the amounts set for the earlier card and bank dials, and of the Essentials or
+ * Flexible amount set before imported category names were resolved (timeline-core.js says how the
+ * timeline files fit together).
  *
- * Adds to E._timeline: depositHint, buildDials, planMonth, legacyDialsPlan.
- * Uses, when called: drillFor and irregularFor (timeline-spending.js).
+ * Adds to E._timeline: depositHint, buildDials, planMonth, legacyDialsPlan, regroupDialsPlan.
+ * Uses, when called: drillFor, irregularFor and regroupedByName (timeline-spending.js).
  */
 (function (root) {
   const E = root.BudgetEngine || (root.BudgetEngine = {});
   const T = E._timeline;
   const { isCents, has, own, plural, sumKnown, roundCents, median, late, IN_KEYS, LEGACY_DIALS, SPEND_GROUPS, SPEND_DIALS, DIAL_LABEL } = T;
-  const drillFor = late('drillFor'), irregularFor = late('irregularFor');
+  const drillFor = late('drillFor'), irregularFor = late('irregularFor'), regroupedByName = late('regroupedByName');
 
   const SHORT_LABEL = { essentials: 'Essentials', flexible: 'Flexible', irregular: 'Irregular' };
 
@@ -148,6 +149,21 @@
     };
   }
 
+  /** A list of names: "A", "A and B", "A, B and C". */
+  const listText = names => (names.length < 2 ? names.join('') : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1]);
+
+  /**
+   * The basis sentence of a spending dial set directly with a regrouping adjustment: "Set here:
+   * $300.00, less $200.00 for Groceries & meal kits, now planned in Flexible" (taken off: they
+   * moved to the other group), "…, plus $50.00 for Dining & drinks, now planned here".
+   */
+  function shiftText(key, shift) {
+    const other = SPEND_GROUPS.find(k => k !== key);
+    const what = shift.categories.length ? listText(shift.categories) : 'categories moved between the groups';
+    return 'Set here: ' + E.money.format(shift.setCents) + ', ' + (shift.cents < 0 ? 'less ' : 'plus ') + E.money.format(Math.abs(shift.cents)) + ' for ' + what
+      + ', now planned ' + (shift.cents < 0 ? 'in ' + SHORT_LABEL[other] : 'here');
+  }
+
   /**
    * The dials. `targets` (plan.targets) are the category budgets the essentials and flexible rows
    * use; `goals` (plan.savings) give the savings dial its baseline when any has a monthly amount;
@@ -158,12 +174,16 @@
    * screen makes the split permanent (timeline.splitOther). `seenDebtCents` (billChanges): the
    * current debt-payment bills the baseline months hold (null: none); when there are any ($0
    * included), they are the debt part of the other dial's baseline, lower or higher than the
-   * average of debt payments (a bill
-   * is the current amount: a payment lowered or refinanced replaces the older, higher history;
+   * average of debt payments (a bill is the current amount: a payment lowered or refinanced
+   * replaces the older, higher history;
    * the history cannot be split by bill, so none of it is added on top). When the average
    * differs from the bills, the dial's `debtCheck` says so ({ billsCents, averageCents,
    * historyMore }; else null): the history cannot be matched to the bills one by one, and when
    * it paid more (historyMore) a debt paid every month may be missing from the bills.
+   * Essentials or flexible set directly with a regrouping adjustment (ui.plan.dialShift[key]: what
+   * categories moved between the two groups since add or take off): planCents = the amount set +
+   * its cents (never below $0; one already below $0 is not lowered), `shift` = { cents,
+   * categories, setCents } (else null), and the basis says so (shiftText).
    */
   function buildDials({ base, people, cfg, byId, requested, funding, targets, goals, investments, seenDebtCents }) {
     const n = base.count;
@@ -219,8 +239,19 @@
       const extra = n && drill.yearlyCount ? plural(drill.yearlyCount, 'yearly bill') + ' spread over 12 months' : '';
       const d = Object.assign({ key, group: 'out', label: DIAL_LABEL[key], baselineCents: drill.baselineCents }, resolve(key, drill.baselineCents, drill.rowsCents, drill.overridden), {
         basis: windowText + (extra ? '; ' + extra : '') + (drill.stableCount ? '; regular bills at their latest amount' : '')
-          + (drill.budgetCount ? '; ' + plural(drill.budgetCount, 'category budget') + ' from Budget' : ''), hint: null, drill,
+          + (drill.budgetCount ? '; ' + plural(drill.budgetCount, 'category budget') + ' from Budget' : ''), hint: null, drill, shift: null,
       });
+      // Set directly, with categories moved between the groups since (ui.plan.dialShift): what they
+      // add or take off; the amount set stays as saved.
+      const sh = d.source === 'direct' ? own(cfg.dialShift, key) : undefined;
+      if (sh && isCents(sh.cents) && sh.cents !== 0) {
+        const set = d.planCents;
+        let planned = set + sh.cents;
+        if (sh.cents < 0 && planned < 0) planned = Math.min(set, 0);
+        d.planCents = planned;
+        d.shift = { cents: sh.cents, categories: Array.isArray(sh.categories) ? sh.categories.slice() : [], setCents: set };
+        d.basis += '. ' + shiftText(key, d.shift);
+      }
       dials.push(Object.assign(d, splitSpending(d, drill, own(cfg.cardSplit, key))));
     }
     const irr = irregularFor(base, byId, cfg);
@@ -444,5 +475,71 @@
     return { from, to, parts, skipped, note };
   }
 
-  Object.assign(T, { depositHint, buildDials, planMonth, legacyDialsPlan, budgetFor });
+  /**
+   * How an amount set directly for Essentials or Flexible before imported category names were read
+   * as the category they stand for (settings.groupsRead 'exact': when only exact taxonomy names
+   * were essential, categories.isEssentialByName) carries over to the reading now, or null when
+   * groupsRead is 'resolved'. The household chose that amount for its group as it was then; the
+   * amount stays as saved, and what moved is added to or taken off it (ui.plan.dialShift):
+   *   moved   the categories planned in another group now ([{ category, from, to }], regroupedByName)
+   *   set     the one spending group set directly ('essentials' or 'flexible'), or null when both or
+   *           neither are (their total is right as it is)
+   *   cents   d, what moved from Flexible to Essentials (negative: the other way), measured on the
+   *           group not set directly, at what it plans (its rows, else its baseline) now and as it
+   *           was then (drillFor with ui.plan.groups holding each moved category's earlier group):
+   *           Essentials now − then, or Flexible then − now; null when not worked out (no moved
+   *           category, nothing or both set, or no baseline)
+   *   shift   { dial, setCents, cents, categories, plannedCents }: what regroupDials adds to
+   *           ui.plan.dialShift[dial] while the dial still holds setCents (the saved amount),
+   *           else null. Flexible alone: −d (Essentials now holds d, which Flexible counted too);
+   *           Essentials alone: +d (Flexible no longer holds it). plannedCents: the dial's plan
+   *           amount with it (never below $0). d = 0: null.
+   *   note    what it does, for meta.migrationNotes ('ui.plan.dialShift.<dial>: …'), else null
+   * The plan is not adjusted here: the dials are what the budget holds until regroupDials writes it.
+   */
+  function regroupDialsPlan({ base, byId, cfg, targets, dialsByKey }) {
+    if (cfg.groupsRead !== 'exact') return null;
+    const moved = regroupedByName(base, byId, cfg, targets);
+    const direct = SPEND_GROUPS.filter(k => isCents(own(cfg.dials, k)));
+    const set = direct.length === 1 ? direct[0] : null;
+    const out = { moved, set, cents: null, shift: null, note: null };
+    if (!moved.length || !set) return out;
+    const other = SPEND_GROUPS.find(k => k !== set);
+    const then = Object.assign({}, cfg, { groups: Object.assign({}, cfg.groups, Object.fromEntries(moved.map(m => [m.category, m.from]))) });
+    const drill = drillFor(other, base, byId, then, targets);
+    const was = drill.overridden ? drill.rowsCents : drill.baselineCents;
+    const now = dialsByKey[other] ? dialsByKey[other].planCents : null;
+    if (!isCents(was) || !isCents(now)) return out;
+    out.cents = other === 'essentials' ? now - was : was - now;
+    const delta = set === 'flexible' ? 0 - out.cents : out.cents;
+    if (delta === 0) return out;
+    const saved = cfg.dials[set];
+    const prior = own(cfg.dialShift, set);
+    const total = (prior && isCents(prior.cents) ? prior.cents : 0) + delta;
+    let planned = saved + total;
+    if (total < 0 && planned < 0) planned = Math.min(saved, 0);
+    out.shift = { dial: set, setCents: saved, cents: delta, categories: moved.map(m => m.category), plannedCents: planned };
+    // The note: what it does, by how the categories are read now.
+    const names = moved.map(m => {
+      const members = E.categories.membersOf(m.category);
+      const read = members ? members.join(' + ') : E.categories.resolve(m.category);
+      return { label: '“' + m.category + '”', read: read && read !== m.category ? read : null };
+    });
+    const where = Array.from(new Set(moved.map(m => m.to)));
+    const plannedIn = where.length === 1 ? 'planned in ' + SHORT_LABEL[where[0]] : 'planned in the other group';
+    let why;
+    if (names.length === 1) why = names[0].label + ', now ' + (names[0].read ? 'read as ' + names[0].read + ' and ' : '') + plannedIn;
+    else {
+      const items = names.slice(0, 4).map(x => x.label + (x.read ? ' (' + x.read + ')' : ''));
+      const more = names.length - items.length;
+      if (more) items.push(more + ' more ' + (more === 1 ? 'category' : 'categories'));
+      why = listText(items) + ', now read as the categories they stand for and ' + plannedIn;
+    }
+    out.note = 'ui.plan.dialShift.' + set + ': ' + SHORT_LABEL[set] + ' is planned at ' + E.money.format(planned) + ': the ' + E.money.format(saved) + ' you set, '
+      + (delta < 0 ? 'less ' : 'plus ') + E.money.format(Math.abs(delta)) + ' for ' + why + ', so ' + (names.length === 1 ? 'it is' : 'they are')
+      + (delta < 0 ? ' not counted twice.' : ' not left out.');
+    return out;
+  }
+
+  Object.assign(T, { depositHint, buildDials, planMonth, legacyDialsPlan, regroupDialsPlan, budgetFor });
 })(typeof globalThis !== 'undefined' ? globalThis : this);
