@@ -229,3 +229,22 @@ test('debt: bills that are not current joint debt payments the history holds lea
   const direct = build(ds, planOf({ bills: [installment()] }), { dials: { other: 3000 } });
   assert.equal(direct.months.find(m => m.month === '2032-01').out.debt, 3000);
 });
+
+test('a bill in a category an aggregate budget covers (or under an imported alias) is covered by that budget, not added again', () => {
+  const tx = [];
+  let n = 0;
+  const add = (m, c, d) => tx.push({ id: 'agg-' + (++n), accountId: 'checking', date: m + '-15', amountCents: -100 * d, kind: 'spend', category: c, merchant: c, description: c });
+  for (let i = 1; i <= 12; i++) { const m = '2025-' + String(i).padStart(2, '0'); add(m, 'Natural gas', 100); add(m, 'Electricity', 50); }
+  const ds = E.ledger.normalizeDataset({ schemaVersion: 2, datasetId: 'agg-bill', isSynthetic: true,
+    accounts: [{ id: 'checking', label: 'Example checking', type: 'checking', scope: 'joint', coverage: [{ start: '2025-01-01', end: '2025-12-31' }] }], transactions: tx });
+  const plan = { people: [{ id: 'p1', name: 'Person A' }], incomes: [], debts: [], savings: [], personalSpending: [], balances: {},
+    bills: [{ id: 'el', label: 'Electric bill', type: 'utility', category: 'Electric', fundedFrom: 'joint', monthlyCents: 5000, status: 'existing' }],
+    targets: { 'Energy (gas + electric, migrated)': 15000 } };
+  const run = p => E.timeline.build({ txns: E.ledger.applyEdits(ds, {}), dataset: ds, plan: p, settings: { baselineMonths: 12 }, today: '2026-01-06' });
+  const tl = run(plan);
+  assert.deepEqual(tl.bills.map(b => [b.id, b.status]), [['el', 'inBudget']]);
+  assert.equal(tl.months.find(m => m.month === '2026-01').out.essentials, 15000, 'energy counted once');
+  // Without the aggregate budget the Electric bill is seen in its alias's history ('Electricity'), not added on top.
+  const noBudget = run(Object.assign({}, plan, { targets: {} }));
+  assert.deepEqual(noBudget.bills.map(b => [b.id, b.status]), [['el', 'seen']]);
+});

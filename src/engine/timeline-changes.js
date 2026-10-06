@@ -126,12 +126,21 @@
    */
   function billChanges({ plan, base, byId, planStart, targets }) {
     const list = Array.isArray(plan.bills) ? plan.bills : [];
+    // Category names compared as the taxonomy reads them (an imported alias is its taxonomy category).
+    const canon = name => (typeof name === 'string' ? E.categories.resolve(name) || name : name);
     const cats = new Set();
     for (const x of base.spends || []) {
       if (!(x.cents > 0)) continue;
       const t = byId.get(x.id);
       const parts = t ? E.ledger.partsOf(t) : [];
-      if (parts.length) { for (const p of parts) if (p.spendCents > 0) cats.add(p.category); } else if (t) cats.add(t.category);
+      if (parts.length) { for (const p of parts) if (p.spendCents > 0) cats.add(canon(p.category)); } else if (t) cats.add(canon(t.category));
+    }
+    // Categories a budget already covers: each budgeted category, and every member of a budgeted aggregate.
+    const budgeted = new Set();
+    for (const [name, cents] of Object.entries(isObj(targets) ? targets : {})) {
+      if (!isCents(cents)) continue;
+      budgeted.add(canon(name));
+      for (const m of E.categories.membersOf(name) || []) budgeted.add(m);
     }
     const debtSeen = !!(base.total && base.total.actual && base.total.actual.debt > 0);
     const windowStart = base.start || planStart;
@@ -147,10 +156,10 @@
       if (b.fundedFrom !== 'joint') { info.status = 'notJoint'; continue; }
       if (!isCents(b.monthlyCents) || b.monthlyCents <= 0) { info.status = 'noAmount'; continue; }
       if (!isDebt && !category) { info.status = 'noCategory'; continue; }
-      if (!isDebt && isCents(own(targets, category))) { info.status = 'inBudget'; continue; }
+      if (!isDebt && (isCents(own(targets, category)) || budgeted.has(canon(category)))) { info.status = 'inBudget'; continue; }
       const start = E.months.isMonth(b.startMonth) ? b.startMonth : null;
       const end = E.months.isMonth(b.endMonth) && (!start || b.endMonth >= start) ? b.endMonth : null;
-      const seen = b.status !== 'planned' && !(start && start > planStart) && (isDebt ? debtSeen : cats.has(category));
+      const seen = b.status !== 'planned' && !(start && start > planStart) && (isDebt ? debtSeen : cats.has(canon(category)));
       const common = { kind: 'monthly', group: isDebt ? 'debt' : 'essentials', personId: null, accepted: true, template: null, scenario: null, source: 'bill', billId: b.id, readOnly: true };
       if (seen) {
         // A debt payment the baseline months hold, still running in them: counted at its amount.
