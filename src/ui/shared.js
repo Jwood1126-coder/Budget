@@ -164,13 +164,15 @@
       if (!reason) throw new E.ValidationError('Add a short reason first.');
       editMany(ctx.app, ids.map(txnId => ({ txnId, field, value, reason })), { message: el.dataset.message || 'Saved.' });
     },
-    /** Clear every correction on a transaction (history is kept). */
+    /**
+     * Clear every correction on a transaction (history is kept): the same changes as the
+     * Transactions page's revert (review.revertChanges), so a reimbursement decision clears on both linked rows.
+     */
     'ledger:revert': (ctx, el) => {
       const id = el.dataset.txn;
-      const edit = ctx.state.ledgerEdits[id];
-      if (!edit) return;
-      const fields = Object.keys(edit).filter(k => k !== 'history' && edit[k] !== undefined);
-      editMany(ctx.app, fields.map(f => ({ txnId: id, field: f, value: null, reason: 'Reverted to the imported value' })), { message: 'Correction reverted.' });
+      const changes = E.review.revertChanges(ctx.state.ledgerEdits, ctx.txns, id);
+      if (!changes.length) return;
+      editMany(ctx.app, changes, { message: changes.some(ch => ch.txnId !== id) ? 'Correction reverted on both linked rows.' : 'Correction reverted.' });
     },
   };
 

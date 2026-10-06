@@ -713,6 +713,45 @@ module.exports = [
     },
   },
   {
+    name: 'irregular costs: one left out of planning in Transactions or Spending is unticked with a note; ticking it puts it back on purpose',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      const exp = await timeline(page);
+      const item = exp.irregular.rows.slice().sort((a, b) => b.cents - a.cents)[0];
+      const d = dialOf(exp, 'irregular');
+      const meta = () => page.textContent(`#plan-irr-${item.id}-meta`).then(x => x.trim());
+      const irregularOff = () => page.evaluate(() => window.HouseholdBudget.getState().ui.plan.irregularOff);
+      // "Leave out of planning" (the ledger edit the Spending and Transactions buttons write).
+      await page.evaluate(id => {
+        const H = window.HouseholdBudget, st = H.getState();
+        st.ledgerEdits[id] = H.engine.review.editRecord(st.ledgerEdits[id], 'planningBaseline', 'exclude', 'Not expected again', new Date().toISOString());
+        H.setState(st);
+      }, item.id);
+      await t.settled();
+      const out = await timeline(page);
+      const d2 = dialOf(out, 'irregular');
+      assert.ok(near(d.planCents - d2.planCents, item.monthlyCents, 1), `irregular −${d.planCents - d2.planCents}, expected ${item.monthlyCents}`);
+      assert.equal(d2.source, 'baseline', 'the Plan itself is not changed');
+      assert.deepEqual(await irregularOff(), {}, 'nothing written to the Plan’s choices');
+      await page.waitForFunction(v => document.querySelector('#plan-dial-irregular').value === v, boxText(d2.planCents));
+      await page.click('#plan-drill-irregular > summary');
+      assert.equal(await page.isChecked(`#plan-irr-${item.id}-on`), false, 'unticked by default');
+      assert.match(await meta(), /^left out of planning in Transactions or Spending/);
+      // Ticked: in the allowance on purpose (stored as false); the ledger edit stays.
+      await page.check(`#plan-irr-${item.id}-on`);
+      await page.waitForFunction(id => window.HouseholdBudget.getState().ui.plan.irregularOff[id] === false, item.id);
+      await page.waitForFunction(v => document.querySelector('#plan-dial-irregular').value === v, boxText(d.planCents));
+      assert.equal(await page.evaluate(id => window.HouseholdBudget.getState().ledgerEdits[id].planningBaseline, item.id), 'exclude');
+      assert.match(await meta(), /^put back in here; left out of planning in Transactions or Spending/);
+      // Unticked again: back to its default, nothing kept.
+      await page.uncheck(`#plan-irr-${item.id}-on`);
+      await page.waitForFunction(id => !Object.prototype.hasOwnProperty.call(window.HouseholdBudget.getState().ui.plan.irregularOff, id), item.id);
+      await page.waitForFunction(v => document.querySelector('#plan-dial-irregular').value === v, boxText(d2.planCents));
+      assert.match(await meta(), /^left out of planning in Transactions or Spending/);
+    },
+  },
+  {
     name: 'a place’s transactions: hidden until asked for, newest first with the bank’s text, account and amount, each with its category; “Show all” draws the rest',
     async run(t) {
       const { page, assert } = t;

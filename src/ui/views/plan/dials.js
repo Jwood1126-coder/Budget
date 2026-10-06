@@ -223,10 +223,13 @@
     const items = dr.rows.map(i => {
       const id = 'plan-irr-' + i.id;
       const what = `${i.label} · ${fmt.date(i.date)} · ${exact(i.cents)}`;
+      // Left out of planning in Transactions or Spending: out by default; ticking it puts it back on purpose.
+      const where = i.planningExcluded ? (i.included ? 'put back in here; left out of planning in Transactions or Spending' : 'left out of planning in Transactions or Spending')
+        : i.included ? 'in the allowance' : 'left out by you';
       return `<li class="drill-row irr-row${i.included ? '' : ' is-out'}" data-txn="${esc(i.id)}">
           <label class="drill-name" for="${esc(id)}-on"><input type="checkbox" id="${esc(id)}-on" data-action="plan:irregular" data-txn="${esc(i.id)}" data-name="${esc(i.label)}"${i.included ? ' checked' : ''} aria-describedby="${esc(id)}-meta"><span>${esc(what)}</span></label>
           <span class="irr-monthly" id="${esc(id)}-monthly">${esc(amt(i.monthlyCents))}/mo</span>
-          <p class="drill-meta" id="${esc(id)}-meta"><span>${esc(i.included ? 'in the allowance' : 'left out by you')}${i.category ? ' · ' + esc(i.category) : ''}</span><span class="drill-paid" title="${esc(PAID_TIP[i.paidBy] || '')}">${esc(PAID[i.paidBy] || '')}</span>${c.button('Count as regular', { action: 'plan:irregular-regular', data: { txn: i.id, name: i.label }, cls: 'btn-small btn-ghost drill-move', id: id + '-regular', ariaLabel: `Count ${i.label} on ${fmt.date(i.date)} as regular spending in ${i.category || 'its category'}` })}</p>
+          <p class="drill-meta" id="${esc(id)}-meta"><span>${esc(where)}${i.category ? ' · ' + esc(i.category) : ''}</span><span class="drill-paid" title="${esc(PAID_TIP[i.paidBy] || '')}">${esc(PAID[i.paidBy] || '')}</span>${c.button('Count as regular', { action: 'plan:irregular-regular', data: { txn: i.id, name: i.label }, cls: 'btn-small btn-ghost drill-move', id: id + '-regular', ariaLabel: `Count ${i.label} on ${fmt.date(i.date)} as regular spending in ${i.category || 'its category'}` })}</p>
           ${txnsDetails(ctx, tl, i.id, i.txnIds || [i.id], { label: 'Show transaction' })}
         </li>`;
     }).join('');

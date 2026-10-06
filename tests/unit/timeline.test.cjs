@@ -625,15 +625,17 @@ test('one-time items: in the irregular allowance by default (one-time costs ÷ m
   assert.equal(r2.dialsByKey.flexible.baselineCents, r.dialsByKey.flexible.baselineCents + E.money.divide(129900, 9));
   assert.equal(r2.dialsByKey.irregular.baselineCents, 0);
   assert.equal(r2.months.find(m => m.month === '2026-04').out.card, april.out.card, 'actual months always count it');
-  // Leaving out an ordinary purchase by hand makes it a one-time cost: in the allowance, not the category.
+  // Leaving out an ordinary purchase by hand takes it out of planning: listed as a one-time cost,
+  // but out of the allowance (by default) and out of its category.
   const grocery = ds.transactions.find(t => t.merchant === 'Harbor Grocer' && t.date === '2026-05-10');
   const exclude = Object.assign({}, include, { [grocery.id]: E.review.editRecord(null, 'planningBaseline', 'exclude', 'Party supplies') });
   const r3 = run(ds, { edits: exclude, today: '2026-07-03' });
   const manual = r3.baseline.oneTime.find(o => o.id === grocery.id);
   assert.equal(manual.auto, false);
   assert.equal(manual.cents, -grocery.amountCents);
-  assert.equal(r3.dialsByKey.irregular.drill.rows.find(i => i.id === grocery.id).auto, false);
-  assert.equal(r3.dialsByKey.irregular.baselineCents, E.money.divide(-grocery.amountCents, 9));
+  const listed = r3.dialsByKey.irregular.drill.rows.find(i => i.id === grocery.id);
+  assert.deepEqual([listed.auto, listed.planningExcluded, listed.included], [false, true, false]);
+  assert.deepEqual([r3.dialsByKey.irregular.baselineCents, r3.dialsByKey.irregular.planCents, r3.dialsByKey.irregular.source], [0, 0, 'baseline']);
   const groceries = rows => rows.find(x => x.level === 1 && x.label === 'Groceries').avgCents;
   assert.equal(groceries(r3.dialsByKey.essentials.drill.rows), E.money.divide(groceries(r2.dialsByKey.essentials.drill.rows) * 9 + grocery.amountCents, 9));
 });
@@ -917,6 +919,61 @@ test('irregular: the baseline is one-time costs ÷ months; one can be left out (
   // Nothing at all: the dial is still there, at $0.
   const none = run(household(), { today: '2026-07-03' }).dialsByKey.irregular;
   assert.deepEqual([none.baselineCents, none.planCents, none.basis], [0, 0, 'No one-time costs over Oct 2025–Jun 2026']);
+});
+
+test('irregular: a cost left out of planning in Transactions or Spending is out of the allowance by default; the Plan can put it back on purpose; clearing the edit restores the default', () => {
+  const dentist = spend('chk', '2026-03-07', 162000, 'Brookside Dental Group', 'Dental');
+  const trip = spend('card', '2026-05-02', 84000, 'Coastline Air', 'Travel');
+  const ds = household({ extra: [dentist, trip] });
+  const grocery = ds.transactions.find(t => t.merchant === 'Harbor Grocer' && t.date === '2026-05-10');
+  const at = '2026-07-01T09:00:00.000Z';
+  const ledger = (st, id, value, why) => Object.assign({}, st, { ledgerEdits: Object.assign({}, st.ledgerEdits, { [id]: E.review.editRecord(st.ledgerEdits[id], 'planningBaseline', value, why, at) }) });
+  const build = st => T.build({ txns: L.applyEdits(ds, st.ledgerEdits), dataset: ds, plan: Object.assign({}, st.plan, { people: PEOPLE }), settings: st.ui.plan, today: '2026-07-03' });
+  const item = (r, id) => r.dialsByKey.irregular.drill.rows.find(i => i.id === id);
+  const actual = r => r.months.filter(m => m.status === 'actual').map(m => [m.month, m.in.total, m.out.total, m.out.card, m.out.bank, m.net]);
+  const fresh = E.state.defaults(null, ds);
+  const r0 = build(fresh);
+  assert.deepEqual([item(r0, dentist.id).included, item(r0, dentist.id).planningExcluded], [true, false]);
+  // "Leave out of planning" on the dentist (found automatically) and on an ordinary grocery run.
+  const state = ledger(ledger(fresh, dentist.id, 'exclude', 'Not expected again'), grocery.id, 'exclude', 'Party supplies');
+  const r1 = build(state);
+  const irr = r1.dialsByKey.irregular;
+  assert.deepEqual([dentist.id, trip.id, grocery.id].map(id => [item(r1, id).included, item(r1, id).planningExcluded]), [[false, true], [true, false], [false, true]], 'listed, the left-out ones unticked');
+  assert.deepEqual([irr.source, irr.baselineCents, irr.planCents, irr.drill.overridden], ['baseline', E.money.divide(84000, 9), E.money.divide(84000, 9), false], 'only the trip is planned');
+  assert.equal(r1.plan.out.irregular, E.money.divide(84000, 9));
+  assert.equal(r1.dialsByKey.irregular.cardCents, E.money.divide(84000, 9), 'the trip went on the card');
+  assert.equal(r1.changed, false, 'the Plan itself is not changed');
+  assert.deepEqual(actual(r1), actual(r0), 'what happened is never changed');
+  assert.deepEqual(state.ui.plan.irregularOff, {}, 'nothing is written to the Plan’s choices');
+  // Put back in on purpose from the Plan: stored as false; the ledger edit stays.
+  const back = T.setIrregular(state, dentist.id, true);
+  assert.deepEqual(back.ui.plan.irregularOff, { [dentist.id]: false });
+  assert.equal(back.ledgerEdits[dentist.id].planningBaseline, 'exclude');
+  const r2 = build(back);
+  assert.deepEqual([item(r2, dentist.id).included, item(r2, grocery.id).included], [true, false]);
+  assert.deepEqual([r2.dialsByKey.irregular.source, r2.dialsByKey.irregular.planCents], ['rows', E.money.divide(162000 + 84000, 9)]);
+  assert.equal(r2.changed, true);
+  assert.deepEqual(actual(r2), actual(r0));
+  // The choice survives a save and load; unticking it again (or a reset) goes back to the default.
+  const saved = E.state.sanitize(JSON.parse(JSON.stringify(back)), null, ds).state;
+  assert.deepEqual(saved.ui.plan.irregularOff, { [dentist.id]: false });
+  assert.equal(item(build(saved), dentist.id).included, true);
+  assert.deepEqual(T.setIrregular(back, dentist.id, false).ui.plan.irregularOff, {});
+  assert.deepEqual(T.resetDial(back, 'irregular').ui.plan.irregularOff, {});
+  assert.equal(item(build(T.resetDial(back, 'irregular')), dentist.id).included, false);
+  // Leaving out one that is not left out of planning still stores true, as before.
+  assert.deepEqual(T.setIrregular(state, trip.id, false).ui.plan.irregularOff, { [trip.id]: true });
+  // "Include in planning again" clears the edit: the dentist is a one-time cost found
+  // automatically again, in the allowance by default; the grocery run stays out.
+  const cleared = ledger(state, dentist.id, null, 'It recurs after all');
+  const r3 = build(cleared);
+  assert.deepEqual([item(r3, dentist.id).included, item(r3, dentist.id).planningExcluded, item(r3, dentist.id).auto], [true, false, true]);
+  assert.equal(item(r3, grocery.id).included, false);
+  assert.deepEqual([r3.dialsByKey.irregular.source, r3.dialsByKey.irregular.planCents], ['baseline', E.money.divide(162000 + 84000, 9)]);
+  // Clearing the grocery run's edit too: an ordinary purchase again, back in its category.
+  const r4 = build(ledger(cleared, grocery.id, null, 'Ordinary week after all'));
+  assert.equal(item(r4, grocery.id), undefined);
+  assert.deepEqual([r4.dialsByKey.irregular.planCents, r4.dialsByKey.essentials.planCents], [r0.dialsByKey.irregular.planCents, r0.dialsByKey.essentials.planCents]);
 });
 
 test('card and bank are derived: on the same data they equal the earlier card and bank dial math', () => {

@@ -402,23 +402,29 @@
 
   /**
    * The irregular dial's items: every one-time cost of the baseline months (found automatically
-   * or marked by the household), in the allowance unless the household left it out
-   * (ui.plan.irregularOff). baselineCents = Σ one-time costs ÷ months; rowsCents = Σ those still
-   * in ÷ months. One the household counts as regular (planningBaseline 'include') is in its
-   * category instead and not listed here. Each item's txnIds is [its own id], like a drill row's.
+   * or marked by the household). One found automatically is in the allowance by default; one the
+   * household left out of planning (the planningBaseline 'exclude' edit, made in Transactions or
+   * Spending: `planningExcluded`) is out by default. The Plan's own choice wins either way
+   * (ui.plan.irregularOff[id]: true = left out, false = put back in on purpose).
+   * baselineCents = Σ costs in by default ÷ months; rowsCents = Σ those in now ÷ months;
+   * overridden when any differs from its default. One the household counts as regular
+   * (planningBaseline 'include') is in its category instead and not listed here. Each item's
+   * txnIds is [its own id], like a drill row's.
    */
   function irregularFor(base, byId, cfg) {
     const n = base.count;
     const items = (base.oneTime || []).map(o => {
       const t = byId.get(o.id);
+      const set = own(cfg.irregularOff, o.id);
       return {
         id: o.id, txnIds: [o.id], label: o.merchant, date: o.date, month: o.date.slice(0, 7), cents: o.cents, monthlyCents: n ? E.money.divide(o.cents, n) : null,
-        included: own(cfg.irregularOff, o.id) !== true, auto: !!o.auto, paidBy: o.role === 'card' ? 'card' : 'bank',
+        included: typeof set === 'boolean' ? !set : !o.planningExcluded, planningExcluded: !!o.planningExcluded, auto: !!o.auto, paidBy: o.role === 'card' ? 'card' : 'bank',
         category: t && typeof t.category === 'string' ? t.category : null, description: o.description, accountLabel: o.accountLabel,
       };
     });
     const sum = (list, f) => list.reduce((s, i) => s + f(i), 0);
     const on = items.filter(i => i.included);
+    const byDefault = items.filter(i => !i.planningExcluded);
     const card = list => sum(list.filter(i => i.paidBy === 'card'), i => i.cents);
     const cardAbs = sum(items.filter(i => i.paidBy === 'card'), i => Math.abs(i.cents)), allAbs = sum(items, i => Math.abs(i.cents));
     const totalCents = sum(items, i => i.cents);
@@ -434,12 +440,12 @@
     return {
       kind: 'items', rows: items, count: items.length, includedCount: on.length, leftOutCount: items.length - on.length,
       totalCents, includedCents: sum(on, i => i.cents),
-      baselineCents: n ? E.money.divide(totalCents, n) : null,
+      baselineCents: n ? E.money.divide(sum(byDefault, i => i.cents), n) : null,
       rowsCents: n ? E.money.divide(sum(on, i => i.cents), n) : null,
-      baselineCardCents: n ? E.money.divide(card(items), n) : null,
+      baselineCardCents: n ? E.money.divide(card(byDefault), n) : null,
       rowsCardCents: n ? E.money.divide(card(on), n) : null,
       cardShare: allAbs ? cardAbs / allAbs : 0,
-      overridden: on.length !== items.length,
+      overridden: items.some(i => i.included === i.planningExcluded),
       orphanIds: Object.keys(cfg.irregularOff).filter(id => !known.has(id)),
       examples,
     };
