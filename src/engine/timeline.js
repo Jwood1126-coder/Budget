@@ -14,10 +14,11 @@
  *   toCSV(tl, opts)   the plan as a spreadsheet: its settings, then one row per month
  *   templates         ready-made packs of planned changes (babyFirstYear(due), childcare(start,
  *                     cents?), kidCosts(due)), never accepted for you
- *   setDial / setRow / setTarget / resetDial / resetPlan / setGroup / setIrregular / addChange /
- *   setChange / removeChange / acceptChanges / migrateRows / migrateDials / splitOther
+ *   setDial / setRow / setTarget / resetDial / resetRow / resetPlan / setGroup / setIrregular /
+ *   addChange / setChange / removeChange / acceptChanges / migrateRows / migrateDials / splitOther
  *                     validated state writes for the screen (setRow on a category, and setTarget,
- *                     write its budget: plan.targets)
+ *                     write its budget: plan.targets; the resets put back what the setup file
+ *                     supplied, else remove the change)
  *   pendingUpgrade(tl) the upgrades the screen applies once (migrateRows, migrateDials, splitOther), named
  *
  * The module is split by section over src/engine/timeline-*.js (timeline-core.js lists them and
@@ -506,7 +507,7 @@
     'TINY_CATEGORY_CENTS', 'STABLE_MIN_CHARGES', 'STABLE_SPREAD', 'OTHER_CATEGORY', 'SIMPLE_LABEL', 'RULE', 'SIMPLE_RULE', 'ILLUSTRATIVE', 'DIAL_LABEL',
     'INVEST_RULE',
     'build', 'anchors', 'settings', 'depositHint', 'prorate', 'toCSV', 'templates',
-    'setDial', 'setRow', 'setTarget', 'resetDial', 'resetPlan', 'setGroup', 'setIrregular', 'addChange', 'setChange', 'removeChange', 'acceptChanges', 'migrateRows', 'migrateDials', 'splitOther', 'acceptCarriedOver',
+    'setDial', 'setRow', 'setTarget', 'resetDial', 'resetRow', 'resetPlan', 'setGroup', 'setIrregular', 'addChange', 'setChange', 'removeChange', 'acceptChanges', 'migrateRows', 'migrateDials', 'splitOther', 'acceptCarriedOver',
     'pendingUpgrade',
   ];
   const missing = PUBLIC.filter(k => T[k] === undefined);

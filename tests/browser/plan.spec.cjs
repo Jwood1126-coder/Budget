@@ -582,6 +582,37 @@ module.exports = [
     },
   },
   {
+    name: 'drill-down: a category row’s Reset brings it back in at its budget, which stays; a place’s goes back to its average',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      const exp = await timeline(page);
+      const cat = exp.essentials.rows.find(r => r.level === 1 && r.groupKey === 'Groceries');
+      assert.ok(cat && cat.budgetCents !== null && cat.source === 'budget', 'the sample budgets Groceries');
+      await page.click('#plan-drill-essentials > summary');
+      await page.uncheck(`#plan-row-${cat.id}-on`);
+      await page.waitForFunction(id => (window.HouseholdBudget.getState().ui.plan.rows[id] || {}).included === false, cat.id);
+      await page.waitForSelector(`#plan-row-${cat.id}-reset`);
+      assert.equal(await page.getAttribute(`#plan-row-${cat.id}-reset`, 'aria-label'), `Reset Groceries to its budget (${amt(cat.budgetCents)})`);
+      await page.click(`#plan-row-${cat.id}-reset`);
+      await page.waitForFunction(id => !window.HouseholdBudget.getState().ui.plan.rows[id], cat.id);
+      assert.equal((await state(page)).plan.targets.Groceries, cat.budgetCents, 'the budget stays');
+      assert.match(await toastText(page), new RegExp(`^Groceries is back to its budget \\(\\${amt(cat.budgetCents)}\\)\\.`));
+      await page.waitForFunction(id => document.getElementById(`plan-row-${id}-on`).checked, cat.id);
+      assert.equal(await page.inputValue(`#plan-row-${cat.id}-amt`), boxText(cat.planCents), 'back at its budget');
+      assert.equal(await page.inputValue('#plan-dial-essentials'), boxText(dialOf(exp, 'essentials').planCents));
+      // A place has no budget of its own: its Reset says it goes back to its average.
+      const place = exp.essentials.rows.find(r => r.kind === 'merchant' && r.parent === cat.id);
+      await page.click(`#plan-drillrow-${cat.id} > summary`);
+      await page.uncheck(`#plan-row-${place.id}-on`);
+      await page.waitForSelector(`#plan-row-${place.id}-reset`);
+      assert.equal(await page.getAttribute(`#plan-row-${place.id}-reset`, 'aria-label'), `Reset ${place.label} to its average`);
+      await page.click(`#plan-row-${place.id}-reset`);
+      await page.waitForFunction(id => !window.HouseholdBudget.getState().ui.plan.rows[id], place.id);
+      assert.equal((await state(page)).plan.targets.Groceries, cat.budgetCents);
+    },
+  },
+  {
     name: 'a place moves from flexible to essentials (and back); the total stays the same',
     async run(t) {
       const { page, assert } = t;

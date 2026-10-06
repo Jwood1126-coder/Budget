@@ -189,7 +189,7 @@
    * E.state.cleanPlanUi. `source` is profile-shaped ({ plan, household? }). Returns { [path]: value }.
    */
   function checked(source, planUi, rows) {
-    const plan = E.state.defaults(source, null).plan;
+    const plan = rows.some(row => uiField(row) === null) ? E.state.defaults(source, null).plan : null;
     const ui = E.state.cleanPlanUi(isObj(planUi) ? planUi : {});
     const out = {};
     for (const row of rows) out[row.path] = clone(uiField(row) === null ? get({ plan }, row.path) : ui[uiField(row)]);
@@ -524,6 +524,26 @@
     return { state: next, notes, changed, report: { first, updated, kept: keptHere, invalid, gone } };
   }
 
+  /**
+   * What the setup file supplied at `path` when it was last applied (B, read as apply reads it:
+   * through the normal checks), or undefined when it supplied nothing there (no setup file yet, or
+   * a part it left out). `path` is a managed path ('ui.plan.dials') or one key under it
+   * ('ui.plan.dials.flexible', 'plan.targets.Groceries'; a list: an item id). What the Plan
+   * screen's Reset writes back (timeline.resetDial, resetRow, resetPlan): the saved value then
+   * equals B, so later changes to the setup file still reach it (S = B → P).
+   */
+  function baseValue(state, path) {
+    const base = isObj(state) && isObj(state.meta) && isObj(state.meta.setup) && isObj(state.meta.setup.base) ? state.meta.setup.base : null;
+    if (!base || typeof path !== 'string') return undefined;
+    // The longest managed path it names (plan.balances.accounts before plan.balances).
+    const row = activeRows().filter(r => path === r.path || path.startsWith(r.path + '.')).sort((a, b) => b.path.length - a.path.length)[0];
+    if (!row || get(base, row.path) === undefined) return undefined;
+    const b = checked({ plan: isObj(base.plan) ? base.plan : {} }, get(base, 'ui.plan'), [row])[row.path];
+    if (path === row.path) return b;
+    const key = path.slice(row.path.length + 1);
+    return clone(row.kind === 'list' ? itemOf(b, key) : has(b, key) ? b[key] : undefined);
+  }
+
   // ------------------------------------------------------------------ load paths
   // The page loads and imports through these, so setup sync runs on every load and import, after
   // the saved budget was checked and upgraded.
@@ -546,7 +566,7 @@
     // The setup-managed paths ({ path, kind }), as the table above lists them.
     MANAGED: Object.freeze(MANAGED.map(r => Object.freeze({ path: r.path, kind: r.kind }))),
     SYNC_VERSION,
-    apply, loadFromStorage, importWorkbook,
+    apply, loadFromStorage, importWorkbook, baseValue,
     equal: eq
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

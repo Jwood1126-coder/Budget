@@ -343,6 +343,51 @@ module.exports = [
     },
   },
   {
+    name: 'Reset on the Plan puts back the setup file’s dial value, so a rebuilt page’s changed value still reaches it',
+    async run(t) {
+      const { page, assert } = t;
+      await t.open('#/overview');
+      const dist = decodeURIComponent(t.url.replace(/^file:\/\//, ''));
+      const html = fs.readFileSync(dist, 'utf8');
+      const open = html.indexOf('>', html.indexOf('<script id="budget-profile"')) + 1;
+      const close = html.indexOf('</script>', open);
+      const base = JSON.parse(html.slice(open, close));
+      // The same page rebuilt with a setup file that sets the flexible dial (invented amounts).
+      const page_ = (name, flexible) => {
+        const prof = JSON.parse(JSON.stringify(base));
+        prof.planUi = Object.assign({}, prof.planUi, { dials: { flexible } });
+        const file = path.join(path.dirname(dist), name);
+        fs.writeFileSync(file, html.slice(0, open) + JSON.stringify(prof).replace(/</g, '\\u003c') + html.slice(close));
+        return file;
+      };
+      const first = page_('setup-reset-first.html', 123400);
+      const later = page_('setup-reset-later.html', 131500);
+      const visit = async file => { await page.goto('file://' + file + '#/overview'); await page.waitForSelector('#page-title'); await t.settled(); };
+      const stored = () => page.evaluate(k => JSON.parse(localStorage.getItem(k)).ui.plan.dials.flexible, KEY);
+      try {
+        await visit(first);
+        await page.waitForFunction(() => window.HouseholdBudget.getState().ui.plan.dials.flexible === 123400);
+        // The household moves the dial, then presses Reset: back to the setup value, not removed.
+        await commit(page, '#plan-dial-flexible', '1,500');
+        await page.waitForFunction(() => window.HouseholdBudget.getState().ui.plan.dials.flexible === 150000);
+        assert.equal(await page.getAttribute('#plan-dial-flexible-reset', 'aria-label'), 'Reset Flexible spending to your setup value ($1,234)');
+        await page.click('#plan-dial-flexible-reset');
+        await page.waitForFunction(() => window.HouseholdBudget.getState().ui.plan.dials.flexible === 123400);
+        assert.match(await text(page, '#toast'), /^Flexible spending is back to your setup value \(\$1,234\)\./);
+        assert.equal(await stored(), 123400, 'saved as the setup value');
+        // The page rebuilt with a changed value: it reaches the budget, as if never touched.
+        await visit(later);
+        await page.waitForFunction(() => window.HouseholdBudget.getState().ui.plan.dials.flexible === 131500);
+        assert.match(await text(page, '#toast'), /Your setup file updated 1 setting \(Flexible on the plan\)\./);
+        assert.doesNotMatch(await text(page, '#toast'), /kept/);
+        assert.equal(await page.inputValue('#plan-dial-flexible'), '1,315');
+        assert.equal(await stored(), 131500, 'and saved');
+      } finally {
+        for (const f of [first, later]) fs.rmSync(f, { force: true });
+      }
+    },
+  },
+  {
     name: 'damaged files loaded in the browser get the could-not-read notice and a Forget option',
     async run(t) {
       const { page, assert } = t;
