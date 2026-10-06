@@ -11,7 +11,7 @@
   const fmt = UI.fmt;
   const P = UI._plan;
   const { isCents, exact, amt, plural, inputText, todayIso, model, showError, PACKS, groupIdOf } = P;
-  const { pickedOf, shownTimeline, dataAnchorsOf, GROUP_NAME, dialLabel, signedDial, depositsOf, KIND_LABEL, CHANGE_GROUP_LABEL } = P;
+  const { pickedOf, shownTimeline, dataAnchorsOf, GROUP_NAME, dialLabel, signedDial, dialResetTo, rowResetTo, setupDials, depositsOf, KIND_LABEL, CHANGE_GROUP_LABEL } = P;
   const { txnMap, placeTxns, placeOf, fillTxns, TXN_REASON } = P;
 
   /** Set by a change made on this page: the next render announces the new headline. */
@@ -182,13 +182,14 @@
       if (card) card.scrollIntoView({ block: 'center', behavior: 'smooth' });
       if (first) first.focus({ preventScroll: true });
     },
-    'plan:reset': ctx => change(ctx, st => E.timeline.resetPlan(st), 'Every dial is back to its baseline.'),
+    'plan:reset': ctx => change(ctx, st => E.timeline.resetPlan(st),
+      setupDials(ctx.state) ? 'Every dial is back to your setup file’s values, or to its baseline where it has none.' : 'Every dial is back to its baseline.'),
     'plan:reset-dial': (ctx, el) => {
       const tl = model(ctx);
       const d = tl.dialsByKey[el.dataset.dial];
       if (!d) return;
       focusNext = '#plan-dial-' + d.key;
-      change(ctx, st => E.timeline.resetDial(st, d.key, tl), `${dialLabel(d)} is back to its baseline (${amt(d.baselineCents)}).`);
+      change(ctx, st => E.timeline.resetDial(st, d.key, tl), `${dialLabel(d)} is back to ${dialResetTo(ctx.state, d)}.`);
     },
     'plan:keep-carried': (ctx, el) => {
       const d = model(ctx).dialsByKey[el.dataset.dial];
@@ -256,7 +257,14 @@
       if (shown && shown.planCents === cents) return;
       change(ctx, st => E.timeline.setRow(st, id, { cents }, tl), `${el.dataset.name} set to ${amt(cents)} a month.`);
     },
-    'plan:row-reset': (ctx, el) => change(ctx, st => E.timeline.setRow(st, el.dataset.row, { included: null, cents: null }, model(ctx)), `${el.dataset.name} is back to its average.`),
+    'plan:row-reset': (ctx, el) => {
+      const tl = model(ctx);
+      const id = el.dataset.row;
+      const dialOf = tl.dialsByKey[id.split('-')[0]];
+      const shown = dialOf && dialOf.drill ? dialOf.drill.rows.find(r => r.id === id) : null;
+      // The row's change only: a category's budget stays (resetRow never touches plan.targets).
+      change(ctx, st => E.timeline.resetRow(st, id, tl), `${el.dataset.name} is back to ${shown ? rowResetTo(ctx.state, shown) : 'its average'}.`);
+    },
     'plan:move-group': (ctx, el) => {
       const tl = model(ctx);
       const key = el.dataset.key;

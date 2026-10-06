@@ -315,6 +315,16 @@ its new values flow as usual.
 So to change something the household already changed in the app, ask them (or change it in the
 app); editing the setup file will not override their choice.
 
+**Reset on the Plan screen goes back to the setup file, and keeps it linked.** A dial's Reset,
+"Reset all" and an edited row's Reset put a `planUi` value the setup file supplied (a dial, a row
+change, a one-time cost left out) back to the setup file's value ("Flexible spending is back to
+your setup value ($1,234)."), so the next setup file's value for it flows again as if the household
+had never changed it. Only what the setup file does not supply goes back to the baseline or the
+history, as before. A row's Reset never changes a category budget (`plan.targets`): the row comes
+back in at its budget. To move a dial off the setup value on purpose the household types an amount,
+clears the box (back to the baseline) or, on a person's dial, picks "Use the N-month average";
+those count as theirs and are kept.
+
 ## 4. The tune loop
 
 1. **Edit** `private/household-profile.json` (and `private/import.json` / new exports, then

@@ -41,6 +41,26 @@
   const dialLabel = d => (d.group === 'in' && d.key !== 'inOther' ? d.label + ' → joint' : d.label);
   const signedDial = d => d.key === 'savings' || d.key === 'investing' || d.key === 'other' || (d.baselineCents || 0) < 0 || (d.planCents || 0) < 0;
 
+  // ---- what a Reset puts back (its label and its toast): what the setup file supplied for the
+  // dial or row when it did (timeline.resetDial/resetRow/resetPlan write that back), else nothing.
+  const setupOf = (state, path) => E.setupSync.baseValue(state, 'ui.plan.' + path);
+  const setupKeys = (state, field) => Object.keys(setupOf(state, field) || {});
+  /** Where Reset puts a dial: "your setup value ($X)", "your setup file’s rows", else "its baseline ($Y)". */
+  function dialResetTo(state, d) {
+    const cents = setupOf(state, 'dials.' + d.key);
+    if (isCents(cents)) return `your setup value (${amt(cents)})`;
+    if (setupKeys(state, 'rows').some(id => id.startsWith(d.key + '-')) || (d.key === 'irregular' && setupKeys(state, 'irregularOff').length)) return `your setup file’s ${d.key === 'irregular' ? 'list' : 'rows'}`;
+    return `its baseline (${amt(d.baselineCents)})`;
+  }
+  /** Where Reset puts a drill-down row: the setup file's change for it, else its budget (a category with one), else its average. */
+  function rowResetTo(state, r) {
+    const set = setupOf(state, 'rows.' + r.id);
+    if (set) return isCents(set.cents) ? `your setup value (${amt(set.cents)})` : `your setup file’s setting${set.included === false ? ' (left out)' : ''}`;
+    return isCents(r.budgetCents) ? `its budget (${amt(r.budgetCents)})` : 'its average';
+  }
+  /** Whether Reset all puts back something the setup file supplied (else every dial goes to its baseline). */
+  const setupDials = state => ['dials', 'rows', 'irregularOff'].some(f => setupKeys(state, f).length > 0);
+
   // ------------------------------------------------------------------ 3. dials
   /** Slider range: a convenience around the baseline, widened for the value; never clamps it. */
   function rangeOf(d) {
@@ -80,7 +100,7 @@
     const { lo, hi } = rangeOf(d);
     const base = isCents(d.baselineCents) ? d.baselineCents : null;
     const frac = base === null ? null : Math.min(1, Math.max(0, (base - lo) / (hi - lo || 1)));
-    const reset = d.source !== 'baseline' ? c.button('Reset', { action: 'plan:reset-dial', data: { dial: d.key }, cls: 'btn-small dial-reset', id: id + '-reset', ariaLabel: 'Reset ' + label + ' to its baseline' }) : '';
+    const reset = d.source !== 'baseline' ? c.button('Reset', { action: 'plan:reset-dial', data: { dial: d.key }, cls: 'btn-small dial-reset', id: id + '-reset', ariaLabel: 'Reset ' + label + ' to ' + dialResetTo(ctx.state, d) }) : '';
     const set = d.source === 'direct' ? ' · set by you' : d.source === 'rows' ? ' · from the list below' : '';
     const hint = d.group === 'in' ? hintText(d) : '';
     const sub = DIAL_SUB[d.key] || '';
@@ -99,7 +119,10 @@
       why += (/[.!?]$/.test(d.basis) ? '' : '.') + (unknown.length ? ' ' + esc('Budget has no amount for: ' + unknown.join(', ') + '.') : '') + ' Enter the current amount here, or save pay in Budget.';
     }
     const unconfirmed = person && d.needsConfirm ? badgeWithId(id + '-unconfirmed', 'Not confirmed', 'warn') : '';
-    const average = person && d.basisKind === 'budget' && isCents(d.averageCents) && isCents(d.budgetCents) && d.averageCents !== d.budgetCents
+    // At the pay from Budget, or at the setup file's amount (where Reset puts it), the deposit
+    // average is one click away: an explicit choice, kept as the household's.
+    const atSetup = d.basisKind === 'direct' && setupOf(ctx.state, 'dials.' + d.key) === d.planCents;
+    const average = person && isCents(d.averageCents) && ((d.basisKind === 'budget' && isCents(d.budgetCents) && d.averageCents !== d.budgetCents) || (atSetup && d.averageCents !== d.planCents))
       ? `<button type="button" class="btn btn-ghost btn-small dial-average" id="${esc(id)}-average" data-action="plan:use-average" data-dial="${esc(d.key)}" title="${esc(tl.baseline.label)}">${esc(`Use the ${tl.baseline.count}-month average (${amt(d.averageCents)})`)}</button>`
       : '';
     const info = `<details class="dial-info" id="${esc(id)}-info"><summary title="About ${esc(label)}"><span class="dial-info-i" aria-hidden="true">i</span><span class="sr-only">About ${esc(label)}</span></summary>
@@ -137,13 +160,13 @@
     return c.button('Move to ' + (to === 'essentials' ? 'Essentials' : 'Flexible'), { action: 'plan:move-group', data: { key, to, name }, cls: 'btn-small btn-ghost drill-move', id: id + '-move', ariaLabel: `Move ${name} to ${GROUP_NAME[to]}` });
   }
 
-  function rowHtml(tl, r, { move = null, bulk = '' } = {}) {
+  function rowHtml(ctx, tl, r, { move = null, bulk = '' } = {}) {
     const id = 'plan-row-' + r.id;
     const name = r.label;
     const usual = r.stable && isCents(r.latestCents) ? `usually ${amt(r.latestCents)}` : `avg ${whole(r.avgCents)}/mo`;
     const seen = isCents(r.seenMonths) ? r.seenMonths : r.months;
     const of = isCents(r.ofMonths) ? r.ofMonths : tl.baseline.count;
-    const edited = (r.override ? ' ' + c.badge('edited', 'info') + ' ' + c.button('Reset', { action: 'plan:row-reset', data: { row: r.id, name }, cls: 'btn-small btn-ghost drill-reset', id: id + '-reset', ariaLabel: 'Reset ' + name + ' to its average' }) : '')
+    const edited = (r.override ? ' ' + c.badge('edited', 'info') + ' ' + c.button('Reset', { action: 'plan:row-reset', data: { row: r.id, name }, cls: 'btn-small btn-ghost drill-reset', id: id + '-reset', ariaLabel: 'Reset ' + name + ' to ' + rowResetTo(ctx.state, r) }) : '')
       + (r.source === 'budget' ? ' ' + c.badge('budget', 'info') : '')
       + (r.source === 'aggregate' ? ' ' + c.badge('in ' + r.aggregate, 'info', { title: 'Planned in the ' + r.aggregate + ' budget, which counts it once' }) : '');
     const pattern = PATTERN[r.pattern] ? `<span class="drill-pattern is-${esc(r.pattern)}" id="${esc(id)}-pattern" title="${esc(PATTERN_TIP[r.pattern])}">${esc(PATTERN[r.pattern])}</span>` : '';
@@ -173,14 +196,14 @@
       const more = kids.some(k => k.kind === 'rest');
       const label = places ? `Show ${plural(places, 'place')}${more ? ' and everything else' : ''}` : 'Show everything in it';
       const place = k => k.kind === 'merchant' && !cat.synthetic;
-      const kidHtml = k => rowHtml(tl, k, { move: place(k) ? { key: E.timeline.MERCHANT_KEY + k.label, name: k.label, moved: false } : null, bulk: place(k) ? bulkCategory(ctx, k) : '' })
+      const kidHtml = k => rowHtml(ctx, tl, k, { move: place(k) ? { key: E.timeline.MERCHANT_KEY + k.label, name: k.label, moved: false } : null, bulk: place(k) ? bulkCategory(ctx, k) : '' })
         + txnsDetails(ctx, tl, k.id, k.txnIds);
       const sub = kids.length && !only
         ? `<details class="drill-kids" id="plan-drillrow-${esc(cat.id)}"><summary>${esc(label)}</summary><div class="drill-kids-body">${kids.map(kidHtml).join('')}</div></details>`
         : txnsDetails(ctx, tl, cat.id, cat.txnIds); // its rows are not listed: its transactions are, here
       const moved = cat.groupSource === 'override';
       const move = cat.groupKey ? { key: cat.groupKey, name: cat.label, moved, from: cat.synthetic && Array.isArray(cat.movedFrom) ? cat.movedFrom.join(', ') : '' } : null;
-      return `<li class="drill-cat">${rowHtml(tl, cat, { move })}${sub}</li>`;
+      return `<li class="drill-cat">${rowHtml(ctx, tl, cat, { move })}${sub}</li>`;
     }).join('');
     const summary = `What’s in this · ${plural(cats.length, 'category', 'categories')} · ${amt(d.planCents)}/mo${baselineNote(d)}`;
     const body = `${notice}<ul class="drill-list">${list}</ul>
@@ -441,7 +464,9 @@
 
   function dialsCard(ctx, tl) {
     const group = keys => keys.map(k => dialHtml(ctx, tl, tl.dialsByKey[k])).join('');
-    const reset = tl.changed && tl.changedBy.dials ? c.button('Reset all to baseline', { action: 'plan:reset', id: 'plan-reset', cls: 'btn-small' }) : '';
+    const reset = !(tl.changed && tl.changedBy.dials) ? ''
+      : setupDials(ctx.state) ? c.button('Reset all', { action: 'plan:reset', id: 'plan-reset', cls: 'btn-small', ariaLabel: 'Reset all dials to your setup file’s values, or to their baseline where it has none' })
+        : c.button('Reset all to baseline', { action: 'plan:reset', id: 'plan-reset', cls: 'btn-small' });
     return `<section class="card plan-dials" id="plan-dials" aria-label="Plan dials">
         <div class="plan-groups">
           <div class="plan-group" role="group" aria-labelledby="plan-g-in"><h2 class="plan-h" id="plan-g-in">Money in</h2>${group(tl.groups.in)}${depositsHtml(ctx, tl)}</div>
@@ -451,5 +476,5 @@
       </section>`;
   }
 
-  Object.assign(P, { GROUP_NAME, dialLabel, signedDial, depositsOf, valuesOf, sumOf, dialsCard, txnMap, placeTxns, placeOf, fillTxns, TXN_REASON });
+  Object.assign(P, { GROUP_NAME, dialLabel, signedDial, dialResetTo, rowResetTo, setupDials, depositsOf, valuesOf, sumOf, dialsCard, txnMap, placeTxns, placeOf, fillTxns, TXN_REASON });
 })(typeof globalThis !== 'undefined' ? globalThis : this);

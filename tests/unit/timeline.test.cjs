@@ -1764,6 +1764,60 @@ test('setRow on a category row writes its budget (the row keeps only its include
   assert.throws(() => T.setTarget(st, ' ', 1), err => err instanceof E.ValidationError && err.field === 'category');
 });
 
+test('resetRow puts one row back and never touches the category budget (the row Reset on the Plan)', () => {
+  const ds = integrated({ invest: false });
+  let st = T.setTarget(E.state.defaults(null, ds), 'Groceries', 58000);
+  const build = s => T.build({ txns: L.applyEdits(ds, {}), dataset: ds, plan: s.plan, settings: s.ui.plan, today: '2026-07-08' });
+  const tl = build(st);
+  const groceries = catRow(tl, 'essentials', 'Groceries');
+  const merchant = tl.dialsByKey.essentials.drill.rows.find(x => x.level === 2 && x.parent === groceries.id);
+  // Left out on the Plan (the row's only change: its amount is the budget), then Reset.
+  const out = T.setRow(st, groceries.id, { included: false }, tl);
+  assert.deepEqual([out.ui.plan.rows[groceries.id], out.plan.targets.Groceries], [{ included: false }, 58000]);
+  const back = T.resetRow(out, groceries.id, tl);
+  assert.equal(back.plan.targets.Groceries, 58000, 'the budget stays');
+  assert.deepEqual(back.ui.plan.rows, {});
+  const row = catRow(build(back), 'essentials', 'Groceries');
+  assert.deepEqual([row.included, row.source, row.planCents], [true, 'budget', 58000], 'back in, at its budget');
+  assert.deepEqual(T.resetRow(out, groceries.id), back, 'the same without the timeline');
+  // What the Reset did before: clearing the amount too clears the budget (that is the blank box's job).
+  assert.equal(T.setRow(out, groceries.id, { included: null, cents: null }, tl).plan.targets.Groceries, null);
+  // A place's own amount goes; nothing else changes. Nothing to reset: the same state back.
+  const m = T.setRow(st, merchant.id, { cents: 59000 }, tl);
+  assert.deepEqual([T.resetRow(m, merchant.id, tl).ui.plan.rows, T.resetRow(m, merchant.id, tl).plan.targets], [{}, { Groceries: 58000 }]);
+  assert.equal(T.resetRow(st, merchant.id, tl), st);
+  // A change saved under the earlier card dial for the same row goes too, with the timeline.
+  const lid = 'card' + groceries.id.slice('essentials'.length);
+  st = E.state.setPath(st, 'ui.plan.rows.' + lid, { included: false });
+  const tl2 = build(st);
+  assert.equal(catRow(tl2, 'essentials', 'Groceries').legacyId, lid);
+  assert.deepEqual(T.resetRow(st, groceries.id, tl2).ui.plan.rows, {});
+  assert.deepEqual(T.resetRow(st, groceries.id).ui.plan.rows, { [lid]: { included: false } }, 'without it, only the row’s own id');
+});
+
+test('a person’s dial the setup file supplies: the deposit average is still one explicit choice away, and Reset goes back to the setup value', () => {
+  const ds = household();
+  const prof = { schemaVersion: 1, isSynthetic: true, household: { name: 'Invented', people: PEOPLE }, plan: { people: PEOPLE }, planUi: { dials: { p1: 420000 } } };
+  const opened = E.setupSync.apply(E.state.defaults(prof, ds), prof, { now: '2026-07-03T09:00:00.000Z' }).state;
+  const build = s => T.build({ txns: L.applyEdits(ds, s.ledgerEdits), dataset: ds, plan: Object.assign({}, s.plan, { people: PEOPLE }), settings: s.ui.plan, today: '2026-07-03' });
+  const d = build(opened).dialsByKey.p1;
+  assert.deepEqual([d.source, d.planCents], ['direct', 420000]);
+  assert.ok(Number.isSafeInteger(d.averageCents) && d.averageCents !== 420000);
+  // "Use the N-month average" (plan:use-average) sets the dial to it, even over a setup value.
+  const avg = T.setDial(opened, 'p1', d.averageCents);
+  assert.equal(build(avg).dialsByKey.p1.planCents, d.averageCents);
+  // An explicit choice: a later setup file does not override it...
+  const prof2 = Object.assign({}, prof, { planUi: { dials: { p1: 430000 } } });
+  const later = E.setupSync.apply(avg, prof2, { now: '2026-08-03T09:00:00.000Z' });
+  assert.equal(later.state.ui.plan.dials.p1, d.averageCents);
+  assert.deepEqual(later.report.kept, ['Morgan’s money in on the plan']);
+  // ...and Reset takes it back to the setup file's latest value, which flows from then on.
+  const reset = T.resetDial(later.state, 'p1');
+  assert.equal(build(reset).dialsByKey.p1.planCents, 430000);
+  const prof3 = Object.assign({}, prof, { planUi: { dials: { p1: 440000 } } });
+  assert.equal(E.setupSync.apply(reset, prof3, { now: '2026-09-03T09:00:00.000Z' }).state.ui.plan.dials.p1, 440000);
+});
+
 test('bills: joint bills the history does not hold are added, seen bills that end are taken out, nothing is counted twice', () => {
   const ds = integrated({ invest: false });
   const bill = (id, fields) => Object.assign({ id, label: id, category: null, monthlyCents: 1000, fundedFrom: 'joint', type: 'other', debtId: null, status: 'existing', startMonth: null, endMonth: null, note: '' }, fields);

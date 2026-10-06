@@ -3,10 +3,10 @@
  * BudgetEngine.timeline: the plan screen's validated state writes, and the upgrades it applies
  * once (timeline-core.js says how the timeline files fit together).
  *
- * Adds to E._timeline: setDial, setRow, setTarget, resetDial, resetPlan, setGroup, setIrregular,
- * addChange, setChange, removeChange, acceptChanges, migrateRows, migrateDials, splitOther,
- * pendingUpgrade, acceptCarriedOver.
- * Uses, when called: rowIdOf (timeline-spending.js).
+ * Adds to E._timeline: setDial, setRow, setTarget, resetDial, resetRow, resetPlan, setGroup,
+ * setIrregular, addChange, setChange, removeChange, acceptChanges, migrateRows, migrateDials,
+ * splitOther, pendingUpgrade, acceptCarriedOver.
+ * Uses, when called: rowIdOf (timeline-spending.js), BudgetEngine.setupSync.baseValue (the resets).
  */
 (function (root) {
   const E = root.BudgetEngine || (root.BudgetEngine = {});
@@ -107,29 +107,79 @@
     return E.state.setPath(state, 'plan.targets.' + category.trim(), cents === undefined ? null : cents);
   }
 
+  // A reset puts each ui.plan key it covers back to what the setup file supplied for it when it was
+  // last applied (B, BudgetEngine.setupSync.baseValue) and removes the keys it did not supply.
+  // Removing a key the setup file supplied would read to setup sync as "removed by the household"
+  // and keep its later values out; B's value back keeps the saved value equal to B, so they flow.
+
+  /** The setup file's entries for ui.plan.<field> (dials, rows, irregularOff), {} when it supplied none. */
+  function setupPart(state, field) {
+    const v = E.setupSync ? E.setupSync.baseValue(state, 'ui.plan.' + field) : undefined;
+    return isObj(v) ? v : {};
+  }
+
+  /** The keys of ui.plan.<field> a reset covers: the saved ones and the setup file's (`base`), those `pick` keeps. */
+  function resetKeys(state, field, base, pick = () => true) {
+    const saved = isObj(planUi(state)[field]) ? Object.keys(planUi(state)[field]) : [];
+    return Array.from(new Set(saved.concat(Object.keys(base)))).filter(pick);
+  }
+
+  /** ui.plan.<field>.<key> back to the setup file's entry `base[key]`, or removed when it has none. */
+  function resetKey(state, field, key, base) {
+    if (!has(base, key) && !has(planUi(state)[field], key)) return state;
+    return E.state.setPath(state, 'ui.plan.' + field + '.' + key, has(base, key) ? base[key] : undefined);
+  }
+
   /**
-   * Put one dial back to its baseline: its direct amount and every change to its rows are removed
-   * (for irregular: every one-time cost left out is back in the allowance). With the current
-   * timeline `tl`, changes saved under the earlier card/bank dials that its rows use go too.
+   * Put one dial back: to the setup file's amount for it when it supplied one, else to its rows or
+   * baseline; every change to its rows goes back the same way (the setup file's change for that
+   * row, else none; for irregular: the one-time costs left out too). With the current timeline
+   * `tl`, changes saved under the earlier card/bank dials that its rows use go too.
    */
   function resetDial(state, key, tl) {
-    const p = planUi(state);
-    let next = setDial(state, key, undefined);
+    const dials = setupPart(state, 'dials'), rows = setupPart(state, 'rows');
+    let next = setDial(state, key, has(dials, key) ? dials[key] : undefined);
     const legacy = new Set();
     const d = tl && isObj(tl.dialsByKey) ? tl.dialsByKey[key] : null;
     for (const r of d && d.drill && d.drill.kind === 'categories' ? d.drill.rows : []) if (r.legacyId) legacy.add(r.legacyId);
-    for (const id of Object.keys(isObj(p.rows) ? p.rows : {})) if (id.startsWith(key + '-') || legacy.has(id)) next = E.state.setPath(next, 'ui.plan.rows.' + id, undefined);
-    if (key === 'irregular') for (const id of Object.keys(isObj(p.irregularOff) ? p.irregularOff : {})) next = E.state.setPath(next, 'ui.plan.irregularOff.' + id, undefined);
+    for (const id of resetKeys(state, 'rows', rows, id => id.startsWith(key + '-') || legacy.has(id))) next = resetKey(next, 'rows', id, rows);
+    if (key === 'irregular') {
+      const off = setupPart(state, 'irregularOff');
+      for (const id of resetKeys(state, 'irregularOff', off)) next = resetKey(next, 'irregularOff', id, off);
+    }
     return next;
   }
 
-  /** Every dial, row and one-time cost back to the baseline (groups, planned changes, budgets and other settings stay). */
+  /**
+   * Put one drill-down row back: its change in ui.plan.rows goes back to the setup file's change
+   * for it when it supplied one, else is removed; with the current timeline `tl`, the same row's
+   * change saved under the earlier card/bank dial too (as resetDial). The category's budget
+   * (plan.targets) is never touched: a category row goes back to its budget when one is set, else
+   * to its history.
+   */
+  function resetRow(state, id, tl) {
+    const rows = setupPart(state, 'rows');
+    const next = resetKey(state, 'rows', id, rows);
+    // Row ids start with their dial's key.
+    const d = tl && isObj(tl.dialsByKey) ? tl.dialsByKey[String(id).split('-')[0]] : null;
+    const r = d && d.drill && Array.isArray(d.drill.rows) ? d.drill.rows.find(x => x.id === id) : null;
+    return r && r.legacyId ? resetKey(next, 'rows', r.legacyId, rows) : next;
+  }
+
+  /**
+   * Every dial, row and one-time cost back as resetDial puts one back (the setup file's values,
+   * else the baseline); the kept card parts go. Groups, planned changes, budgets and other
+   * settings stay.
+   */
   function resetPlan(state) {
     const p = planUi(state);
+    const dials = setupPart(state, 'dials');
     let next = state;
-    for (const k of Object.keys(isObj(p.dials) ? p.dials : {})) next = E.state.setPath(next, 'ui.plan.dials.' + k, undefined);
-    for (const id of Object.keys(isObj(p.rows) ? p.rows : {})) next = E.state.setPath(next, 'ui.plan.rows.' + id, undefined);
-    for (const id of Object.keys(isObj(p.irregularOff) ? p.irregularOff : {})) next = E.state.setPath(next, 'ui.plan.irregularOff.' + id, undefined);
+    for (const k of resetKeys(state, 'dials', dials)) next = setDial(next, k, has(dials, k) ? dials[k] : undefined);
+    for (const field of ['rows', 'irregularOff']) {
+      const base = setupPart(state, field);
+      for (const id of resetKeys(state, field, base)) next = resetKey(next, field, id, base);
+    }
     for (const k of Object.keys(isObj(p.cardSplit) ? p.cardSplit : {})) next = E.state.setPath(next, 'ui.plan.cardSplit.' + k, undefined);
     return next;
   }
@@ -320,7 +370,7 @@
   }
 
   Object.assign(T, {
-    setDial, setRow, setTarget, resetDial, resetPlan, setGroup, setIrregular, addChange, setChange, removeChange, acceptChanges, migrateRows, migrateDials,
+    setDial, setRow, setTarget, resetDial, resetRow, resetPlan, setGroup, setIrregular, addChange, setChange, removeChange, acceptChanges, migrateRows, migrateDials,
     splitOther, pendingUpgrade, acceptCarriedOver,
   });
 })(typeof globalThis !== 'undefined' ? globalThis : this);

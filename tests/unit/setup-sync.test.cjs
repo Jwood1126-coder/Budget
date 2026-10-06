@@ -626,3 +626,120 @@ test('deep equality over JSON values', () => {
   assert.ok(!Y.equal([1, 2], [2, 1]));
   assert.ok(!Y.equal(0, null));
 });
+
+// ------------------------------------------------------------------ the Plan screen's Reset
+// A Reset puts back what the setup file supplied (B), so the saved value equals B again and the
+// setup file's later values still reach it; a key it never supplied is removed, as before.
+const TL = E.timeline;
+/** A setup file that supplies two dials, a row and a one-time cost left out. */
+function resetProfile() {
+  const p = profile();
+  p.planUi = { dials: { flexible: 50000, essentials: 210000 }, rows: { 'flexible-c-abc': { included: false } }, irregularOff: { 'tx-invented-1': true } };
+  return p;
+}
+
+test('baseValue: what the setup file supplied last time, read as the merge reads it', () => {
+  const prof = resetProfile();
+  const st = opened(prof);
+  assert.equal(Y.baseValue(st, 'ui.plan.dials.flexible'), 50000);
+  assert.deepEqual(Y.baseValue(st, 'ui.plan.dials'), { flexible: 50000, essentials: 210000 });
+  assert.deepEqual(Y.baseValue(st, 'ui.plan.rows.flexible-c-abc'), { included: false });
+  assert.equal(Y.baseValue(st, 'ui.plan.dials.savings'), undefined, 'a dial it did not supply');
+  assert.equal(Y.baseValue(st, 'plan.targets.Groceries'), 60000);
+  assert.equal(Y.baseValue(st, 'plan.bills.rent').monthlyCents, 140000, 'a list item by id');
+  assert.equal(Y.baseValue(st, 'ui.plan.hidden'), undefined, 'not setup-managed');
+  // A copy: changing it changes nothing saved.
+  Y.baseValue(st, 'ui.plan.rows')['flexible-c-abc'].included = true;
+  assert.deepEqual(st.meta.setup.base.ui.plan.rows, { 'flexible-c-abc': { included: false } });
+  // No setup file yet, or a part it left out: nothing.
+  assert.equal(Y.baseValue(S.defaults(prof, DS, { now: T0 }), 'ui.plan.dials.flexible'), undefined);
+  const without = profile();
+  delete without.planUi;
+  assert.equal(Y.baseValue(opened(without), 'ui.plan.dials'), undefined);
+});
+
+test('Reset of a dial the setup file supplied puts its value back, and a later setup file reaches it', () => {
+  const prof = resetProfile();
+  let st = opened(prof);
+  // The household moves flexible, ticks the row back in, changes a row of its own and sets savings.
+  st = TL.setDial(st, 'flexible', 47000);
+  st = TL.setRow(st, 'flexible-c-abc', { included: true });
+  st = TL.setRow(st, 'flexible-m-xyz', { cents: 1200 });
+  st = TL.setDial(st, 'savings', 30000);
+  assert.deepEqual(st.ui.plan.rows, { 'flexible-m-xyz': { cents: 1200 } });
+  const reset = reload(TL.resetDial(st, 'flexible'), prof);
+  assert.deepEqual(reset.ui.plan.dials, { flexible: 50000, essentials: 210000, savings: 30000 }, 'the setup value, not removed; savings untouched');
+  assert.deepEqual(reset.ui.plan.rows, { 'flexible-c-abc': { included: false } }, 'its rows: the setup file’s back, the household’s own removed');
+  assert.deepEqual(reset.ui.plan.irregularOff, { 'tx-invented-1': true }, 'another dial’s list stays');
+  // The setup file changes: the new values flow, as if the dial had never been touched.
+  const p2 = resetProfile();
+  p2.planUi.dials.flexible = 60000;
+  p2.planUi.rows['flexible-c-abc'] = { cents: 2500 };
+  const r = Y.apply(reset, p2, { now: T1 });
+  assert.deepEqual(r.state.ui.plan.dials, { flexible: 60000, essentials: 210000, savings: 30000 });
+  assert.deepEqual(r.state.ui.plan.rows, { 'flexible-c-abc': { cents: 2500 } });
+  assert.deepEqual(r.report.kept, []);
+  assert.deepEqual(r.notes, ['Your setup file updated 2 settings (Flexible on the plan, A spending row on the plan).']);
+  // And the next one too (Reset left no mark behind).
+  const p3 = copy(p2);
+  p3.planUi.dials.flexible = 65000;
+  assert.equal(Y.apply(reload(r.state, p2), p3, { now: T2 }).state.ui.plan.dials.flexible, 65000);
+  // Clearing the box instead is the household's choice: the dial stays off the setup value.
+  const cleared = Y.apply(reload(TL.setDial(reset, 'flexible', null), prof), p2, { now: T1 });
+  assert.equal(cleared.state.ui.plan.dials.flexible, undefined);
+});
+
+test('Reset of a dial the setup file never supplied removes the change, as before', () => {
+  const prof = resetProfile();
+  let st = opened(prof);
+  st = TL.setDial(st, 'savings', 30000);
+  st = TL.setRow(st, 'essentials-m-xyz', { cents: 900 });
+  const reset = TL.resetDial(TL.resetDial(st, 'savings'), 'essentials');
+  // essentials has a setup value: back to it; savings has none: removed (back to its baseline).
+  assert.deepEqual(reset.ui.plan.dials, { flexible: 50000, essentials: 210000 });
+  assert.deepEqual(reset.ui.plan.rows, { 'flexible-c-abc': { included: false } });
+  // A budget with no setup file: exactly as before.
+  let plain = S.defaults(null, DS, { now: T0 });
+  plain = TL.setRow(TL.setDial(plain, 'flexible', 47000), 'flexible-m-xyz', { cents: 1200 });
+  plain = TL.setIrregular(plain, 'tx-invented-2', false);
+  const back = TL.resetDial(TL.resetDial(plain, 'flexible'), 'irregular');
+  assert.deepEqual([back.ui.plan.dials, back.ui.plan.rows, back.ui.plan.irregularOff], [{}, {}, {}]);
+  assert.deepEqual(TL.resetPlan(TL.setDial(plain, 'savings', 100)).ui.plan.dials, {});
+});
+
+test('Reset of irregular puts the setup file’s one-time costs back out of the allowance, and only those', () => {
+  const prof = resetProfile();
+  let st = opened(prof);
+  st = TL.setIrregular(st, 'tx-invented-1', true);
+  st = TL.setIrregular(st, 'tx-invented-2', false);
+  assert.deepEqual(st.ui.plan.irregularOff, { 'tx-invented-2': true });
+  const reset = TL.resetDial(st, 'irregular');
+  assert.deepEqual(reset.ui.plan.irregularOff, { 'tx-invented-1': true });
+  const p2 = resetProfile();
+  p2.planUi.irregularOff = { 'tx-invented-1': true, 'tx-invented-3': true };
+  assert.deepEqual(Y.apply(reload(reset, prof), p2, { now: T1 }).state.ui.plan.irregularOff, { 'tx-invented-1': true, 'tx-invented-3': true });
+});
+
+test('Reset all puts every setup value back and removes the rest; later setup values flow everywhere', () => {
+  const prof = resetProfile();
+  let st = opened(prof);
+  st = TL.setDial(TL.setDial(TL.setDial(st, 'flexible', 47000), 'essentials', null), 'savings', 30000);
+  st = TL.setRow(TL.setRow(st, 'flexible-c-abc', { included: true }), 'essentials-m-xyz', { cents: 900 });
+  st = TL.setIrregular(TL.setIrregular(st, 'tx-invented-1', true), 'tx-invented-2', false);
+  st = S.setPath(st, 'ui.plan.groups.Pets', 'flexible');
+  const reset = reload(TL.resetPlan(st), prof);
+  assert.deepEqual(reset.ui.plan.dials, { flexible: 50000, essentials: 210000 });
+  assert.deepEqual(reset.ui.plan.rows, { 'flexible-c-abc': { included: false } });
+  assert.deepEqual(reset.ui.plan.irregularOff, { 'tx-invented-1': true });
+  assert.deepEqual(reset.ui.plan.groups, { Pets: 'flexible' }, 'groups stay');
+  assert.deepEqual(reset.plan.targets, st.plan.targets, 'budgets stay');
+  const p2 = resetProfile();
+  p2.planUi.dials = { flexible: 61000, essentials: 205000 };
+  p2.planUi.rows = { 'flexible-c-abc': { cents: 3000 } };
+  p2.planUi.irregularOff = { 'tx-invented-4': true };
+  const r = Y.apply(reset, p2, { now: T1 });
+  assert.deepEqual(r.state.ui.plan.dials, { flexible: 61000, essentials: 205000 });
+  assert.deepEqual(r.state.ui.plan.rows, { 'flexible-c-abc': { cents: 3000 } });
+  assert.deepEqual(r.state.ui.plan.irregularOff, { 'tx-invented-1': true, 'tx-invented-4': true }, 'a cost the file no longer has stays (it never erases)');
+  assert.ok(!r.report.kept.some(k => /on the plan|spending row|one-time cost/.test(k)), 'nothing on the dials is held back as the household’s');
+});
