@@ -197,7 +197,8 @@ test('debt: a current debt bill the history holds plans at its amount, not the w
   const tl = build(ds, planOf({ bills: [installment()] }));
   const other = tl.dialsByKey.other;
   assert.equal(other.baselineCents, 8000);
-  assert.match(other.basis, /current debt bills from Budget \(\$80\.00 a month, not the average of \$20\.00\)/);
+  assert.match(other.basis, /current debt bills from Budget \(\$80\.00 a month, not the average of \$20\.00\)\. The history’s debt payments cannot be matched to these bills one by one, so the plan uses the bills$/);
+  assert.deepEqual(other.debtCheck, { billsCents: 8000, averageCents: 2000, historyMore: false }, 'lower history: disclosed, nothing flagged as missing');
   assert.deepEqual(tl.bills.map(b => b.status), ['seen'], 'still seen: not added a second time');
   assert.equal(tl.months.find(m => m.month === '2032-01').out.debt, 8000);
   assert.equal(tl.months.find(m => m.month === '2032-06').out.debt, 8000);
@@ -210,13 +211,15 @@ test('debt: a payment lowered on purpose plans at the current bill, keeping none
   const other = tl.dialsByKey.other;
   assert.equal(other.baselineCents, 8000);
   assert.equal(other.planCents, 8000);
-  assert.deepEqual(other.debtCheck, { billsCents: 8000, averageCents: 12000 });
-  assert.match(other.basis, /current debt bills from Budget \(\$80\.00 a month, not the average of \$120\.00\)\. Your history paid more toward debts than these bills/);
+  assert.deepEqual(other.debtCheck, { billsCents: 8000, averageCents: 12000, historyMore: true });
+  assert.match(other.basis, /current debt bills from Budget \(\$80\.00 a month, not the average of \$120\.00\)\. The history’s debt payments cannot be matched to these bills one by one, so the plan uses the bills; the history paid more: if a debt payment is missing/);
   assert.deepEqual(tl.bills.map(b => b.status), ['seen'], 'still seen: not added a second time');
   for (const m of ['2032-01', '2032-06', '2032-12']) assert.equal(tl.months.find(x => x.month === m).out.debt, 8000, m);
   // Raised again later: the bill's amount, whichever side of the average it is.
   assert.equal(build(ds, planOf({ bills: [installment({ monthlyCents: 15000 })] })).dialsByKey.other.baselineCents, 15000);
-  assert.equal(build(ds, planOf({ bills: [installment({ monthlyCents: 15000 })] })).dialsByKey.other.debtCheck, null, 'the bills are more: nothing to check');
+  assert.deepEqual(build(ds, planOf({ bills: [installment({ monthlyCents: 15000 })] })).dialsByKey.other.debtCheck, { billsCents: 15000, averageCents: 12000, historyMore: false }, 'the bills are more: disclosed, not flagged');
+  // Exactly the bills: nothing to disclose.
+  assert.equal(build(ds, planOf({ bills: [installment({ monthlyCents: 12000 })] })).dialsByKey.other.debtCheck, null);
 });
 
 test('debt: an explicit $0 debt bill is a current amount (no fallback to the history); with no debt in the history a bill is added; personal bills stay out', () => {
@@ -224,7 +227,7 @@ test('debt: an explicit $0 debt bill is a current amount (no fallback to the his
   // Paid off (or paused) at $0: the history's $200 is not planned.
   const zero = build(ds, planOf({ bills: [installment({ monthlyCents: 0 })] }));
   assert.equal(zero.dialsByKey.other.baselineCents, 0);
-  assert.deepEqual(zero.dialsByKey.other.debtCheck, { billsCents: 0, averageCents: 20000 });
+  assert.deepEqual(zero.dialsByKey.other.debtCheck, { billsCents: 0, averageCents: 20000, historyMore: true });
   assert.deepEqual(zero.bills.map(b => b.status), ['seen']);
   assert.equal(zero.months.find(m => m.month === '2032-01').out.debt, 0);
   // Ended in the window: its last payment is in the history, so nothing of it is left after.
@@ -248,13 +251,21 @@ test('debt: without double counting — the bills are the debt payments (a large
   const both = dataset([['Groceries', 200]], [paid([10, 11, 12]), paid([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], 150, 'Invented Store Card')]);
   const other = build(both, planOf({ bills: [installment()] })).dialsByKey.other;
   assert.equal(other.baselineCents, 8000);
-  assert.deepEqual(other.debtCheck, { billsCents: 8000, averageCents: 2000 + 15000 });
+  assert.deepEqual(other.debtCheck, { billsCents: 8000, averageCents: 2000 + 15000, historyMore: true });
   assert.match(other.basis, /if a debt payment is missing from your bills, add it in Edit plan, or set this amount here/);
-  // With the store card listed as a bill too, both count and nothing is flagged.
+  // Unmapped history lower than a different current bill: the bill is planned, nothing of the
+  // history is added, and the uncertainty is still disclosed (totals cannot show that they match).
+  const other50 = dataset([['Groceries', 200]], [paid([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], 50, 'Invented Other Lender')]);
+  const unmapped = build(other50, planOf({ bills: [installment()] })).dialsByKey.other;
+  assert.equal(unmapped.baselineCents, 8000);
+  assert.deepEqual(unmapped.debtCheck, { billsCents: 8000, averageCents: 5000, historyMore: false });
+  assert.match(unmapped.basis, /cannot be matched to these bills one by one, so the plan uses the bills$/);
+  // With the store card listed as a bill too, both count and nothing is flagged as missing.
   const card = installment({ id: 'store-card', label: 'Invented store card', monthlyCents: 15000 });
   const listed = build(both, planOf({ bills: [installment(), card] })).dialsByKey.other;
   assert.equal(listed.baselineCents, 8000 + 15000);
-  assert.equal(listed.debtCheck, null);
+  // (The history's average, diluted for the newer installment, still differs: disclosed, nothing missing.)
+  assert.deepEqual(listed.debtCheck, { billsCents: 8000 + 15000, averageCents: 2000 + 15000, historyMore: false });
   // A bill ending in the plan: $80 until its end month, then $0 (not $20 − $80).
   const ds = dataset([['Groceries', 200]], [paid([10, 11, 12])]);
   const tl = build(ds, planOf({ bills: [installment({ endMonth: '2032-03' })] }));

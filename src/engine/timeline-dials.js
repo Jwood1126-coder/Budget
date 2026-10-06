@@ -160,9 +160,10 @@
    * included), they are the debt part of the other dial's baseline, lower or higher than the
    * average of debt payments (a bill
    * is the current amount: a payment lowered or refinanced replaces the older, higher history;
-   * the history cannot be split by bill, so none of it is added on top). When the average is
-   * more, the dial's `debtCheck` says so ({ billsCents, averageCents }; else null): a debt paid
-   * every month may be missing from the bills.
+   * the history cannot be split by bill, so none of it is added on top). When the average
+   * differs from the bills, the dial's `debtCheck` says so ({ billsCents, averageCents,
+   * historyMore }; else null): the history cannot be matched to the bills one by one, and when
+   * it paid more (historyMore) a debt paid every month may be missing from the bills.
    */
   function buildDials({ base, people, cfg, byId, requested, funding, targets, goals, investments, seenDebtCents }) {
     const n = base.count;
@@ -251,16 +252,17 @@
     // Debt payments: the current debt bills the history holds (an explicit current amount), else their average.
     const debtAvg = avg(T.debt);
     const debtBills = isCents(seenDebtCents) && debtAvg !== null ? seenDebtCents : null;
-    const debtCheck = debtBills !== null && debtAvg > debtBills ? { billsCents: debtBills, averageCents: debtAvg } : null;
+    const debtCheck = debtBills !== null && debtAvg !== debtBills ? { billsCents: debtBills, averageCents: debtAvg, historyMore: debtAvg > debtBills } : null;
     parts.debt = debtBills !== null ? debtBills : debtAvg;
     parts.business = avg(T.business);
     const otherBase = debtBills !== null ? debtBills + parts.business : avg(T.debt + T.business);
-    // Shown at $0 too when the history paid debts the bills do not plan (debtCheck).
+    // Shown at $0 too when the history's debt payments differ from the bills (debtCheck).
     if ((otherBase !== null && otherBase !== 0) || isCents(own(setDials, 'other')) || debtCheck) {
       dials.push(Object.assign({ key: 'other', group: 'out', label: DIAL_LABEL.other, baselineCents: otherBase }, resolve('other', otherBase), {
         basis: windowText + (n ? ' (debt payments and business purchases)' : '')
           + (debtBills !== null ? '; debt payments at your current debt bills from Budget (' + E.money.format(debtBills) + ' a month, not the average of ' + E.money.format(debtAvg) + ')' : '')
-          + (debtCheck ? '. Your history paid more toward debts than these bills: if a debt payment is missing from your bills, add it in Edit plan, or set this amount here' : ''),
+          + (debtCheck ? '. The history’s debt payments cannot be matched to these bills one by one, so the plan uses the bills'
+            + (debtCheck.historyMore ? '; the history paid more: if a debt payment is missing from your bills, add it in Edit plan, or set this amount here' : '') : ''),
         hint: null, drill: null, debtCheck,
         split: splitWaiting ? { fromCents: cfg.dials.other, investingCents: investBase || 0, otherCents: setDials.other } : null,
       }));
