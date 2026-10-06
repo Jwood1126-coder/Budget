@@ -116,6 +116,8 @@ module.exports = [
       await page.click('.mainnav a[data-nav="review"]');
       await page.waitForFunction(() => location.hash.startsWith('#/review'));
       assert.equal(await page.evaluate(k => localStorage.getItem(k), KEY), before, 'changing page does not rewrite the budget');
+      // The page is noted once its render is done: wait for it before opening the page again.
+      await t.settled();
       await page.goto(t.url);
       await page.waitForSelector('#page-title');
       assert.ok((await page.evaluate(() => location.hash)).startsWith('#/review'), 'opening the page again returns to the last page');

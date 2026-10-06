@@ -106,7 +106,7 @@
           <button type="button" class="btn btn-ghost btn-small plan-ch-remove" id="${esc(id)}-remove" data-action="plan:change-remove" data-change="${esc(ch.id)}" data-name="${esc(name)}" aria-label="${esc('Remove ' + name)}">✕</button>
         </div>
         ${unset}
-        ${ch.yearlyCents ? `<p class="plan-ch-yearly" id="${esc(id)}-yearly">plus ${esc(amt(ch.yearlyCents))} a year (membership fee) in ${esc(fmt.month(ch.startMonth))} and every 12 months after</p>` : ''}
+        ${ch.yearlyCents && isCents(ch.cents) && ch.cents > 0 ? `<p class="plan-ch-yearly" id="${esc(id)}-yearly">plus ${esc(amt(ch.yearlyCents))} a year (membership fee) in ${esc(fmt.month(ch.startMonth))} and every 12 months after</p>` : ''}
         <p class="field-error" id="${esc(id)}-label-error" role="alert" hidden></p>
         <p class="field-error" id="${esc(id)}-amt-error" role="alert" hidden></p>
         <p class="field-error" id="${esc(id)}-start-error" role="alert" hidden></p>
@@ -122,8 +122,18 @@
     const st = E.babyDefaults.status(ctx.state);
     if (!st.items.length || st.group !== name) return '';
     const month = st.timing === 'month' ? ` Timed from the birth month (${esc(fmt.month(st.birthMonth))}), to the month only: add the due date in Budget’s setup details.` : '';
-    const PACK_NAME = { babyFirstYear: 'the New baby pack', childcare: 'the Childcare pack' };
-    const twice = (tl.changes.overlaps || []).map(o => `“${esc(o.label)}” is not counted: ${o.kind === 'pack' ? esc(PACK_NAME[o.template] || 'a pack') + ' covers it too' : 'another accepted item covers it'}.`).join(' ');
+    const PACK_NAME = { babyFirstYear: 'the New baby pack', childcare: 'the Childcare pack', kidCosts: 'the Kid costs pack' };
+    const byId = new Map(tl.changes.list.map(ch => [ch.id, ch]));
+    // Held back only in the months the covering items run: say which (a monthly default counts again after them).
+    const twice = (tl.changes.overlaps || []).map(o => {
+      const def = byId.get(o.id);
+      const mine = o.with.length === 1 && byId.get(o.with[0]);
+      const who = o.kind === 'pack' ? esc(PACK_NAME[o.template] || 'a pack') : mine ? `“${esc(mine.label)}”` : 'another accepted item';
+      if (!def || def.kind === 'oneTime') return `“${esc(o.label)}” is not counted: ${who} covers it.`;
+      const from = o.from && o.from > def.startMonth ? o.from : null;
+      const when = from && o.until ? ` (${fmt.month(from)} to ${fmt.month(o.until)})` : from ? ` (from ${fmt.month(from)})` : o.until ? ` (until ${fmt.month(o.until)})` : '';
+      return `“${esc(o.label)}” is held back while ${who} covers it${esc(when)}.`;
+    }).join(' ');
     return `<p class="plan-ch-caveat fine" id="plan-baby-caveat">${esc(st.caveat)}${month}</p>${twice ? `<p class="plan-ch-caveat fine" id="plan-baby-overlap" role="note"><strong>Counted once:</strong> ${twice}</p>` : ''}`;
   }
 

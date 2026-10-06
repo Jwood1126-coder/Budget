@@ -1608,9 +1608,11 @@ naming what is missing, when a public name has not been added), the parts in bet
     worked out from Budget (`source: 'bill'` with `billId`, or `'goal'` with `goalId`; `readOnly:
     true`, `accepted: true`: edited in Budget, never by `setChange`/`acceptChanges`), each with
     `status: 'unset'|'notAccepted'|'applied'|'overridden'|'overlap'|'outside'`, `monthsApplied`, `appliedCents`
-    ('overlap': a baby-cost default held back because an accepted New baby / Childcare pack, or an
-    accepted item of the same kind in its group, covers the same cost: `babyDefaults.guard`; each one
-    in `overlaps` as `{ kind: 'pack'|'alternative', role, id, label, with: ids, template? }`, so the
+    ('overlap': a baby-cost default held back in every plan month because an accepted New baby /
+    Childcare / Kid costs pack, or the household's own accepted item of the same kind (in its group,
+    or about a child anywhere), covers the same cost: `babyDefaults.guard`; a monthly default is held
+    back only in the months a covering item runs and counts again after; each one in `overlaps` as
+    `{ kind: 'pack'|'alternative', role, id, label, with: ids, template?, from, until }`, so the
     screen warns; nothing is removed. An unaccepted item of the same kind there is an alternative:
     never added on top of the default, not in `tl.compare` either);
     `applied`: how many of the household's own applied; `derived`: how many are worked out from
@@ -1998,8 +2000,9 @@ them; `tools/plan-report.cjs` runs it too.
 - `ensure(state, { now }?) -> { state, notes, changed, status }` — one canonical group: the group
   already holding a default, else a copied what-if group (ids `'sc-…'`) whose name or a label is
   about a baby or a birth, else a new group `'New baby'` (`GROUP_NAME`). Per role not yet in
-  `meta.babyDefaults.done`: covered when the group holds an accepted item of that kind with an amount
-  (the household's own choice, an explicit $0 included: nothing added); else an untouched placeholder
+  `meta.babyDefaults.done`: covered when the group, or the plan anywhere for an item about a child
+  (e.g. the household's own 'Daycare' with no what-if), holds an accepted item of that kind with an
+  amount (the household's own choice, an explicit $0 included: nothing added); else an untouched placeholder
   of that kind (`roleOf` its label; no amount; start month still the one its scenario event gave it,
   or the group's birth month) is filled (amount, timing, accepted, `derived`; a name still as copied
   gains "(estimate)"; its note is kept after the default's); else the default row is added to the
@@ -2011,9 +2014,10 @@ them; `tools/plan-report.cjs` runs it too.
 - `status(state) -> { group, timing: 'day'|'month'|'unknown', dueDate, birthMonth, caveat, items }` —
   for the Plan and Budget screens and the report.
 - `follow(prev, next, opts?)` — `ensure(next)` when `babyDueDate` differs between them, else `next`.
-- `guard(changes)` — for `timeline.build` (counting once, above): `{ held, alternatives, overlaps }`.
+- `guard(changes)` — for `timeline.build` (counting once, above): `{ held, heldIn(id, month), alternatives, overlaps }`.
 - `roleOf(change)` — which default a spending change is about, from its label (childcare, supplies,
-  setup words), or null; `ROLES`, `PACK_ROLES` (`babyFirstYear`: setup and supplies; `childcare`).
+  setup words), or null; `ROLES`, `PACK_ROLES` (`babyFirstYear`: setup and supplies; `childcare`;
+  `kidCosts`: supplies).
 
 ### BudgetEngine.attention
 - `list({ dataset, txns, state, ctx, balanceKnown? }) -> [{ id, severity: 'action'|'decision'|'info', title, detail, route, cta? }]`
