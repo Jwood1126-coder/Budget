@@ -107,7 +107,8 @@ One stream per paycheck or regular transfer **into the joint accounts**:
     from the month after it ("Car loan ends"). Current debt bills count at their own amounts,
     instead of the history's average of debt payments, whether that average is less (a loan
     that started a few months ago is diluted over the window) or more (a payment lowered or
-    refinanced): an explicit current amount wins, never both. When the average is more, the
+    refinanced): an explicit current amount wins, never both. A debt bill at `0` (paid off or
+    paused) is a current amount too: the plan counts $0 for it, not the history. When the average is more, the
     Debt & business dial says so: list every debt paid from joint money as a bill, or the plan
     leaves out the ones without a bill.
   - **added**: not in the history (or `status: "planned"`, or `startMonth` after the plan

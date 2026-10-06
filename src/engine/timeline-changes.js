@@ -139,12 +139,13 @@
    * on the plan (the bill is edited in Budget): { …a planned change, source: 'bill', billId,
    * readOnly: true, accepted: true }. `bills` says what happened to every bill.
    * `seenDebtCents`: the monthly amounts of the debt-payment bills seen and running in the baseline
-   * months (status 'seen' with no end month, or 'ends') added up. The history holds them, but
+   * months (status 'seen' with no end month, or 'ends') added up, a debt bill at an explicit $0
+   * included (it is seen at $0: paid off or paused); null when there is none. The history holds them, but
    * averaged over the whole window a debt that started (or was entered) recently is diluted
    * (three $80 payments in twelve months average $20), and a payment lowered or refinanced keeps
    * its older, higher amount there, so the other dial plans debt payments at this amount whenever
    * it is more than $0 (buildDials), and an 'ends' change takes out exactly what it counts.
-   * @returns {{ changes: object[], bills: { id, label, status, changeId }[], seenDebtCents: number }}
+   * @returns {{ changes: object[], bills: { id, label, status, changeId }[], seenDebtCents: number|null }}
    *   status: 'seen' | 'ends' | 'added' | 'ended' | 'notJoint' | 'noAmount' | 'noCategory' | 'inBudget'
    */
   function billChanges({ plan, base, byId, planStart, targets }) {
@@ -168,7 +169,8 @@
     const debtSeen = !!(base.total && base.total.actual && base.total.actual.debt > 0);
     const windowStart = base.start || planStart;
     const changes = [], bills = [];
-    let seenDebtCents = 0;
+    // null until a current joint debt bill with an amount ($0 included) is counted.
+    let seenDebtCents = null;
     for (const b of list) {
       if (!isObj(b) || typeof b.id !== 'string' || !b.id) continue;
       const label = typeof b.label === 'string' && b.label.trim() ? b.label.trim() : b.id;
@@ -177,7 +179,9 @@
       const isDebt = b.type === 'debt';
       const category = typeof b.category === 'string' && b.category.trim() ? b.category.trim() : null;
       if (b.fundedFrom !== 'joint') { info.status = 'notJoint'; continue; }
-      if (!isCents(b.monthlyCents) || b.monthlyCents <= 0) { info.status = 'noAmount'; continue; }
+      // A debt bill at an explicit $0 (paid off, or paused) is a current amount too: it counts as $0 below.
+      const zeroDebt = isDebt && b.monthlyCents === 0;
+      if (!isCents(b.monthlyCents) || (b.monthlyCents <= 0 && !zeroDebt)) { info.status = 'noAmount'; continue; }
       if (!isDebt && !category) { info.status = 'noCategory'; continue; }
       if (!isDebt && (isCents(own(targets, category)) || budgeted.has(canon(category)))) { info.status = 'inBudget'; continue; }
       const start = E.months.isMonth(b.startMonth) ? b.startMonth : null;
@@ -186,8 +190,8 @@
       const common = { kind: 'monthly', group: isDebt ? 'debt' : 'essentials', personId: null, accepted: true, template: null, scenario: null, source: 'bill', billId: b.id, readOnly: true };
       if (seen) {
         // A debt payment the baseline months hold, still running in them: counted at its amount.
-        if (isDebt && (!end || end >= windowStart)) seenDebtCents += b.monthlyCents;
-        if (!end || end < windowStart) { info.status = 'seen'; continue; }
+        if (isDebt && (!end || end >= windowStart)) seenDebtCents = (seenDebtCents || 0) + b.monthlyCents;
+        if (!end || end < windowStart || zeroDebt) { info.status = 'seen'; continue; }
         const after = E.months.add(end, 1);
         info.status = 'ends';
         info.changeId = 'bill-' + b.id + '-ends';
@@ -198,6 +202,7 @@
         continue;
       }
       if (end && end < planStart) { info.status = 'ended'; continue; }
+      if (zeroDebt) { info.status = 'noAmount'; continue; }
       info.status = 'added';
       info.changeId = 'bill-' + b.id;
       const why = b.status === 'planned' ? 'it is planned, not paid yet' : start && start > planStart ? 'it starts in ' + E.months.label(start) : 'your history has no payment for it';
