@@ -779,12 +779,34 @@ transactions from `ledger.applyEdits`.
 ### BudgetEngine.categories
 - `DEFAULT: [{ name, group, seasonal?: boolean, essential?: boolean }]`, `GROUP_ORDER`
 - `groupOf(name) -> string` ('Other' when unknown), `isSeasonal(name, extraSeasonal?) -> boolean`,
-  `isEssential(name)`, `find(name)`, `names() -> string[]`, `sortNames(list)`
+  `isEssential(name)`, `find(name)` (the taxonomy entry of exactly that name, or null), `names() ->
+  string[]`, `sortNames(list)`
+- `resolve(name) -> string|null` — the taxonomy category a label stands for: the name itself; else
+  the category or alias (`ALIASES`) with the same words (case, spacing, punctuation and '&'/'and'
+  ignored: 'groceries', 'GAS AND HEATING'); else the first keyword family whose phrase appears in
+  the label as whole words ('Electric bill' → Electric, 'Car insurance' → Auto insurance, 'Child
+  care' → Baby & childcare; families cover only necessities named without doubt, so a bare 'Gas'
+  — fuel or heating? — and 'Restaurants' stay null). Null for an aggregate and for an unknown
+  label. `ALIASES` are the earlier version's category names (the same mapping as its budget keys,
+  `state.LEGACY_TARGETS`): Natural gas → Gas & heating, Electricity → Electric, Municipal payments →
+  Water & sewer, Groceries & meal kits → Groceries, Dining & drinks → Dining & takeout, Shopping &
+  mixed retail → Mixed retail, Home & hardware → Household & hardware, Fuel & charging → Fuel,
+  Vehicle care & registration → Auto maintenance, Travel & parking → Travel, Apps & subscriptions →
+  Subscriptions, Uncategorized / review → Uncategorized. Labels are never renamed: transactions and
+  budgets keep the names they have; only these lookups follow the category a name resolves to.
+- `AGGREGATES`: budget names that stand for several taxonomy categories together, `membersOf(name)
+  -> string[]|null`: "Energy (gas + electric, migrated)" (`state.ENERGY_TARGET`, the earlier
+  version's combined target) → Gas & heating + Electric. An aggregate is essential when all of its
+  members are, seasonal when any is, and in their group when they share one; the plan counts its
+  budget once for all of its members (timeline `drill`, category budgets).
+- `groupOf`, `isSeasonal` and `isEssential` look up the category a name resolves to (an aggregate:
+  its members), so an imported 'Natural gas' is a seasonal Utilities essential like Gas & heating.
 - `essential` marks spending that is hard to cut; the plan screen plans it as **essentials** and
   everything else as **flexible**: Mortgage, Home maintenance & repairs, Property tax & HOA, every
   utility (Gas & heating, Electric, Water & sewer, Trash & municipal, Internet & phone), Groceries,
   Fuel, Auto maintenance, every insurance, Medical & pharmacy, Dental, Vision, Baby & childcare, and
-  'Debt payment' (not a spending category; debt payments themselves are the plan's `other` dial).
+  'Debt payment' (not a spending category; debt payments themselves are the plan's `other` dial);
+  also every label that resolves to one of them (`resolve`), and an aggregate of them.
   Flexible: dining, shopping (Mixed retail, household, clothing, electronics), home improvement,
   parking, rideshare, pets, personal care, education, entertainment, subscriptions, hobbies, travel,
   gifts, fees, cash, uncategorized.
@@ -1359,13 +1381,21 @@ naming what is missing, when a public name has not been added), the parts in bet
     that category. A bill with `status` 'planned', or a `startMonth` after `planStart`, is never
     seen. Statuses: `seen` (nothing to do), `ends` (seen, with an `endMonth` on or after the
     baseline's first month: change `'bill-<id>-ends'`, −amount a month from the month after it, or
-    `planStart` when later), `added` (not seen: change `'bill-<id>'`, +amount a month from its
+    `planStart` when later; a debt bill: see `seenDebtCents`), `added` (not seen: change `'bill-<id>'`, +amount a month from its
     `startMonth` or `planStart` when later, through its `endMonth`; group `essentials`, or `debt`
     for a debt payment: `out.debt`, `out.other`, `out.total`), `ended` (not seen, ended before
     `planStart`), `notJoint` (`fundedFrom` p1/p2/unknown: never on the joint plan), `noAmount`
     (null or $0), `noCategory` (not a debt payment and no category: it cannot be matched to the
     history, so it is never added — that could count it twice), `inBudget` (its category has a
-    budget, which already plans that category).
+    budget, which already plans that category). **Current debt bills win over a diluted average**:
+    the debt bills seen and running in the baseline months (`seen` with no `endMonth`, or `ends`;
+    `billChanges` → `seenDebtCents`, their monthly amounts added up) are in the history, but
+    averaged over the whole window a debt that started recently is diluted (three $80 payments in
+    twelve months average $20). The debt part of the `other` dial's baseline (`parts.debt`) is the
+    average of debt payments, or `seenDebtCents` when that is more — instead of the average, never
+    on top of it (a larger average, e.g. a debt with no bill, stays) — and an `ends` change takes
+    out exactly what it counted. The basis then adds "; debt payments at your current debt bills
+    from Budget ($80.00 a month, not the average of $20.00)". A dial set directly still wins.
   - `goals`: `plan.savings` with `{ id, label, targetCents, savedCents, monthlyCents, targetMonth,
     spendAtTarget, cumulativeCents, reachMonth, already }`. The projected savings balance (the
     savings accounts' lines added up) reaches goal k in the first month, from the last complete
@@ -1440,8 +1470,9 @@ naming what is missing, when a public name has not been added), the parts in bet
     of … add up to them)."). The parenthesis is there only while it is true: all three spending
     dials still hold their carried-over amounts and the parts sum to what was set; otherwise the
     note ends after the amount.
-  - Grouping: a category is `essentials` when `categories.isEssential` says so, else `flexible`;
-    `settings.groups[category]` overrides it, and `settings.groups['merchant:' + place]` moves every
+  - Grouping: a category is `essentials` when `categories.isEssential` says so for the category its
+    name resolves to (`categories.resolve`: an imported 'Groceries & meal kits' is Groceries), else
+    `flexible`; `settings.groups[category]` overrides it, and `settings.groups['merchant:' + place]` moves every
     purchase of that place (all its categories) into a synthetic category row named after the place
     in the chosen group. One-time costs are never in these groups: they are the `irregular` dial.
   - **Category budgets** (`plan.targets`): a level-1 row of one category plans at its change in
@@ -1456,6 +1487,29 @@ naming what is missing, when a public name has not been added), the parts in bet
     `baselineCents` counts each category at its budget (less what moved out) when it has one, else
     its `defaultCents`; the basis adds "; N category budgets from Budget". A budget of null is "not
     set". The grouped "Other" and places moved as a whole plan from `ui.plan.rows` only.
+  - **Aggregate budgets** (`categories.AGGREGATES`, e.g. the migrated "Energy (gas + electric,
+    migrated)"): one budget for several taxonomy categories, counted once. Its row plans at its
+    budget (a row of its own, `history: false`, when nothing is categorized under its name; in the
+    group its members are planned in). A category with no budget of its own whose name resolves to
+    a member (`categories.resolve`: 'Natural gas', 'Gas & heating', 'Electricity', 'Electric') and
+    that is planned in the aggregate's group keeps its row, history and level-2 rows but plans at
+    $0 (`source: 'aggregate'`, `aggregate`: the budget's name; null on every other row; its
+    baseline $0) and is never grouped into "Other"; the aggregate is paid like those members
+    (`paidBy`, `cardShare`) and names them in `covers` (sorted; [] on every other level-1 row). Changes move the aggregate by exactly what they change: a change to a
+    member's level-2 rows by its difference; a member left out, or given an amount of its own in
+    `ui.plan.rows` (planned at it, `source: 'set'`), by minus the member's `defaultCents`. Members
+    planned elsewhere take their share out of the aggregate like a place moved as a whole
+    (`budgetMovedCents`, never below $0): a member with a budget of its own (on the plan screen a
+    member's amount is written as its budget: splitting "Natural gas" off at $110 leaves $40 of a
+    $150 energy budget) takes that budget; a member the household moved to the other group
+    (`settings.groups`) its history there, where it plans from its history. So a $150 energy budget
+    with $100 of gas and $50 of electricity history plans $150, not $300; the saved budget and
+    history are untouched.
+  - **Rows that change group by name**: when a category's group comes from the taxonomy and its
+    rows have no change of their own, a change saved under the other group's id for the same row
+    (`<other group>` instead of `<group>` in its id: made while an imported name such as 'Natural
+    gas' was not recognised and so planned as flexible) still applies (`legacyId` names it) and is
+    in `migration.rows`, which `migrateRows` makes permanent.
   - `drill` (essentials, flexible): `{ kind: 'categories', group, rows, categoryCount, baselineCents,
     rowsCents, baselineCardCents, rowsCardCents, cardShare, overridden, stableCount, yearlyCount,
     orphanIds, tinyCategoryCents, budgetCount }`; rows are categories (level 1, tiny ones grouped as
@@ -1556,7 +1610,11 @@ naming what is missing, when a public name has not been added), the parts in bet
     `ui.plan.trends.series`: `planSettings.BALANCE_SERIES` lists the fixed balance keys, and
     `TREND_SERIES.includes` also accepts `balance-` + any account id (`planSettings.isBalanceSeries`).
   - `migration`: null, or `{ rows: [{ from, to }], dropped, superseded, rowsNote, dials, other, note }`
-    when `settings.rows` still holds changes saved under the earlier card/bank dials,
+    when `settings.rows` still holds changes saved under the earlier card/bank dials or under the
+    other group for a category now planned by its name (see `drill`; after the card/bank ones in
+    `rows`, never `dropped`; the row note then adds "N changes to spending rows moved with their
+    categories to the other group: an imported category name is now read as the category it stands
+    for."),
     `settings.legacyDials` holds amounts set for them, or a `dials.other` amount waits to be split
     (`other`: `{ fromCents, investingCents, otherCents, investingSet, note }`, note "ui.plan.dials.other:
     your amount for debt, business and investments ($600.00) was split now that investments have a
@@ -1690,7 +1748,8 @@ naming what is missing, when a public name has not been added), the parts in bet
   other to the saved amount minus it, `otherDial` 'debt', the note appended to
   `meta.migrationNotes`; with no investments in the baseline only `otherDial` changes, no note;
   `otherDial` 'withInvesting' with no other amount: just 'debt'; safe to run twice),
-  `migrateRows(state, tl)` (moves the earlier card/bank row changes `tl.migration` matched, removes
+  `migrateRows(state, tl)` (moves the earlier card/bank row changes, and the ones saved under the
+  other group for a category now planned by its name, that `tl.migration` matched, removes
   the rest, and appends `tl.migration.rowsNote` to `meta.migrationNotes`; returns the same state
   when there is nothing to do), `migrateDials(state, tl)` (sets each `tl.migration.dials.to` amount
   directly with its card part in `ui.plan.cardSplit`, leaving a dial set directly in the meantime
@@ -1767,7 +1826,8 @@ naming what is missing, when a public name has not been added), the parts in bet
     becomes one bill replacing "Internet & phone" bills **and target** (with a note that insurance
     bills may overlap); a known `cardFee` becomes a bill replacing the "Fees & interest" target
     **and bills**; a combined medical target (before v3 or per `healthMode`) sets Dental to null.
-    Every removal is noted with the removed amounts.
+    Every removal is noted with the removed amounts. The plan then counts the energy target once
+    for the gas and electricity history too (`categories.AGGREGATES`; timeline `drill`).
   - Profile bills keep their own `fundedFrom`/`status`; only bills the migration creates get p1/p1/
     planned for vehicleA, student and lifeInsurance. `vehicleBFunding`: personal → p2, joint →
     joint, `'unknown'` never overwrites a known profile value.
@@ -1857,7 +1917,7 @@ Setup sync, section 3. Loaded after `state.js`; uses `state.defaults`, `state.cl
 | --- | --- |
 | `#/overview?compare=…` | Plan (`views/overview.js` composing `views/plan/*.js`, one `timeline.build` per render, with `compare` when the route names a what-if). First the tiles (`#plan-kpis`, `plan/tiles.js`): Monthly on this plan (`#plan-kpi-month`: money in − money out for all joint accounts, the headline's figure, never checking's net; its line says what goes to or comes from savings; it follows a dragged slider), Cash in 12 months (`#plan-kpi-cash`: the combined line at the end of the 12th plan month, or the plan's last, and the change from the month before the plan), Savings now → then (`#plan-kpi-savings`, with a savings account), Investments now → then (`#plan-kpi-invest`, only with an investment line; "not cash", or "illustrative growth") and Lowest point (`#plan-kpi-low`, only when the combined line goes below $0: how low, and from when; it replaces the earlier warning notice); two by two on phones. Then the cash chart (Balance: combined cash with each savings account's line, each checking account's line switched off until chosen (`ui.plan.hidden` null), the investments line (`balance-investments`, series-4, shown by default) plus a faint baseline-plan line once a dial has moved; Compare (`#plan-compare`, `plan:compare`, Balance mode only, listed when `tl.scenarios` has names): the chosen what-if is the route's `?compare=` (replaced in place, never saved), drawn as a dash-dot amber line (`role: 'compare'`, chip `compare`, readout and table column) with `#plan-compare-diff` "−$X by Mon YYYY" (the what-if's last point minus the plan's) and `#plan-compare-unset` when some of its amounts are not set; markers in a lane above the plot for accepted planned changes (a pack's items by the pack's name, named at its first month), what Budget adds after the plan starts and the month each savings goal is reached (`tl.markers`), short labels that never overlap; Flows: money in by person, other and from savings, out as essentials, flexible, irregular, savings and debt/business/investing, with a net line; Trends: any monthly series, and in a Balances group the month-end balances (combined cash, each cash account, savings in total when there are two or more savings accounts), as lines with an optional trailing average and a straight-line trend; the chart title is "Monthly amounts over time", "Balances over time" or, with both kinds picked, "Monthly amounts and balances over time" (the table twin's caption the same), the y-axis title "Monthly, $ per month", "$ at month end" or "$ — monthly amounts and month-end balances", the caption starts "Monthly amounts from your data; …" or, balances only, "Month-end balances from your data; …" and, with both, adds that balance lines are month-end levels; each series is passed to `chart.cashChart` with its `unit` ('atMonthEnd' for balances), so the spoken summary reads a balance where it ended ("… ended at $X in Sep 2026"), not as a monthly average; Past 6/12/all and Ahead 6/12/24/60 months; Export CSV); the balances it starts from (taken from the data — statement or bank running balance — with their source shown; an entered balance is an override); the dials (money in by person from the pay saved in Budget, money out as Essentials, Flexible spending, Irregular costs, Net to savings and Other; slider in $25 steps plus an exact box; essentials and flexible open into categories and places with pattern badges that can be unticked, given an amount or moved between the two groups; irregular lists the one-time items in the allowance; every place and "everything else" row (or the category itself when it has only that row) opens a quiet `<details id="plan-txns-<rowId>">` "Show N transactions", and each one-time item `plan-txns-<txnId>` "Show transaction": the row's `txnIds`, newest first, 25 until "Show all N" (`plan:txns-all`, `#plan-txns-<rowId>-all`, drawn in place, nothing saved), each line the date, the bank's description (truncated, in full in its title), account, amount, a compact category select `#plan-txcat-<txnId>` (`plan:txn-category`; the Transactions view's choices, `shared.categoryOptions`, in `<optgroup>`s by `categories.groupOf`; a split purchase shows its parts instead) and "Details" (`#/spending?period=<month>&txn=<id>`). Lines are drawn only while their list is open (a list open in the page being replaced is drawn open again; one opened later is filled on its `toggle`). Changing a select writes the `category` ledger edit (reason "Set on the Plan page", message "<Place>: now <Category>."). Each place's row also has "All N from this place → [category]" (`#plan-row-<rowId>-cat`, `plan:merchant-category`): every spending transaction from that place in the whole data (split ones left out; N counts them), one `shared.editMany` update, "<Place>: N transactions now <Category>."; the page then opens the place's new category and focuses its control there. On these category selects (`.plan-txcat`) a change made with the keys of a closed list (an arrow, a letter) waits for Enter or for leaving the select, and Escape takes it back; a choice made in the opened list applies at once. A line that leaves its list hands focus to the next line); the headline (all accounts per month, then checking); Coming up (`#plan-changes`, `plan/changes.js`, always open): a strip across the plan's months (`#plan-coming-strip`: a pack as one bar with its one-time and monthly totals, a change as a dot or a bar, a bill Budget adds or ends, a goal spent or reached; faded and dashed until accepted; lanes so labels never overlap), the Add row (`#plan-add`: New baby `#plan-pack-baby-*` (due date), Childcare `#plan-pack-childcare-*` (start month, $1,200 a month unless changed), Kid costs `#plan-pack-kids-*` (due date) — `plan:add-pack`, items never accepted for the household and tagged `scenario` = the pack's name so Compare shows them first — and Custom, the `#plan-ch-new-*` form, `plan:add-change`), then the list `#plan-ch-list` by start month: accept, name, amount, status and remove on one line, when and how folded under the date (`#plan-ch-<id>-edit`); the changes of one what-if or pack (`scenario`, else the pack's name for a `template` without one: `_plan.groupKeyOf`) are one folded row `li.plan-ch-group[data-group=<name>]` (two or more changes; one stays a plain line): its colour, one box `#plan-grp-<slug>-on` (`plan:group-accept`, `data-ids`; indeterminate while some are accepted) that accepts or unaccepts them all, the name, "N items · $X once + $Y/mo", how many are in the plan and how many have no amount; `<details id="plan-grp-<slug>">` opens into its lines with every per-change id as before (a pack just added comes up open once, its box focused); custom changes and what Budget adds stay single rows; what Budget adds is read-only with a link to Budget (`#plan-ch-<id>-budget`); Accept all / Unaccept all. Changes saved from the earlier Baby template are ordinary changes, shown under "Baby". The dials show one short line each (baseline, the basis in a few words); what the dial is and its whole basis are behind ⓘ (`#plan-dial-<key>-info`: `-sub`, `-why`, `-hint`). More options (baseline window, cover from savings). Every change goes through `app.update` and can be undone; view settings and legend toggles are saved without a re-render |
 | `#/spending?period=2026-09&cat=Groceries&merchant=…&txn=…&q=…&window=3` | month → category → merchant → transaction drilldown with breadcrumbs |
-| `#/budget?section=income|bills|debts|savings|targets&focus=<id>` | "this month's plan" (`views/budget.js` composing `views/budget/*.js`), read from the Plan's own `timeline.build` (the same `ctx.memo('timeline')` build), so Budget and Plan show the same numbers: (1) "<Month> plan", where each dollar of `tl.summary` goes: two bars on one scale, money in (each person, other money in, and as hatched segments money drawn from savings or brought back from investments, or "Short by" when the month does not cover itself) over money out (Essentials, Flexible, Irregular, Debt & business, Savings, Investing, Left over); the headline is in − out (what the cash accounts move by, the Plan's combined line), with chips for savings, investing and what stays in checking; the legend lists every segment with its amount and share (the text version; the figure's caption says it all again); (2) this month so far (`#bud-month`, `data-mode` partial/last/none): each spending group (`#bud-grp-<group>`, the timeline's month amounts) and its category rows (the Plan's drill-down level-1 rows; the plan month's changes as read-only rows; one-time costs under Irregular; anything else "Everything else") with spent against planned bars, over-plan rows marked, and a pace marker at the data's last covered day of the plan month (from coverage, never the clock); when the data does not reach the plan month, the last complete month against the plan, labelled. A category's planned amount is typed on its row (`#bud-target-…`, `budget:set-plan`: `timeline.setTarget`, or `setRow` when the row carries its own Plan amount; blank goes back to its history); (3) goals: one card per savings goal (saved/target ring, the plan's reach month from `tl.goals` or "Not on this plan", the monthly amount bound to `plan.savings[id].monthlyCents`, `#bud-goal-monthly-…`) and the investments card when there is an investment line; (4) coming up: the next six changes from the plan month on (the household's and the ones worked out from bills and goals, goal reach markers), linked to the chart; (5) setup details, folded: one disclosure per area (`#bud-area-income|bills|debts|savings`, `section=` opens it, `focus=` focuses a field inside): pay and income (counted as the Plan counts it: joint, annual average month), personal accounts, bills (with what the plan does with each, `tl.bills`), debts, the savings goals list and the joint cash balance while no account balance is known. Every edit is undoable; the toast adds the month's new figure |
+| `#/budget?section=income|bills|debts|savings|targets&focus=<id>` | "this month's plan" (`views/budget.js` composing `views/budget/*.js`), read from the Plan's own `timeline.build` (the same `ctx.memo('timeline')` build), so Budget and Plan show the same numbers: (1) "<Month> plan", where each dollar of `tl.summary` goes: two bars on one scale, money in (each person, other money in, and as hatched segments money drawn from savings or brought back from investments, or "Short by" when the month does not cover itself) over money out (Essentials, Flexible, Irregular, Debt & business, Savings, Investing, Left over); the headline is in − out (what the cash accounts move by, the Plan's combined line), with chips for savings, investing and what stays in checking; the legend lists every segment with its amount and share (the text version; the figure's caption says it all again); (2) this month so far (`#bud-month`, `data-mode` partial/last/none): each spending group (`#bud-grp-<group>`, the timeline's month amounts) and its category rows (the Plan's drill-down level-1 rows — a category planned in an aggregate budget is not a row of its own: its spending counts on the aggregate's row, `covers`; the plan month's changes as read-only rows; one-time costs under Irregular; anything else "Everything else") with spent against planned bars, over-plan rows marked, and a pace marker at the data's last covered day of the plan month (from coverage, never the clock); when the data does not reach the plan month, the last complete month against the plan, labelled. A category's planned amount is typed on its row (`#bud-target-…`, `budget:set-plan`: `timeline.setTarget`, or `setRow` when the row carries its own Plan amount; blank goes back to its history); (3) goals: one card per savings goal (saved/target ring, the plan's reach month from `tl.goals` or "Not on this plan", the monthly amount bound to `plan.savings[id].monthlyCents`, `#bud-goal-monthly-…`) and the investments card when there is an investment line; (4) coming up: the next six changes from the plan month on (the household's and the ones worked out from bills and goals, goal reach markers), linked to the chart; (5) setup details, folded: one disclosure per area (`#bud-area-income|bills|debts|savings`, `section=` opens it, `focus=` focuses a field inside): pay and income (counted as the Plan counts it: joint, annual average month), personal accounts, bills (with what the plan does with each, `tl.bills`), debts, the savings goals list and the joint cash balance while no account balance is known. Every edit is undoable; the toast adds the month's new figure |
 | `#/forecast…` | retired: rewritten in place to `#/overview` (router `REDIRECTS`, app `redirected`); `?scenario=<id or name>` (or the first of `compare=a,b`) becomes `?compare=<that scenario's name>` unless it is the baseline. `state.scenarios` and `ui.compareIds` stay saved as they are; `BudgetEngine.forecast` stays for Budget and the attention list |
 | `#/review?queue=uncertain|duplicates|transfers|reimbursements|business|spikes|coverage|edited|reconcile` | data review & corrections |
 | `#/data` | load files, export/import workbook, storage & privacy explanation, reset. `?load=csv`: bank exports and balances files, added to the data in use (default for a household's own data; `importer.mergeDataset`, summary "N new, M already present, coverage now to …" with Add / Cancel and Replace instead… behind a confirmation) or replacing it (default for the fictional sample; import report, then Use this data). The hub lists posted balances and offers the data in use as a data file (JSON) that "Choose a data file" reads back |

@@ -155,9 +155,12 @@
    * even with no transfers to it yet). While ui.plan.otherDial is 'withInvesting' (an amount saved
    * for `other` before investments had their own dial), that amount is read as debt & business
    * plus investments at their baseline (other = amount − the investing baseline) until the plan
-   * screen makes the split permanent (timeline.splitOther).
+   * screen makes the split permanent (timeline.splitOther). `seenDebtCents` (billChanges): the
+   * current debt-payment bills the baseline months hold; the debt part of the other dial's
+   * baseline is the average of debt payments, or that total when it is more (the bills are in
+   * the history, so they replace a diluted average instead of adding to it).
    */
-  function buildDials({ base, people, cfg, byId, requested, funding, targets, goals, investments }) {
+  function buildDials({ base, people, cfg, byId, requested, funding, targets, goals, investments, seenDebtCents }) {
     const n = base.count;
     const T = base.total.planning;
     const avg = cents => (n ? E.money.divide(cents, n) : null);
@@ -199,13 +202,15 @@
         basis: windowText + (n ? ' (deposits nobody could be matched to, and interest)' : ''), hint: null, drill: null,
       }));
     }
-    const legacy = [], superseded = [];
+    const legacy = [], superseded = [], regrouped = [];
     for (const key of SPEND_GROUPS) {
       const drill = drillFor(key, base, byId, cfg, targets);
       legacy.push(...drill.legacy);
       superseded.push(...drill.superseded);
+      regrouped.push(...drill.regrouped);
       delete drill.legacy;
       delete drill.superseded;
+      delete drill.regrouped;
       const extra = n && drill.yearlyCount ? plural(drill.yearlyCount, 'yearly bill') + ' spread over 12 months' : '';
       const d = Object.assign({ key, group: 'out', label: DIAL_LABEL[key], baselineCents: drill.baselineCents }, resolve(key, drill.baselineCents, drill.rowsCents, drill.overridden), {
         basis: windowText + (extra ? '; ' + extra : '') + (drill.stableCount ? '; regular bills at their latest amount' : '')
@@ -239,17 +244,22 @@
         basis: windowText + (n ? ' (into investments minus money brought back)' : ''), hint: null, drill: null,
       }));
     }
-    const otherBase = avg(T.debt + T.business);
-    parts.debt = avg(T.debt);
+    // Debt payments: their average, or the current debt bills the history holds when those are more.
+    const debtAvg = avg(T.debt);
+    const debtBills = isCents(seenDebtCents) && debtAvg !== null && seenDebtCents > debtAvg ? seenDebtCents : null;
+    parts.debt = debtBills !== null ? debtBills : debtAvg;
     parts.business = avg(T.business);
+    const otherBase = debtBills !== null ? debtBills + parts.business : avg(T.debt + T.business);
     if ((otherBase !== null && otherBase !== 0) || isCents(own(setDials, 'other'))) {
       dials.push(Object.assign({ key: 'other', group: 'out', label: DIAL_LABEL.other, baselineCents: otherBase }, resolve('other', otherBase), {
-        basis: windowText + (n ? ' (debt payments and business purchases)' : ''), hint: null, drill: null,
+        basis: windowText + (n ? ' (debt payments and business purchases)' : '')
+          + (debtBills !== null ? '; debt payments at your current debt bills from Budget (' + E.money.format(debtBills) + ' a month, not the average of ' + E.money.format(debtAvg) + ')' : ''),
+        hint: null, drill: null,
         split: splitWaiting ? { fromCents: cfg.dials.other, investingCents: investBase || 0, otherCents: setDials.other } : null,
       }));
     }
     const carriedOver = carriedOverOf(dials, cfg);
-    return { dials, parts, windowText, legacy, superseded, carriedOver };
+    return { dials, parts, windowText, legacy, superseded, regrouped, carriedOver };
   }
 
   /**

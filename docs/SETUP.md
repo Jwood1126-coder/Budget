@@ -104,7 +104,9 @@ One stream per paycheck or regular transfer **into the joint accounts**:
 - How the plan uses a joint bill with an amount (the report's "Bills" table says which applied):
   - **seen**: the baseline months already hold a payment in its category (any debt payment for a
     debt bill), so the dials count it. With an `endMonth`, the plan takes the amount back out
-    from the month after it ("Car loan ends").
+    from the month after it ("Car loan ends"). A current debt bill counts at its own amount when
+    the history's average is less (a loan that started a few months ago is diluted over the
+    window): Debt & business plans debt payments at the larger of the two, never both.
   - **added**: not in the history (or `status: "planned"`, or `startMonth` after the plan
     start): added from `startMonth` (or the plan start) through `endMonth`, to Essentials (debt
     bills to Debt & business).
@@ -121,7 +123,11 @@ One stream per paycheck or regular transfer **into the joint accounts**:
 A number is that category's monthly budget: the Plan screen plans the category at it, and the
 Budget screen shows it. `null` means "not set" (the plan uses the category's history). A budget
 for a category with no history adds a row of its own. Category names come from the app's
-category list (`src/engine/categories.js`).
+category list (`src/engine/categories.js`); an imported name that stands for one of them
+("Natural gas", "Groceries & meal kits") is planned like it (Essentials or Flexible). A combined
+budget the app knows ("Energy (gas + electric, migrated)", from the earlier version) is counted
+once for its categories: their rows plan at $0 under it. To split it, give the parts their own
+budgets (each comes out of the combined one) and then remove it.
 
 ### Savings goals (`plan.savings`)
 
