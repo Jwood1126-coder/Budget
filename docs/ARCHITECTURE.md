@@ -57,6 +57,7 @@ src/
     timeline.js          the plan screen: build, the Trends series, the public API (BudgetEngine.timeline)
     state.js             saved-state schema, migration, storage  (BudgetEngine.state)
     setup-sync.js        the profile's later changes reach a saved budget (BudgetEngine.setupSync)
+    baby-defaults.js     the baby-cost defaults: setup, supplies, childcare, timed from the due date (BudgetEngine.babyDefaults)
     attention.js         "needs attention" list (Review)         (BudgetEngine.attention)
   ui/
     core.js              escaping, formatting, DOM helpers       (BudgetUI.dom/.fmt): fmt.amount (cents
@@ -100,11 +101,11 @@ docs/SETUP.md            the setup file (household profile) for the household's 
 dataset and profile (`private/` by default; `--sample` the fixtures; `--data`/`--profile` other
 files), optionally a workbook the household exported (`--workbook`, through
 `setupSync.importWorkbook`, so their in-browser edits count; without one the budget is
-`state.defaults` + `setupSync.apply`), builds `timeline.build` (horizon at least 12 months, more
+`state.defaults` + `setupSync.apply`; then `babyDefaults.ensure`, as the page does), builds `timeline.build` (horizon at least 12 months, more
 for `--months N`) and one `build({ compare })` per what-if, and writes `private/plan-report.md` and
 `.json` (`buildReport` → JSON, `toMarkdown`): headline, this month's plan (`tl.summary`), To
 check, dials, month by month (money; balances with status), planned changes (derived ones too, with
-status), what-ifs with their compare result, goals, investments, bills, setup-sync notes. A private
+status), baby costs (`babyDefaults.status` with `tl.changes.overlaps`), what-ifs with their compare result, goals, investments, bills, setup-sync notes. A private
 report carries a private-report comment (Markdown) and a true `privateReport` field (JSON), both
 flagged by the privacy check (`tools/check-privacy.cjs` holds the patterns), and is refused anywhere in the
 repository but `private/` (`checkReportOut`, symlinks resolved); `--sample` prints to stdout unless `--out` is given.
@@ -489,7 +490,11 @@ Plan = {
   balances: { jointCashCents: cents|null, asOf: 'YYYY-MM-DD'|null, note,
               accounts: { [accountId]: cents|null }, accountsAsOf: 'YYYY-MM-DD'|null,     // per-account balances (exports without a running balance)
               accountDates: { [accountId]: 'YYYY-MM-DD'|null } },  // each balance's own date; absent → accountsAsOf
-  settings: { incomeTiming: 'conservative'|'average'|'actual', planningBaseline: 'actual'|'adjusted', comparisonWindow: 3|6|12 },
+  settings: { incomeTiming: 'conservative'|'average'|'actual', planningBaseline: 'actual'|'adjusted', comparisonWindow: 3|6|12,
+              babyDueDate?: 'YYYY-MM-DD'|null },  // optional (absent in budgets saved before it; absent/null = not known): the
+                                                  // baby's due date, which times the baby-cost defaults (BudgetEngine.babyDefaults).
+                                                  // Setup-managed like every plan.settings field: the setup file can supply it;
+                                                  // a date saved in the app wins (the merge rule, §3)
   changes: PlannedChange[]             // dated changes on the plan screen (BudgetEngine.timeline); absent in older budgets → []
 }
 
@@ -507,7 +512,12 @@ PlannedChange = {                      // up to 100; validated like every list i
                                        //   template itself is gone: they are ordinary changes)
   scenario: string|null,               // the what-if it belongs to (≤ 60 chars; null: none). Applied like any change once
                                        //   accepted; build({ compare: name }) draws the plan with all of them (tl.compare)
-  note
+  note,
+  yearlyCents?: cents|null,            // optional (absent unless set): a yearly amount on a monthly change, added in its
+                                       //   first active month and every 12th month after (childcare's membership fee)
+  derived?: { role: 'setup'|'supplies'|'childcare', startMonth, cents, yearlyCents?, precision: 'day'|'month' } | null
+                                       // optional: what the baby-cost defaults wrote on this change (BudgetEngine.babyDefaults),
+                                       //   so a value still equal to it is provably untouched (only those are re-timed)
 }
 
 IncomeStream = {
@@ -650,6 +660,9 @@ State = {
         dismissed: { [noticeId]: boolean } },
   meta: { createdAt, updatedAt, migratedFrom: null|0..4,           // 0 = unversioned earlier budget
           migrationNotes: string[], legacySnapshot: string|null,   // raw earlier data, set only by a migration
+          babyDefaults?: { done: ('setup'|'supplies'|'childcare')[] },  // absent until the baby-cost defaults first run:
+                                                                   // the defaults already made, so one the household
+                                                                   // removed is not made again (BudgetEngine.babyDefaults)
           setup?: { hash: string, appliedAt: ISO-8601,             // setup sync's bookkeeping (§3); absent until it
                     base: object|null } }                          // first runs. base: the profile's setup-managed
                                                                    // values last applied, shaped like the state
@@ -1497,11 +1510,19 @@ naming what is missing, when a public name has not been added), the parts in bet
     max(0, −savings)); `out.card` / `out.bank` derived from the spending dials.
   - `changed`: any dial not at its baseline, or any planned change applied; `changedBy: { dials,
     changes }`.
-  - `changes`: `{ list, applied, derived, unset, totalOneTimeCents, monthlyNowCents }` — `list`: each
-    valid `plan.changes` entry (`source: 'plan'`, `readOnly: false`, `scenario`), then the changes
+  - `changes`: `{ list, applied, derived, unset, totalOneTimeCents, monthlyNowCents, overlaps }` — `list`: each
+    valid `plan.changes` entry (`source: 'plan'`, `readOnly: false`, `scenario`, `yearlyCents` (null
+    unless set: added in the first active month and every 12th after, so a month's applied amount is
+    `cents + yearlyCents` then; `appliedCents` sums the months' amounts), `babyRole` and `precision`
+    (the baby-cost default it is, from `derived`; else null)), then the changes
     worked out from Budget (`source: 'bill'` with `billId`, or `'goal'` with `goalId`; `readOnly:
     true`, `accepted: true`: edited in Budget, never by `setChange`/`acceptChanges`), each with
-    `status: 'unset'|'notAccepted'|'applied'|'overridden'|'outside'`, `monthsApplied`, `appliedCents`;
+    `status: 'unset'|'notAccepted'|'applied'|'overridden'|'overlap'|'outside'`, `monthsApplied`, `appliedCents`
+    ('overlap': a baby-cost default held back because an accepted New baby / Childcare pack, or an
+    accepted item of the same kind in its group, covers the same cost: `babyDefaults.guard`; each one
+    in `overlaps` as `{ kind: 'pack'|'alternative', role, id, label, with: ids, template? }`, so the
+    screen warns; nothing is removed. An unaccepted item of the same kind there is an alternative:
+    never added on top of the default, not in `tl.compare` either);
     `applied`: how many of the household's own applied; `derived`: how many are worked out from
     Budget; `unset`: ids with no amount (never applied as $0). A savings goal spent at its target
     (`spendAtTarget`, `targetCents`, `targetMonth`): change `'goal-<id>'`, one-time, irregular, with
@@ -1841,6 +1862,49 @@ Setup sync, section 3. Loaded after `state.js`; uses `state.defaults`, `state.cl
 - `MANAGED` — the setup-managed paths `[{ path, kind: 'list'|'map'|'fields'|'value' }]`, from the one
   table in `setup-sync.js`; `SYNC_VERSION` (part of the hash: raised when the merge changes);
   `equal(a, b)` — the deep equality over JSON values it uses.
+
+### BudgetEngine.babyDefaults
+The baby-cost defaults (`engine/baby-defaults.js`, loaded after `setup-sync.js`): the household
+asked for the baby's costs to be planned for them as editable estimates. Pure; no clock. The page
+runs `ensure` after setup sync on every load, workbook import and reset (`ui/app.js`,
+`ui/views/data.js`), and `follow` on every write (`app.update`), so a new `babyDueDate` re-times
+them; `tools/plan-report.cjs` runs it too.
+- `DEFAULTS` (one per role, ids `'baby-default-<role>'`, labelled "(estimate)", each with a note):
+  setup $2,000 once (`irregular`) in the month before the birth month; supplies $450 a month
+  (`essentials`, open-ended) from the birth month (the note splits it: feeding 200, diapers and wipes
+  100, clothing 50, care 35, toys 25, contingency 40); childcare $1,800 a month (`essentials`) from 6
+  weeks after the birth — an early, full-package planning allowance, not a booking, a confirmed
+  return-to-work date or a confirmed rate — with `yearlyCents` $150 (a membership fee in the first
+  care month and every 12 months after, on the same change). `CAVEAT`: medical costs, insurance
+  premium changes and parental-leave pay are not included (unknown, never $0; leave lowers income, a
+  savings reserve is a transfer). Changing the defaults' amounts is a decision for the household's
+  assistant (design authority).
+- Timing: `plan.settings.babyDueDate` (precision `'day'`): setup in the month before the birth
+  month, supplies from the birth month, childcare from the month holding the date + 42 days
+  (`CARE_AFTER_DAYS`). Without it, a copied baby what-if group's birth month (its earliest monthly
+  `sc-` item not filled by the defaults) gives a month-level estimate (precision `'month'`, never a
+  made-up day): childcare `CARE_AFTER_MONTHS` (2) after the birth month. With neither: unknown —
+  nothing is written, `status` lists the defaults with `dateNeeded`, and only Budget's setup details
+  ask for the date.
+- `ensure(state, { now }?) -> { state, notes, changed, status }` — one canonical group: the group
+  already holding a default, else a copied what-if group (ids `'sc-…'`) whose name or a label is
+  about a baby or a birth, else a new group `'New baby'` (`GROUP_NAME`). Per role not yet in
+  `meta.babyDefaults.done`: covered when the group holds an accepted item of that kind with an amount
+  (the household's own choice, an explicit $0 included: nothing added); else an untouched placeholder
+  of that kind (`roleOf` its label; no amount; start month still the one its scenario event gave it,
+  or the group's birth month) is filled (amount, timing, accepted, `derived`; a name still as copied
+  gains "(estimate)"; its note is kept after the default's); else the default row is added to the
+  group, accepted (the household's instruction covers these defaults only; packs and other what-ifs
+  keep their approval). Roles already made are re-timed only where `startMonth` still equals
+  `derived.startMonth`; dates, amounts, explicit zeros, inclusion choices and unaccepted
+  alternatives the household set are never changed, and nothing is removed. Idempotent: a second
+  run returns the same object; a removed default is not made again (`meta.babyDefaults.done`).
+- `status(state) -> { group, timing: 'day'|'month'|'unknown', dueDate, birthMonth, caveat, items }` —
+  for the Plan and Budget screens and the report.
+- `follow(prev, next, opts?)` — `ensure(next)` when `babyDueDate` differs between them, else `next`.
+- `guard(changes)` — for `timeline.build` (counting once, above): `{ held, alternatives, overlaps }`.
+- `roleOf(change)` — which default a spending change is about, from its label (childcare, supplies,
+  setup words), or null; `ROLES`, `PACK_ROLES` (`babyFirstYear`: setup and supplies; `childcare`).
 
 ### BudgetEngine.attention
 - `list({ dataset, txns, state, ctx, balanceKnown? }) -> [{ id, severity: 'action'|'decision'|'info', title, detail, route, cta? }]`

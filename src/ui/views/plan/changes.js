@@ -13,7 +13,9 @@
  *                under its date. A pack's items, and the changes of a what-if copied from a saved
  *                scenario, are one folded row (name, how many, once + a month, one box to accept
  *                or unaccept them all) that opens into those lines. What Budget adds (bills,
- *                goals) is read-only, edited in Budget.
+ *                goals) is read-only, edited in Budget. Under the baby-cost defaults' group (E.babyDefaults):
+ *                one caveat line (what is not included yet) and any cost planned twice; childcare's
+ *                yearly fee is a line under its row.
  *   Add          the packs (one tap after a date; never accepted for you, tagged as a what-if of
  *                their own so Compare can show them first) and a change of the household's own.
  */
@@ -30,7 +32,7 @@
   const CHANGE_GROUP_LABEL = { income: 'Income', essentials: 'Essentials', flexible: 'Flexible', irregular: 'Irregular', savings: 'Savings' };
   /** Groups only the changes worked out from Budget use (read-only rows). */
   const DERIVED_GROUP_LABEL = { debt: 'Debt & business' };
-  const STATUS_BADGE = { applied: ['In plan', 'good'], notAccepted: ['Not accepted', 'neutral'], unset: ['Amount not set', 'warn'], outside: ['Outside horizon', 'neutral'], overridden: ['Savings set by you', 'neutral'] };
+  const STATUS_BADGE = { applied: ['In plan', 'good'], notAccepted: ['Not accepted', 'neutral'], unset: ['Amount not set', 'warn'], outside: ['Outside horizon', 'neutral'], overridden: ['Savings set by you', 'neutral'], overlap: ['Not counted: covered elsewhere', 'warn'] };
   /** The packs offered, in order: the template, the id stem of their controls, what they need. */
   const ADD_PACKS = [
     { key: 'babyFirstYear', stem: 'baby', needs: 'due' },
@@ -233,11 +235,25 @@
           <button type="button" class="btn btn-ghost btn-small plan-ch-remove" id="${esc(id)}-remove" data-action="plan:change-remove" data-change="${esc(ch.id)}" data-name="${esc(name)}" aria-label="${esc('Remove ' + name)}">✕</button>
         </div>
         ${unset}
+        ${ch.yearlyCents ? `<p class="plan-ch-yearly" id="${esc(id)}-yearly">plus ${esc(amt(ch.yearlyCents))} a year (membership fee) in ${esc(fmt.month(ch.startMonth))} and every 12 months after</p>` : ''}
         <p class="field-error" id="${esc(id)}-label-error" role="alert" hidden></p>
         <p class="field-error" id="${esc(id)}-amt-error" role="alert" hidden></p>
         <p class="field-error" id="${esc(id)}-start-error" role="alert" hidden></p>
         <p class="field-error" id="${esc(id)}-end-error" role="alert" hidden></p>
       </li>`;
+  }
+
+  /**
+   * Under the baby-cost defaults' group (E.babyDefaults): the one caveat line (what is not included
+   * yet), the month-level timing when there is no due date, and costs planned twice (held back).
+   */
+  function babyLines(ctx, tl, name) {
+    const st = E.babyDefaults.status(ctx.state);
+    if (!st.items.length || st.group !== name) return '';
+    const month = st.timing === 'month' ? ` Timed from the birth month (${esc(fmt.month(st.birthMonth))}), to the month only: add the due date in Budget’s setup details.` : '';
+    const PACK_NAME = { babyFirstYear: 'the New baby pack', childcare: 'the Childcare pack' };
+    const twice = (tl.changes.overlaps || []).map(o => `“${esc(o.label)}” is not counted: ${o.kind === 'pack' ? esc(PACK_NAME[o.template] || 'a pack') + ' covers it too' : 'another accepted item covers it'}.`).join(' ');
+    return `<p class="plan-ch-caveat fine" id="plan-baby-caveat">${esc(st.caveat)}${month}</p>${twice ? `<p class="plan-ch-caveat fine" id="plan-baby-overlap" role="note"><strong>Counted once:</strong> ${twice}</p>` : ''}`;
   }
 
   /**
@@ -270,6 +286,7 @@
           </summary>
           <ul class="plan-ch-sublist" aria-label="${esc(name)}">${list.map(ch => changeRow(ctx, tl, ch)).join('')}</ul>
         </details>
+        ${babyLines(ctx, tl, name)}
       </li>`;
   }
 

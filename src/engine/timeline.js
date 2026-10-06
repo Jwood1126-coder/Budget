@@ -82,7 +82,7 @@
   const anchors = late('anchors'), mirrorPlan = late('mirrorPlan'), balancesFor = late('balancesFor'), investmentsFor = late('investmentsFor');
   const spendGroups = late('spendGroups');
   const buildDials = late('buildDials'), planMonth = late('planMonth'), legacyDialsPlan = late('legacyDialsPlan');
-  const readChanges = late('readChanges'), changeActiveIn = late('changeActiveIn'), applyChange = late('applyChange'), summarizeChanges = late('summarizeChanges');
+  const readChanges = late('readChanges'), changeActiveIn = late('changeActiveIn'), centsIn = late('centsIn'), applyChange = late('applyChange'), summarizeChanges = late('summarizeChanges');
   const billChanges = late('billChanges'), goalChanges = late('goalChanges'), incomeChanges = late('incomeChanges');
 
   /** The money-out dials, in the order the screen shows them ('investing' and 'other' only when they have an amount). */
@@ -304,6 +304,8 @@
       return manual.concat(autoOneTime.filter(o => o.month === m && !seen.has(o.id)));
     };
     const changes = readChanges(plan);
+    // Baby-cost defaults covered by a pack or the household's own choice are held back (counted once).
+    const guard = E.babyDefaults ? E.babyDefaults.guard(changes) : { held: new Set(), alternatives: new Set(), overlaps: [] };
     // Worked out from Budget: bills that start or end, savings goals spent at their target. Part
     // of the plan as it stands (the ghost has them too), read-only on the screen.
     const fromBills = billChanges({ plan, base, byId, planStart, targets });
@@ -357,13 +359,14 @@
         oneOffs: [], oneOffCents: 0, actualSoFar, changesApplied: [], baseline: null,
       };
       for (const ch of changes.concat(derived)) {
-        if (!ch.accepted || ch.cents === null || !changeActiveIn(ch, m) || overridden(ch)) continue;
-        applyChange(row, ch, people);
-        row.changesApplied.push({ id: ch.id, label: ch.label, group: ch.group, cents: ch.cents, source: ch.source });
+        if (!ch.accepted || ch.cents === null || !changeActiveIn(ch, m) || overridden(ch) || guard.held.has(ch.id)) continue;
+        const cents = centsIn(ch, m);
+        applyChange(row, cents === ch.cents ? ch : Object.assign({}, ch, { cents }), people);
+        row.changesApplied.push({ id: ch.id, label: ch.label, group: ch.group, cents, source: ch.source });
       }
       return row;
     });
-    const changeSummary = summarizeChanges(changes.concat(derived), monthRows, planStart, overridden);
+    const changeSummary = summarizeChanges(changes.concat(derived), monthRows, planStart, overridden, guard);
     const changedBy = { dials: dials.some(d => d.source !== 'baseline'), changes: changeSummary.applied > 0 };
     const changed = changedBy.dials || changedBy.changes;
     // The plan with no changes (every dial at its baseline, no planned changes; what Budget gives,
@@ -372,7 +375,7 @@
     /** One plan month's amounts at `values` (a planMonth result) with `list`'s accepted changes active that month applied. */
     const monthAt = (r, values, list) => {
       const x = Object.assign({}, r, { in: Object.assign({}, values.in), out: Object.assign({}, values.out), savings: values.savings, net: values.net, combinedChange: values.combinedChange });
-      for (const ch of list) if (ch.cents !== null && changeActiveIn(ch, r.month)) applyChange(x, ch, people);
+      for (const ch of list) if (ch.cents !== null && changeActiveIn(ch, r.month)) applyChange(x, Object.assign({}, ch, { cents: centsIn(ch, r.month) }), people);
       return x;
     };
     const ghostRows = ghost ? new Map(monthRows.map(r => [r.month, r.month >= planStart ? monthAt(r, ghost, derived) : r])) : null;
@@ -393,7 +396,8 @@
     let compare = null;
     if (typeof input.compare === 'string' && scenarioNames.includes(input.compare.trim())) {
       const name = input.compare.trim();
-      const extra = changes.filter(c => c.scenario === name && !c.accepted && c.cents !== null);
+      // An alternative to an accepted baby-cost default (an unaccepted quote of the same kind) is not added on top of it.
+      const extra = changes.filter(c => c.scenario === name && !c.accepted && c.cents !== null && !guard.alternatives.has(c.id));
       const cmpRows = new Map(monthRows.map(r => [r.month, r.month >= planStart ? monthAt(r, r, extra) : r]));
       const cb = balancesFor(Object.assign({ rowsByMonth: cmpRows }, balanceInput));
       const pts = cb.combined ? cb.combined.points.map(p => ({ month: p.month, cents: p.status === 'projected' ? p.cents : null, status: p.status === 'projected' ? 'projected' : null })) : null;

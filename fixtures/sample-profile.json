@@ -385,7 +385,8 @@
     "settings": {
       "incomeTiming": "conservative",
       "planningBaseline": "actual",
-      "comparisonWindow": 3
+      "comparisonWindow": 3,
+      "babyDueDate": "2027-05-14"
     }
   },
   "scenarios": [

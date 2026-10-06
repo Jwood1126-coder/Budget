@@ -4,7 +4,7 @@
  * Budget (bills that start or end, savings goals spent at their target), and the ready-made
  * packs (templates) (timeline-core.js says how the timeline files fit together).
  *
- * Adds to E._timeline: readChanges, changeActiveIn, applyChange, summarizeChanges, billChanges,
+ * Adds to E._timeline: readChanges, changeActiveIn, centsIn, applyChange, summarizeChanges, billChanges,
  * goalChanges, templates.
  */
 (function (root) {
@@ -28,10 +28,22 @@
         scenario: typeof c.scenario === 'string' && c.scenario.trim() ? c.scenario.trim() : null,
         note: typeof c.note === 'string' ? c.note : '',
         source: 'plan', readOnly: false,
+        // A yearly amount on a monthly change (childcare's membership fee): in its first month and every 12th after.
+        yearlyCents: c.kind === 'monthly' && isCents(c.yearlyCents) && c.yearlyCents !== 0 ? c.yearlyCents : null,
+        // The baby-cost default it is (BudgetEngine.babyDefaults), with how exact its timing is.
+        babyRole: isObj(c.derived) && typeof c.derived.role === 'string' ? c.derived.role : null,
+        precision: isObj(c.derived) && (c.derived.precision === 'day' || c.derived.precision === 'month') ? c.derived.precision : null,
       }));
   }
 
   const changeActiveIn = (c, m) => (c.kind === 'oneTime' ? m === c.startMonth : m >= c.startMonth && (c.endMonth === null || m <= c.endMonth));
+
+  /** A change's amount in month `m` (active): its amount, plus its yearly amount in its first month and every 12th after. */
+  function centsIn(c, m) {
+    if (c.cents === null || !c.yearlyCents || c.kind !== 'monthly') return c.cents;
+    const after = (Number(m.slice(0, 4)) - Number(c.startMonth.slice(0, 4))) * 12 + Number(m.slice(5, 7)) - Number(c.startMonth.slice(5, 7));
+    return after >= 0 && after % 12 === 0 ? c.cents + c.yearlyCents : c.cents;
+  }
 
   /**
    * Add one planned change to a plan month's amounts: income to its person (other money in when
@@ -73,15 +85,22 @@
    * income −): totalOneTimeCents over the applied one-time changes, monthlyNowCents over the
    * monthly changes applied in the first plan month.
    */
-  function summarizeChanges(changes, monthRows, planStart, overridden) {
-    const applied = new Map();
-    for (const r of monthRows) for (const a of r.changesApplied) applied.set(a.id, (applied.get(a.id) || 0) + 1);
+  function summarizeChanges(changes, monthRows, planStart, overridden, guard) {
+    const applied = new Map(), appliedCents = new Map();
+    for (const r of monthRows) {
+      for (const a of r.changesApplied) {
+        applied.set(a.id, (applied.get(a.id) || 0) + 1);
+        appliedCents.set(a.id, (appliedCents.get(a.id) || 0) + a.cents);
+      }
+    }
+    const held = guard && guard.held ? guard.held : new Set();
     const list = changes.map(c => {
       const monthsApplied = applied.get(c.id) || 0;
-      const status = c.cents === null ? 'unset' : !c.accepted ? 'notAccepted' : monthsApplied ? 'applied' : overridden && overridden(c) ? 'overridden' : 'outside';
-      return Object.assign({}, c, { status, monthsApplied, appliedCents: monthsApplied ? monthsApplied * c.cents : 0 });
+      // 'overlap': a baby-cost default held back because a pack or the household's own choice covers it (guard).
+      const status = c.cents === null ? 'unset' : !c.accepted ? 'notAccepted' : monthsApplied ? 'applied' : held.has(c.id) ? 'overlap' : overridden && overridden(c) ? 'overridden' : 'outside';
+      return Object.assign({}, c, { status, monthsApplied, appliedCents: monthsApplied ? appliedCents.get(c.id) : 0 });
     });
-    const cost = c => (c.group === 'income' ? 0 - c.cents : c.cents);
+    const cost = (c, cents) => (c.group === 'income' ? 0 - cents : cents);
     const first = monthRows.find(r => r.month === planStart);
     // The counts and totals are the household's own changes; the ones worked out from Budget are only listed.
     const own = list.filter(c => c.source === 'plan');
@@ -91,8 +110,10 @@
       applied: own.filter(c => c.status === 'applied').length,
       derived: list.length - own.length,
       unset: own.filter(c => c.cents === null).map(c => c.id),
-      totalOneTimeCents: own.filter(c => c.status === 'applied' && c.kind === 'oneTime').reduce((s, c) => s + cost(c), 0),
-      monthlyNowCents: first ? first.changesApplied.filter(a => byId.has(a.id) && byId.get(a.id).kind === 'monthly').reduce((s, a) => s + cost(byId.get(a.id)), 0) : 0,
+      totalOneTimeCents: own.filter(c => c.status === 'applied' && c.kind === 'oneTime').reduce((s, c) => s + cost(c, c.cents), 0),
+      monthlyNowCents: first ? first.changesApplied.filter(a => byId.has(a.id) && byId.get(a.id).kind === 'monthly').reduce((s, a) => s + cost(byId.get(a.id), a.cents), 0) : 0,
+      // Costs planned twice (a baby-cost default and a pack, or the household's own choice): the default is held back.
+      overlaps: guard && guard.overlaps ? guard.overlaps : [],
     };
   }
 
@@ -376,5 +397,5 @@
   };
 
 
-  Object.assign(T, { readChanges, changeActiveIn, applyChange, summarizeChanges, billChanges, goalChanges, incomeChanges, templates });
+  Object.assign(T, { readChanges, changeActiveIn, centsIn, applyChange, summarizeChanges, billChanges, goalChanges, incomeChanges, templates });
 })(typeof globalThis !== 'undefined' ? globalThis : this);

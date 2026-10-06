@@ -137,15 +137,18 @@ function buildReport(input) {
   let state, loadNotes = [], setupNotes = [], setupReport = null, budgetSource;
   if (typeof input.workbookText === 'string') {
     const r = E.setupSync.importWorkbook(input.workbookText, profile, dataset, { now });
-    state = r.state;
-    setupNotes = r.setupNotes || [];
+    // Then the baby-cost defaults, as the page does after setup sync (E.babyDefaults).
+    const b = E.babyDefaults.ensure(r.state, { now });
+    state = b.state;
+    setupNotes = (r.setupNotes || []).concat(b.notes);
     loadNotes = (r.notes || []).filter(n => !setupNotes.includes(n));
     setupReport = r.setup || null;
     budgetSource = 'workbook';
   } else {
     const s = E.setupSync.apply(E.state.defaults(profile, dataset, { now }), profile, { now });
-    state = s.state;
-    setupNotes = s.notes;
+    const b = E.babyDefaults.ensure(s.state, { now });
+    state = b.state;
+    setupNotes = s.notes.concat(b.notes);
     setupReport = s.report;
     budgetSource = 'setup file';
   }
@@ -197,7 +200,11 @@ function buildReport(input) {
     id: c.id, label: c.label, source: c.source, kind: c.kind, group: c.group, personId: c.personId || null,
     startMonth: c.startMonth, endMonth: c.endMonth, cents: c.cents, accepted: c.accepted, status: c.status,
     scenario: c.scenario || null, template: c.template || null, monthsApplied: c.monthsApplied, note: c.note || '',
+    yearlyCents: c.yearlyCents || null, babyDefault: c.babyRole || null, precision: c.precision || null,
   }));
+  // The baby-cost defaults: how they are timed, what is not included, and costs planned twice (held back).
+  const babyStatus = E.babyDefaults.status(state);
+  const baby = Object.assign({}, babyStatus, { overlaps: tl.changes.overlaps || [] });
 
   const planIn12 = combinedIn12 ? combinedIn12.cents : null;
   const whatIfs = tl.scenarios.map(s => {
@@ -242,6 +249,7 @@ function buildReport(input) {
     summary,
     dials, months: monthRows, changes,
     changeTotals: { applied: tl.changes.applied, derived: tl.changes.derived, unset: tl.changes.unset },
+    baby,
     whatIfs, goals, investments, bills: tl.bills,
     balances: {
       mode: tl.balances.mode, accounts: tl.balances.accounts.map(a => ({ id: a.id, name: a.name, group: a.group, anchor: a.anchor ? { date: a.anchor.date, cents: a.anchor.cents, source: a.anchor.source, label: a.anchor.label } : null, dateAssumed: !!a.dateAssumed })),
@@ -410,6 +418,20 @@ function toMarkdown(E, r) {
       c.kind === 'monthly' ? mon(c.startMonth) + ' → ' + (c.endMonth ? mon(c.endMonth) : 'open') : mon(c.startMonth),
       c.source === 'plan' ? (c.template ? 'pack: ' + c.template : 'plan') : c.source, c.scenario,
     ])));
+  }
+  L.push('');
+
+  L.push('## Baby costs', '');
+  const bb = r.baby;
+  if (!bb.items.length) L.push('No baby costs planned.');
+  else {
+    L.push('- Group: ' + bb.group + ' · timing: ' + (bb.timing === 'day' ? 'from the due date ' + bb.dueDate : bb.timing === 'month' ? 'month-level estimate from the birth month ' + mon(bb.birthMonth) + ' (no exact due date)' : 'unknown: due date needed'));
+    for (const it of bb.items) {
+      L.push('- ' + it.label + ': ' + money(it.cents) + (it.kind === 'monthly' ? '/mo' : ' once') + (it.yearlyCents ? ' + ' + money(it.yearlyCents) + ' yearly membership' : '')
+        + (it.dateNeeded ? ' — date needed, not in the plan' : (it.kind === 'monthly' ? ' from ' : ' in ') + mon(it.startMonth)));
+    }
+    for (const o of bb.overlaps) L.push('- Counted once: ' + o.label + ' is held back (' + (o.kind === 'pack' ? 'the ' + o.template + ' pack covers it' : 'your own choice covers it') + ').');
+    L.push('- ' + bb.caveat);
   }
   L.push('');
 

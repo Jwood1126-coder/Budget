@@ -156,10 +156,11 @@ module.exports = [
       assert.equal(await page.getAttribute('#plan-chart', 'data-mode'), 'balance');
       assert.deepEqual(await page.$$eval('input[name="plan-mode"]', xs => xs.map(x => x.value)), ['balance', 'flows', 'trends']);
       const chips = await page.$$eval('#plan-chart .cc-chip', bs => bs.map(b => [b.textContent.trim(), b.getAttribute('aria-pressed')]));
-      assert.deepEqual(chips, [['Combined cash', 'true'], ['Joint checking', 'false'], ['Joint savings', 'true'], ['Investments', 'true']], 'no baseline line while nothing changed; the brokerage account has its investments line');
-      assert.equal(await page.$$eval('#plan-chart .cc-ghost-line', x => x.length), 0);
+      // The sample's baby-cost estimates (E.babyDefaults) are in the plan, so the baseline line shows too.
+      assert.deepEqual(chips, [['Combined cash', 'true'], ['Joint checking', 'false'], ['Joint savings', 'true'], ['Investments', 'true'], ['Baseline plan', 'true']], 'the brokerage account has its investments line; the baseline line, as the baby estimates change the plan');
+      assert.ok(await page.$$eval('#plan-chart .cc-ghost-line', x => x.length) > 0, 'the plan at baseline, without the baby estimates');
       // The account lines (off by default, one tap away) are illustrative: the caption says so once.
-      assert.match(await page.textContent('#plan-chart .cc-caption'), /^Combined cash = Joint checking \+ Joint savings\. Solid: your data through Sep 2026\. Dashed: this plan from Oct 2026\. Account lines are illustrative: card spending is taken from checking in the month it happens, not when the card is paid; the combined line is not affected\.$/);
+      assert.match(await page.textContent('#plan-chart .cc-caption'), /^Combined cash = Joint checking \+ Joint savings\. Solid: your data through Sep 2026\. Dashed: this plan from Oct 2026\. Faint dashed: the plan at baseline, before your changes\. Account lines are illustrative: card spending is taken from checking in the month it happens, not when the card is paid; the combined line is not affected\.$/);
       // Dials: money in by person, money out by how adjustable it is, in this order.
       assert.deepEqual(await page.$$eval('#plan-dials .dial', ds => ds.map(d => d.dataset.dial)), ['p1', 'p2', 'inOther', 'essentials', 'flexible', 'irregular', 'savings', 'investing', 'other']);
       assert.equal((await page.textContent('#plan-dial-essentials-sub')).trim(), 'The part that doesn’t move much');
@@ -471,6 +472,10 @@ module.exports = [
     async run(t) {
       const { page, assert } = t;
       await t.open('#/overview');
+      // The sample's planned changes (its what-ifs and baby-cost estimates) are set aside: this test
+      // starts from a plan at its baseline.
+      await page.evaluate(() => { const s = window.HouseholdBudget.getState(); s.plan.changes = []; window.HouseholdBudget.setState(s); });
+      await t.settled();
       const before = await table(page);
       assert.equal(await page.$$eval('#plan-chart .cc-ghost-line', x => x.length), 0, 'no baseline line yet');
       await typeAmount(page, '#plan-dial-essentials', '3,456.78');
@@ -1220,7 +1225,7 @@ module.exports = [
       assert.equal((await state(page)).ui.plan.hidden, null, 'nothing chosen yet');
       const pressed = () => page.$$eval('#plan-chart .cc-chip', bs => bs.map(b => [b.dataset.ccKey, b.getAttribute('aria-pressed')]));
       const drawn = key => page.isVisible(`#plan-chart g.cc-series[data-cc-series="${key}"] path.line`);
-      assert.deepEqual(await pressed(), [['combined', 'true'], ['acct-joint-checking', 'false'], ['acct-joint-savings', 'true'], ['balance-investments', 'true']]);
+      assert.deepEqual(await pressed(), [['combined', 'true'], ['acct-joint-checking', 'false'], ['acct-joint-savings', 'true'], ['balance-investments', 'true'], ['ghost', 'true']]);
       assert.ok(await drawn('combined'));
       assert.ok(await drawn('acct-joint-savings'), 'the savings line is drawn');
       assert.ok(!(await drawn('acct-joint-checking')), 'the checking line is not');
@@ -1231,7 +1236,7 @@ module.exports = [
       assert.ok(!(await drawn('acct-joint-savings')));
       await page.reload();
       await page.waitForSelector('#plan-chart[data-mode="balance"]');
-      assert.deepEqual(await pressed(), [['combined', 'true'], ['acct-joint-checking', 'false'], ['acct-joint-savings', 'false'], ['balance-investments', 'true']]);
+      assert.deepEqual(await pressed(), [['combined', 'true'], ['acct-joint-checking', 'false'], ['acct-joint-savings', 'false'], ['balance-investments', 'true'], ['ghost', 'true']]);
       assert.ok(!(await drawn('acct-joint-savings')), 'still off after a reload');
       assert.ok(await noHorizontalScroll(page));
     },
