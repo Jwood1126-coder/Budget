@@ -62,11 +62,11 @@
     return out;
   }
 
-  /** The keys a level-1 drill row holds purchases under (see categorySpend). */
+  /** The keys a level-1 drill row holds purchases under (see categorySpend); an aggregate budget's also its members'. */
   function rowKeys(r) {
     if (r.synthetic) return ['m:' + String(r.merchant || r.label).trim()];
-    if (Array.isArray(r.members) && r.members.length) return r.members.map(cat => 'c:' + cat);
-    return ['c:' + r.category];
+    const cats = Array.isArray(r.members) && r.members.length ? r.members : [r.category];
+    return cats.concat(Array.isArray(r.covers) ? r.covers : []).map(cat => 'c:' + cat);
   }
 
   function meter(p, pace, cls) {
@@ -122,7 +122,8 @@
     let matched = 0;
     if (dial && dial.drill && dial.drill.kind === 'categories') {
       for (const r of dial.drill.rows) {
-        if (r.level !== 1 || r.included === false) continue;
+        // A category planned in an aggregate budget is spent against it, on the aggregate's row.
+        if (r.level !== 1 || r.included === false || r.source === 'aggregate') continue;
         const keys = rowKeys(r);
         const rowSpent = sm.mode === 'none' ? null : keys.reduce((s, k) => s + (spendBy.get(k) || 0), 0);
         if (rowSpent !== null) matched += rowSpent;

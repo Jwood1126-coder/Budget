@@ -144,7 +144,8 @@
     const seen = isCents(r.seenMonths) ? r.seenMonths : r.months;
     const of = isCents(r.ofMonths) ? r.ofMonths : tl.baseline.count;
     const edited = (r.override ? ' ' + c.badge('edited', 'info') + ' ' + c.button('Reset', { action: 'plan:row-reset', data: { row: r.id, name }, cls: 'btn-small btn-ghost drill-reset', id: id + '-reset', ariaLabel: 'Reset ' + name + ' to its average' }) : '')
-      + (r.source === 'budget' ? ' ' + c.badge('budget', 'info') : '');
+      + (r.source === 'budget' ? ' ' + c.badge('budget', 'info') : '')
+      + (r.source === 'aggregate' ? ' ' + c.badge('in ' + r.aggregate, 'info', { title: 'Planned in the ' + r.aggregate + ' budget, which counts it once' }) : '');
     const pattern = PATTERN[r.pattern] ? `<span class="drill-pattern is-${esc(r.pattern)}" id="${esc(id)}-pattern" title="${esc(PATTERN_TIP[r.pattern])}">${esc(PATTERN[r.pattern])}</span>` : '';
     const paid = PAID[r.paidBy] ? `<span class="drill-paid" id="${esc(id)}-paid" title="${esc(PAID_TIP[r.paidBy])}">${esc(PAID[r.paidBy])}</span>` : '';
     const moved = move && move.moved ? badgeWithId(id + '-moved', 'moved', 'info', { title: move.from ? 'Moved from ' + move.from : 'Moved here by you' }) : '';

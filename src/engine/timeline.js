@@ -55,10 +55,12 @@
  * (`scenario`): listed like the rest; build({ compare }) draws the plan with all of that one's.
  *
  * Budget reaches the plan (one plan): category budgets (plan.targets) are what the essentials and
- * flexible category rows plan at (a row's own change in ui.plan.rows wins; no budget: history);
+ * flexible category rows plan at (a row's own change in ui.plan.rows wins; no budget: history; an
+ * aggregate budget, such as the migrated energy target, once for all of its categories);
  * joint bills with a known amount that the baseline months do not hold are added from their start,
  * and ones the history holds that end are taken out after their end month (read-only changes,
- * source 'bill'; "seen" is defined at billChanges); a savings goal spent at its target leaves
+ * source 'bill'; "seen" is defined at billChanges; current debt bills the history holds set the
+ * least the other dial's baseline plans for debt payments); a savings goal spent at its target leaves
  * savings that month and its monthly amount stops after it (source 'goal'; not while net to
  * savings is set directly); the goals' monthly amounts are the savings dial's baseline
  * and the projected savings balance gives each goal a reach month (tl.goals, cumulative in list
@@ -284,7 +286,10 @@
     try { funding = E.flows.planFunding(plan, { month: planStart, timing: 'average' }); } catch (err) { funding = null; }
     const targets = isObj(plan.targets) ? plan.targets : {};
     const investments = (dataset.accounts || []).some(a => a && a.type === 'investment' && (a.scope || 'joint') === 'joint');
-    const { dials, parts, windowText, legacy, superseded, carriedOver } = buildDials({ base, people, cfg, byId, requested, funding, targets, goals: plan.savings, investments });
+    // Worked out from Budget: bills that start or end (and the current debt bills the history holds,
+    // which the other dial's baseline counts at their amount).
+    const fromBills = billChanges({ plan, base, byId, planStart, targets });
+    const { dials, parts, windowText, legacy, superseded, regrouped, carriedOver } = buildDials({ base, people, cfg, byId, requested, funding, targets, goals: plan.savings, investments, seenDebtCents: fromBills.seenDebtCents });
     const planValues = planMonth(dials, parts, people, false);
 
     // What happened so far in partly covered months (kept apart from the month's amounts).
@@ -304,9 +309,8 @@
       return manual.concat(autoOneTime.filter(o => o.month === m && !seen.has(o.id)));
     };
     const changes = readChanges(plan);
-    // Worked out from Budget: bills that start or end, savings goals spent at their target. Part
-    // of the plan as it stands (the ghost has them too), read-only on the screen.
-    const fromBills = billChanges({ plan, base, byId, planStart, targets });
+    // Worked out from Budget: bills that start or end (fromBills, above), savings goals spent at
+    // their target. Part of the plan as it stands (the ghost has them too), read-only on the screen.
     // Pay in Budget that starts or ends later in the plan moves that person's money in from then on.
     const derived = fromBills.changes.concat(goalChanges(plan, planStart), incomeChanges({ plan, dials, planStart, lastMonth }));
     // A change worked out for a dial's baseline (a spent goal's monthly saving that stops) is not
@@ -451,14 +455,19 @@
         + 'Debt & business is set to ' + E.money.format(sp.otherCents) + '.',
     }) : null;
     let migration = null;
-    if (legacyIds.length || dialMigration || otherSplit) {
+    if (legacyIds.length || regrouped.length || dialMigration || otherSplit) {
       const moved = legacy.slice().sort((a, b) => (a.from < b.from ? -1 : 1));
       const dropped = legacyIds.filter(id => !moved.some(l => l.from === id));
-      const rowsNote = !legacyIds.length ? null : ('ui.plan.rows: spending is now planned as essentials, flexible and irregular. '
+      // Rows of categories now planned in the other group because their names are recognised
+      // (categories.resolve): their changes move with them.
+      const regroupedNote = regrouped.length ? plural(regrouped.length, 'change') + ' to spending rows moved with ' + (regrouped.length === 1 ? 'its category' : 'their categories')
+        + ' to the other group: an imported category name is now read as the category it stands for.' : '';
+      const rowsNote = !legacyIds.length && !regrouped.length ? null : ('ui.plan.rows: ' + (!legacyIds.length ? '' : 'spending is now planned as essentials, flexible and irregular. '
         + (moved.length ? plural(moved.length, 'change') + ' to card and bank spending rows now apply to the same rows there. ' : '')
-        + (dropped.length ? plural(dropped.length, 'change') + ' to card and bank spending rows could not be matched to a row in the new grouping and ' + (dropped.length === 1 ? 'was' : 'were') + ' removed.' : '')).trim();
+        + (dropped.length ? plural(dropped.length, 'change') + ' to card and bank spending rows could not be matched to a row in the new grouping and ' + (dropped.length === 1 ? 'was' : 'were') + ' removed. ' : ''))
+        + regroupedNote).trim();
       migration = {
-        rows: moved, dropped, superseded: superseded.slice().sort(), rowsNote, dials: dialMigration, other: otherSplit,
+        rows: moved.concat(regrouped.slice().sort((a, b) => (a.from < b.from ? -1 : 1))), dropped, superseded: superseded.slice().sort(), rowsNote, dials: dialMigration, other: otherSplit,
         // What to tell the household, once: the row note (without its path), the dial note and the split note (without its path).
         note: [rowsNote ? rowsNote.replace(/^ui\.plan\.rows: /, '') : null, dialMigration ? dialMigration.note : null,
           otherSplit && otherSplit.note ? otherSplit.note.replace(/^ui\.plan\.dials\.other: y/, 'Y') : null].filter(Boolean).join(' '),

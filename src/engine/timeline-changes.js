@@ -116,7 +116,12 @@
    * budget (plan.targets): the budget already plans that category. Each change made is read-only
    * on the plan (the bill is edited in Budget): { …a planned change, source: 'bill', billId,
    * readOnly: true, accepted: true }. `bills` says what happened to every bill.
-   * @returns {{ changes: object[], bills: { id, label, status, changeId }[] }}
+   * `seenDebtCents`: the monthly amounts of the debt-payment bills seen and running in the baseline
+   * months (status 'seen' with no end month, or 'ends') added up. The history holds them, but
+   * averaged over the whole window a debt that started (or was entered) recently is diluted
+   * (three $80 payments in twelve months average $20), so the other dial plans debt payments at
+   * no less than this (buildDials), and an 'ends' change takes out exactly what it counts.
+   * @returns {{ changes: object[], bills: { id, label, status, changeId }[], seenDebtCents: number }}
    *   status: 'seen' | 'ends' | 'added' | 'ended' | 'notJoint' | 'noAmount' | 'noCategory' | 'inBudget'
    */
   function billChanges({ plan, base, byId, planStart, targets }) {
@@ -131,6 +136,7 @@
     const debtSeen = !!(base.total && base.total.actual && base.total.actual.debt > 0);
     const windowStart = base.start || planStart;
     const changes = [], bills = [];
+    let seenDebtCents = 0;
     for (const b of list) {
       if (!isObj(b) || typeof b.id !== 'string' || !b.id) continue;
       const label = typeof b.label === 'string' && b.label.trim() ? b.label.trim() : b.id;
@@ -147,6 +153,8 @@
       const seen = b.status !== 'planned' && !(start && start > planStart) && (isDebt ? debtSeen : cats.has(category));
       const common = { kind: 'monthly', group: isDebt ? 'debt' : 'essentials', personId: null, accepted: true, template: null, scenario: null, source: 'bill', billId: b.id, readOnly: true };
       if (seen) {
+        // A debt payment the baseline months hold, still running in them: counted at its amount.
+        if (isDebt && (!end || end >= windowStart)) seenDebtCents += b.monthlyCents;
         if (!end || end < windowStart) { info.status = 'seen'; continue; }
         const after = E.months.add(end, 1);
         info.status = 'ends';
@@ -166,7 +174,7 @@
         note: 'From Budget: ' + why + ', so the plan adds ' + E.money.format(b.monthlyCents) + ' a month' + (end ? ' through ' + E.months.label(end) : '') + '. Edit the bill in Budget.',
       }));
     }
-    return { changes, bills };
+    return { changes, bills, seenDebtCents };
   }
 
   /**

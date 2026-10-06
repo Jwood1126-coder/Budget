@@ -32,7 +32,10 @@
 
   // ------------------------------------------------------------------ spending groups
 
-  /** The group a category is planned in: the household's choice (ui.plan.groups), else the taxonomy's `essential` flag. */
+  /**
+   * The group a category is planned in: the household's choice (ui.plan.groups), else the
+   * taxonomy's `essential` flag for the category its name resolves to (categories.isEssential).
+   */
   function categoryGroup(category, cfg) {
     const chosen = own(cfg.groups, category);
     if (SPEND_GROUPS.includes(chosen)) return { group: chosen, source: 'override' };
@@ -109,22 +112,52 @@
    * a budget is never grouped into "Other", and one with a budget but no history in this group
    * gets a row of its own (history: false, defaultCents 0, no level-2 rows). The dial's baseline
    * counts each category at its budget (less what moved out) when it has one, else its default.
+   * An aggregate budget (categories.AGGREGATES: one budget for several taxonomy categories) is
+   * counted once for all of its members: a category with no budget of its own that resolves to a
+   * member and is planned in the aggregate's group keeps its row and history but plans at $0
+   * (source 'aggregate', `aggregate`: the budget's name), is never grouped into "Other", and the
+   * changes to its rows move the aggregate by exactly what they change; one with an amount of its
+   * own in ui.plan.rows, or left out, takes its default out of the aggregate instead. Members
+   * planned elsewhere take their share out like a place moved as a whole: one in the other group
+   * its history, one with a budget of its own that budget (budgetMovedCents; never below $0).
+   * Where an imported name is now planned in another group than before (its name resolves to a
+   * taxonomy category), its rows' changes saved under the other group's ids still apply
+   * (`regrouped`, for migrateRows).
    */
   function drillFor(group, base, byId, cfg, targets) {
     const budgetOf = category => (category !== OTHER_CATEGORY && isCents(own(targets, category)) && targets[category] >= 0 ? targets[category] : null);
     const n = base.count;
     const regularAt = base.regularAt || 2;
     const empty = { kind: 'categories', group, rows: [], categoryCount: 0, baselineCents: null, rowsCents: null, baselineCardCents: null, rowsCardCents: null, budgetCount: 0,
-      cardShare: 0, overridden: false, stableCount: 0, yearlyCount: 0, orphanIds: Object.keys(cfg.rows).filter(id => id.startsWith(group + '-')), tinyCategoryCents: TINY_CATEGORY_CENTS, legacy: [], superseded: [] };
+      cardShare: 0, overridden: false, stableCount: 0, yearlyCount: 0, orphanIds: Object.keys(cfg.rows).filter(id => id.startsWith(group + '-')), tinyCategoryCents: TINY_CATEGORY_CENTS, legacy: [], superseded: [], regrouped: [] };
     if (!n) return empty;
     const cats = new Map();
-    // Per category with a budget: the monthly share of its places moved to a group as a whole.
+    // Aggregate budgets with an amount, and the one that plans a category with no budget of its own.
+    const targetKeys = Object.keys(isObj(targets) ? targets : {});
+    const aggregates = targetKeys.filter(k => E.categories.membersOf(k) && budgetOf(k) !== null).sort();
+    const memberOf = (agg, category) => E.categories.membersOf(agg).includes(E.categories.resolve(category));
+    const aggregateOf = category => (budgetOf(category) !== null || E.categories.membersOf(category) ? null : aggregates.find(a => memberOf(a, category)) || null);
+    const groupOfAgg = new Map(aggregates.map(a => [a, categoryGroup(a, cfg).group]));
+    /** The aggregate a category's row in this group plans in, or null (members in the other group plan on their own). */
+    const coveredBy = category => {
+      const agg = category === OTHER_CATEGORY ? null : aggregateOf(category);
+      return agg && groupOfAgg.get(agg) === group && categoryGroup(category, cfg).group === group ? agg : null;
+    };
+    // Per category with a budget: the monthly share of its places moved to a group as a whole; per
+    // aggregate also its members' history planned in the other group.
     const movedShare = new Map();
+    const moveOut = (k, cents) => movedShare.set(k, (movedShare.get(k) || 0) + cents);
     for (const x of base.spends || []) {
       if (x.kind === 'oneTime') continue;
-      for (const sh of sharesOf(x, x.planCents, byId, cfg)) if (sh.moved && budgetOf(sh.category) !== null) movedShare.set(sh.category, (movedShare.get(sh.category) || 0) + sh.cents);
+      for (const sh of sharesOf(x, x.planCents, byId, cfg)) {
+        if (sh.moved && budgetOf(sh.category) !== null) { moveOut(sh.category, sh.cents); continue; }
+        const agg = aggregateOf(sh.category);
+        if (agg && (sh.moved || sh.group !== groupOfAgg.get(agg))) moveOut(agg, sh.cents);
+      }
     }
     for (const [k, v] of movedShare) movedShare.set(k, E.money.divide(v, n));
+    // Per aggregate: the budgets of its members that have one of their own (planned at those instead).
+    const carvedOut = agg => targetKeys.filter(k => k !== agg && !E.categories.membersOf(k) && budgetOf(k) !== null && memberOf(agg, k)).reduce((s, k) => s + budgetOf(k), 0);
     const yearly = new Set();
     for (const x of base.spends || []) {
       if (x.kind === 'oneTime') continue;
@@ -197,7 +230,7 @@
     });
     // Tiny categories (two or more) become one "Other" row; a category called "Other" joins it.
     // A category with a budget keeps a row of its own, so its budget applies.
-    const tiny = real.filter(c => !c.synthetic && budgetOf(c.category) === null && (Math.abs(c.avg) < TINY_CATEGORY_CENTS || c.category === OTHER_CATEGORY));
+    const tiny = real.filter(c => !c.synthetic && budgetOf(c.category) === null && !coveredBy(c.category) && (Math.abs(c.avg) < TINY_CATEGORY_CENTS || c.category === OTHER_CATEGORY));
     const grouped = tiny.length >= 2 ? tiny : [];
     const shown = real.filter(c => !grouped.includes(c)).map(c => ({ label: c.category, synthetic: c.synthetic, members: [c] }));
     shown.sort((a, b) => b.members[0].avg - a.members[0].avg || (a.label < b.label ? -1 : a.label > b.label ? 1 : (a.synthetic ? 1 : -1)));
@@ -210,9 +243,11 @@
     if (grouped.length) shown.push({ label: OTHER_CATEGORY, synthetic: false, members: grouped });
 
     const ov = id => (isObj(own(cfg.rows, id)) ? cfg.rows[id] : null);
-    const legacy = [], superseded = [];
+    const legacy = [], superseded = [], regrouped = [];
+    const otherGroup = SPEND_GROUPS.find(k => k !== group);
     // A row's change: its own id first; else the same row's change under the earlier card/bank
-    // dial, when the row is paid only that way (so it holds exactly what that row held).
+    // dial, when the row is paid only that way (so it holds exactly what that row held); else, for
+    // a category the taxonomy plans here by its name, the same row's change under the other group.
     const overrideFor = row => {
       const mine = ov(row.id);
       const sameRow = !row.synthetic && row.paidBy !== 'mixed' && !((row.kind === 'category' || row.kind === 'rest') && row.category === OTHER_CATEGORY);
@@ -221,12 +256,19 @@
       row.legacyId = null;
       if (old && mine) superseded.push(lid);
       else if (old) { legacy.push({ from: lid, to: row.id }); row.legacyId = lid; }
-      return mine || old;
+      const category = row.kind === 'merchant' ? row.sourceCategory : row.category;
+      const gid = !mine && !old && !row.synthetic && category && category !== OTHER_CATEGORY && categoryGroup(category, cfg).source === 'taxonomy' ? otherGroup + row.id.slice(group.length) : null;
+      const before = gid ? ov(gid) : null;
+      if (before) { regrouped.push({ from: gid, to: row.id }); row.legacyId = gid; }
+      return mine || old || before;
     };
     const rows = [];
     const ids = new Set();
     const defaultCardOf = new Map();
     const baseOf = new Map();
+    // Aggregate budgets' rows (finished once all their members are known), what their members'
+    // changes move them by, and the members' transactions (how the aggregate is paid).
+    const aggRows = new Map(), aggDelta = new Map(), aggItems = new Map(), aggCovers = new Map();
     let overridden = false, stableCount = 0;
     for (const g of shown) {
       const catId = rowIdOf(group, 'c', g.synthetic ? MERCHANT_KEY + g.label : g.label);
@@ -272,6 +314,7 @@
       const st = stats(allItems);
       const seen = new Set(chargesOf(allItems).map(c => c.month)).size;
       const single = g.members.length === 1 ? g.members[0] : null;
+      const covered = single && !g.synthetic ? coveredBy(single.category) : null;
       const row = { id: catId, level: 1, parent: null, label: g.label, kind: 'category', category: g.label, sourceCategory: null,
         members: g.synthetic ? [] : g.members.map(c => c.category), avgCents: g.members.reduce((s, c) => s + c.avg, 0), months: st.months, txnCount: st.txnCount,
         // Every transaction of its rows (they share out the category's items): the union of theirs.
@@ -284,7 +327,7 @@
         groupSource: g.synthetic ? 'override' : single ? categoryGroup(single.category, cfg).source : null,
         paidBy: paidByOf(st), cardShare: shareOf(st), seenMonths: seen, ofMonths: n,
         pattern: kids.length && kids.every(k => k.pattern === 'bill') ? 'bill' : seen >= regularAt ? 'everyday' : 'occasional',
-        history: !g.noHistory };
+        history: !g.noHistory, covers: [] };
       const o = overrideFor(row);
       if (o) overridden = true;
       ids.add(catId);
@@ -293,24 +336,49 @@
       // The card part of an amount for the whole category: its default's own split, else by share.
       const cardOf = cents => (cents === row.defaultCents ? defaultCard : roundCents(cents * row.cardShare));
       const budget = g.synthetic || !single ? null : budgetOf(g.label);
+      const isAggregate = budget !== null && aggregates.includes(g.label);
       // A budget is for the whole category: a place moved out of it as a whole takes its share
       // along (never below $0), and changes to the rows under it move it by what they change.
-      const movedOut = budget === null ? 0 : (movedShare.get(g.label) || 0);
+      // An aggregate's members planned elsewhere take theirs (their history, or their own budget).
+      const movedOut = budget === null ? 0 : (movedShare.get(g.label) || 0) + (isAggregate ? carvedOut(g.label) : 0);
       const budgetBase = budget === null ? null : Math.max(0, budget - movedOut);
       const kidsDelta = kids.reduce((s, k) => s + (k.included ? k.planCents : 0) - k.defaultCents, 0);
       row.override = o;
       row.included = !(o && o.included === false);
       row.budgetCents = budget;
       row.budgetMovedCents = budget === null ? 0 : budget - budgetBase;
-      row.source = o && isCents(o.cents) ? 'set' : budget !== null ? 'budget' : 'history';
+      row.aggregate = covered;
+      row.source = o && isCents(o.cents) ? 'set' : budget !== null ? 'budget' : covered ? 'aggregate' : 'history';
       if (row.source === 'set') { row.planCents = o.cents; row.cardCents = cardOf(o.cents); }
       else if (row.source === 'budget') { row.planCents = budgetBase + kidsDelta; row.cardCents = cardOf(row.planCents); }
+      else if (row.source === 'aggregate') { row.planCents = 0; row.cardCents = 0; }
       else { row.planCents = included.reduce((s, k) => s + k.planCents, 0); row.cardCents = included.reduce((s, k) => s + k.cardCents, 0); }
       row.bankCents = row.planCents - row.cardCents;
-      // The plan with no change on this screen: the budget when there is one, else the default.
-      baseOf.set(catId, budget !== null ? { cents: budgetBase, card: cardOf(budgetBase) } : { cents: row.defaultCents, card: defaultCard });
+      if (covered) {
+        // In the aggregate, the changes to its rows move the aggregate; planned at an amount of its
+        // own, or left out, its default comes out of the aggregate.
+        const inIt = row.source === 'aggregate' && row.included;
+        aggDelta.set(covered, (aggDelta.get(covered) || 0) + (inIt ? kidsDelta : 0 - row.defaultCents));
+        if (inIt) aggItems.set(covered, (aggItems.get(covered) || []).concat(allItems));
+        if (inIt) aggCovers.set(covered, (aggCovers.get(covered) || []).concat([g.label]));
+      }
+      if (isAggregate) aggRows.set(g.label, { row, items: allItems, budgetBase, cardOf });
+      // The plan with no change on this screen: the budget when there is one, $0 in an aggregate, else the default.
+      baseOf.set(catId, budget !== null ? { cents: budgetBase, card: cardOf(budgetBase) } : covered ? { cents: 0, card: 0 } : { cents: row.defaultCents, card: defaultCard });
       defaultCardOf.set(catId, defaultCard);
       rows.push(row, ...kids);
+    }
+    // Aggregates: paid like their members, moved by what the changes to their members change, and
+    // `covers` names the members planned in them (whose spending the Budget month counts here).
+    for (const [name, a] of aggRows) {
+      a.row.covers = (aggCovers.get(name) || []).sort();
+      const st = stats(a.items.concat(aggItems.get(name) || []));
+      a.row.paidBy = paidByOf(st);
+      a.row.cardShare = shareOf(st);
+      if (a.row.source === 'budget') a.row.planCents += aggDelta.get(name) || 0;
+      a.row.cardCents = a.cardOf(a.row.planCents);
+      a.row.bankCents = a.row.planCents - a.row.cardCents;
+      baseOf.set(a.row.id, { cents: a.budgetBase, card: a.cardOf(a.budgetBase) });
     }
     const categories = rows.filter(r => r.level === 1);
     const on = categories.filter(r => r.included);
@@ -328,7 +396,7 @@
       yearlyCount: yearly.size,
       orphanIds: Object.keys(cfg.rows).filter(id => id.startsWith(group + '-') && !ids.has(id)),
       tinyCategoryCents: TINY_CATEGORY_CENTS,
-      legacy, superseded,
+      legacy, superseded, regrouped,
     };
   }
 
