@@ -1,10 +1,10 @@
 'use strict';
 /*
  * Budget 5. Setup details, folded away by default (one disclosure per area): pay and income, bills,
- * debts and the savings goals list. These are the editors the household's assistant keeps up to
- * date (the household mostly looks). Every edit is a data-bind (validated by
- * BudgetEngine.state.setPath) or one app.update from a budget:* action, so each change is undoable
- * from the toast. Blank stays unknown (null), never $0.
+ * debts and the savings goals list, and the baby's due date (it times the baby-cost estimates).
+ * These are the editors the household's assistant keeps up to date (the household mostly looks).
+ * Every edit is a data-bind (validated by BudgetEngine.state.setPath) or one app.update from a
+ * budget:* action, so each change is undoable from the toast. Blank stays unknown (null), never $0.
  * Income is counted as the Plan counts it: joint accounts, the annual average month
  * (E.plan.monthly with timing 'average' for the plan month, the figures flows.planFunding gives the
  * Plan's dials). Bills say what the plan does with them (tl.bills).
@@ -697,6 +697,30 @@
     return goals.length ? `${plural(goals.length, 'goal')} · ${whole(E.money.sum(goals.map(g => g.monthlyCents)))} a month` : 'None yet';
   }
 
+  /**
+   * The baby's due date (plan.settings.babyDueDate, optional): it times the baby-cost estimates
+   * (E.babyDefaults). The only place the app asks for it; empty keeps the timing unknown or the
+   * month-level estimate from a baby what-if.
+   */
+  function babyArea(ctx) {
+    const st = E.babyDefaults.status(ctx.state);
+    const due = st.dueDate;
+    const line = due ? 'Due ' + fmt.date(due) : st.timing === 'month' ? 'Estimated: ' + fmt.month(st.birthMonth) + ' (month only)' : 'Due date not set';
+    const needed = st.items.filter(it => it.dateNeeded);
+    const state = st.timing === 'month'
+      ? `Without a due date the estimates are timed from the birth month of “${esc(st.group)}” (${esc(fmt.month(st.birthMonth))}), to the month only: childcare from ${esc(fmt.month(E.months.add(st.birthMonth, E.babyDefaults.CARE_AFTER_MONTHS)))}.`
+      : needed.length ? `Date needed: ${esc(listText(needed.map(it => it.label.replace(/\s*\(estimate\)$/, '') + ' ' + money(it.cents) + (it.kind === 'monthly' ? ' a month' : ''))))} wait for it and are not in the plan yet.` : '';
+    const open = ctx.route.params.section === 'baby' ? ' open' : '';
+    return `<details class="bud-area" id="bud-area-baby"${open}>
+        <summary class="bud-area-summary"><span class="bud-area-title">Baby</span> <span class="bud-area-line" id="bud-baby-line">${esc(line)}</span></summary>
+        <div class="bud-area-body" id="bud-section-baby">
+          ${inputField({ id: 'bud-baby-due', label: 'Due date (optional)', path: 'plan.settings.babyDueDate', value: due || '', type: 'date', dataType: 'date', message: 'Due date saved. The baby-cost estimates follow it.',
+    help: 'Times the baby-cost estimates: setup the month before the birth, supplies from the birth month, childcare from 6 weeks after. Start months you changed yourself stay as they are.' })}
+          ${state ? `<p class="fine" id="bud-baby-state">${state}</p>` : ''}
+        </div>
+      </details>`;
+  }
+
   function setupDetails(ctx, tl) {
     const month = tl ? tl.planStart : ctx.forecastStart;
     let plan;
@@ -712,7 +736,7 @@
       </details>`).join('');
     return `<section class="card bud-setup" id="bud-setup" aria-labelledby="bud-setup-h">
       <div class="card-head"><div><h2 id="bud-setup-h">Pay, bills and debts</h2><p class="card-sub">What the plan is built from.</p></div></div>
-      <div class="bud-areas">${areas}</div>
+      <div class="bud-areas">${areas}${babyArea(ctx)}</div>
     </section>`;
   }
 

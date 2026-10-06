@@ -274,7 +274,10 @@
   const SETTINGS_FIELDS = [
     ['incomeTiming', oneOf(['conservative', 'average', 'actual'], 'conservative')],
     ['planningBaseline', oneOf(['actual', 'adjusted'], 'actual')],
-    ['comparisonWindow', oneOf([3, 6, 12], 3)]
+    ['comparisonWindow', oneOf([3, 6, 12], 3)],
+    // The baby's due date ('YYYY-MM-DD'); absent or null = not known. It times the baby-cost
+    // defaults (BudgetEngine.babyDefaults). Absent in budgets saved before it existed.
+    ['babyDueDate', optional(DATE)]
   ];
 
   const ASSUMPTION_FIELDS = [
@@ -297,6 +300,17 @@
   // personId only for income (null: "other money in"). scenario: the what-if it belongs to
   // (null: none), up to SCENARIO_TAG_MAX characters.
   const SCENARIO_TAG_MAX = 60;
+  // A planned change the baby-cost defaults made or filled: which default (role), the start month
+  // and amounts they wrote, and how exact the timing was ('day': from the due date; 'month': from
+  // a what-if's birth month, an estimate).
+  const BABY_ROLES = ['setup', 'supplies', 'childcare'];
+  const BABY_DERIVED_FIELDS = [
+    ['role', oneOf(BABY_ROLES, 'setup')],
+    ['startMonth', MONTH],
+    ['cents', CENTS],
+    ['yearlyCents', optional(CENTS)],
+    ['precision', oneOf(['day', 'month'], 'month')]
+  ];
   const CHANGE_FIELDS = [
     ['label', label('Planned change')],
     ['kind', oneOf(CHANGE_KINDS, 'monthly')],
@@ -308,7 +322,13 @@
     ['accepted', bool(false)],
     ['template', REF],
     ['scenario', rule('text', { max: SCENARIO_TAG_MAX, nullable: true })],
-    ['note', NOTE]
+    ['note', NOTE],
+    // (absent unless set) a yearly amount added in the change's first active month and every 12th
+    // month after (a monthly change only: e.g. childcare's yearly membership fee)
+    ['yearlyCents', optional(CENTS)],
+    // (absent unless set) what the baby-cost defaults wrote (BudgetEngine.babyDefaults), so a value
+    // still equal to it is provably untouched
+    ['derived', optional(rule('object', { nullable: true, fields: BABY_DERIVED_FIELDS }))]
   ];
 
   // A recurring change may have an unknown start (e.g. childcare not arranged yet): startMonth
@@ -448,7 +468,10 @@
     ['migrationNotes', NOTES_RULE],
     ['legacySnapshot', rule('snapshot', { nullable: true })],
     // Absent until setup sync first runs on this budget.
-    ['setup', optional(rule('object', { nullable: true, fields: SETUP_FIELDS }))]
+    ['setup', optional(rule('object', { nullable: true, fields: SETUP_FIELDS }))],
+    // Absent until the baby-cost defaults first run: the defaults already made (BABY_ROLES), so one
+    // the household removed is not made again.
+    ['babyDefaults', optional(rule('object', { nullable: true, fields: [['done', rule('keylist', { max: BABY_ROLES.length, def: [], values: BABY_ROLES })]] }))]
   ];
 
   const FIELD_NAMES = {
@@ -465,7 +488,7 @@
     assumedPerMonthIfUnknown: 'Paychecks assumed per month', loanCount: 'Number of loans', promo: 'Promotion',
     goal: 'Savings goal', annualReturnPct: 'Annual return', costGrowthPct: 'Cost growth', incomeGrowthPct: 'Income growth',
     incomeTiming: 'Income timing', planningBaseline: 'Planning baseline', comparisonWindow: 'Comparison window',
-    cents: 'Amount', accepted: 'Accepted', template: 'Template', group: 'Group',
+    cents: 'Amount', accepted: 'Accepted', template: 'Template', group: 'Group', yearlyCents: 'Yearly amount', babyDueDate: 'Baby due date',
     scope: 'View', lastRoute: 'Last page'
   };
   const fieldName = k => lookup(FIELD_NAMES, k) || k;
@@ -3189,7 +3212,7 @@
     exportWorkbook, importWorkbook, extractEmbeddedState,
     addScenario, renameScenario, deleteScenario, removeScenario: deleteScenario,
     addEvent, updateEvent, removeEvent, validateEvent,
-    DIAL_KEYS, RETIRED_DIALS, SPEND_GROUPS, SPEND_DIALS, CHANGE_KINDS, CHANGE_GROUPS, TREND_SERIES,
+    DIAL_KEYS, RETIRED_DIALS, SPEND_GROUPS, SPEND_DIALS, CHANGE_KINDS, CHANGE_GROUPS, TREND_SERIES, BABY_ROLES,
     // ui.plan's fields as PLAN_UI describes them (read-only: name, default, optional, doc), and its silent cleaner.
     PLAN_UI: Object.freeze(PLAN_UI.map(d => Object.freeze({ name: d.name, default: d.rule.optional ? undefined : clone(d.rule.def), optional: !!d.rule.optional, doc: d.doc }))),
     cleanPlanUi,

@@ -472,9 +472,12 @@
     }
     try {
       // Then the setup file's values, as on every load (E.setupSync).
-      const r = E.setupSync.importWorkbook(String(text), ctx.profile, ctx.dataset, { now: new Date().toISOString() });
-      out.state = r.state;
-      out.notes = r.notes || [];
+      const now = new Date().toISOString();
+      const r = E.setupSync.importWorkbook(String(text), ctx.profile, ctx.dataset, { now });
+      // And the baby-cost defaults after it, as on every load (E.babyDefaults).
+      const baby = E.babyDefaults.ensure(r.state, { now });
+      out.state = baby.state;
+      out.notes = (r.notes || []).concat(baby.notes);
     } catch (err) {
       if (!err || err.name !== 'ValidationError') throw err;
       out.error = err.message;
@@ -1880,6 +1883,8 @@
         const cur = ctx.state;
         const fresh = E.state.defaults(p.profile, ctx.dataset, { now: new Date().toISOString() });
         const next = { ...fresh, ledgerEdits: cur.ledgerEdits, references: cur.references, checklist: cur.checklist, ui: cur.ui, meta: { ...cur.meta, updatedAt: fresh.meta.updatedAt } };
+        // A new plan: the baby-cost defaults are made again for it (on the reload, E.babyDefaults).
+        delete next.meta.babyDefaults;
         ctx.app.replaceState(next);
         replaced = true;
       }
@@ -2001,7 +2006,7 @@
       const fresh = E.state.defaults(ctx.profile, ctx.dataset, { now });
       fresh.ui = { ...fresh.ui, scope: st.ui.scope, lastRoute: st.ui.lastRoute };
       // The profile's plan-screen settings (planUi) too, and setup sync's record of what was applied.
-      ctx.app.replaceState(E.setupSync.apply(fresh, ctx.profile, { now }).state, 'Budget reset to the household profile.');
+      ctx.app.replaceState(E.babyDefaults.ensure(E.setupSync.apply(fresh, ctx.profile, { now }).state, { now }).state, 'Budget reset to the household profile.');
     },
   };
 

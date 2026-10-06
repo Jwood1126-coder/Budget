@@ -254,7 +254,7 @@ test('sample profile: savings goals, balances and settings', () => {
   const home = byId(plan.savings, 'home-projects');
   assert.deepEqual([home.targetCents, home.monthlyCents, home.spendAtTarget], [null, 10000, false]);
   assert.equal(plan.balances.jointCashCents, null);
-  assert.deepEqual(plan.settings, { incomeTiming: 'conservative', planningBaseline: 'actual', comparisonWindow: 3 });
+  assert.deepEqual(plan.settings, { incomeTiming: 'conservative', planningBaseline: 'actual', comparisonWindow: 3, babyDueDate: '2027-05-14' });
 });
 
 test('sample profile: scenario amounts that are unknown are null, never invented', () => {

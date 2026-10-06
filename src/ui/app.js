@@ -104,9 +104,14 @@
     const result = E.state.loadFromStorage(app.storage || memoryStorage(), app.dataset.datasetId, app.profile, app.dataset);
     // The setup file's (profile's) later changes reach the saved budget (E.setupSync); its notes
     // are shown once, with the other notes from opening the page.
-    const synced = E.setupSync.apply(result.state, app.profile, { now: new Date().toISOString() });
-    app.state = synced.state;
-    app.loadNotes.push(...(result.notes || []), ...synced.notes);
+    const now = new Date().toISOString();
+    const synced = E.setupSync.apply(result.state, app.profile, { now });
+    // Then the baby-cost defaults (E.babyDefaults), timed from the due date the sync may have brought.
+    const baby = E.babyDefaults.ensure(synced.state, { now });
+    app.state = baby.state;
+    // Its notes are listed with the other notes from opening the page (Data & privacy), not toasted:
+    // the Plan shows the estimates themselves.
+    app.loadNotes.push(...(result.notes || []), ...synced.notes, ...baby.notes);
     app.setupNotes = synced.notes;
     app.stateSource = result.source;
     app.savedText = readSaved();
@@ -131,7 +136,8 @@
 
   function storedState() {
     const loaded = E.state.loadFromStorage(app.storage, app.dataset.datasetId, app.profile, app.dataset).state;
-    return E.setupSync.apply(loaded, app.profile, { now: new Date().toISOString() }).state;
+    const now = new Date().toISOString();
+    return E.babyDefaults.ensure(E.setupSync.apply(loaded, app.profile, { now }).state, { now }).state;
   }
   function clearUndo() { app.undoStack = []; app.undoFocus = []; app.undoLabels = []; }
   /**
@@ -434,7 +440,9 @@
    * Apply a pure state transformation. fn(state) must return a new state (use E.state helpers).
    * Throws ValidationError back to the caller so forms can show the message.
    */
-  function update(fn, { message, undoable = true, rerender = true, rederive } = {}) {
+  function update(fn0, { message, undoable = true, rerender = true, rederive } = {}) {
+    // A write that changes the baby's due date re-times the baby-cost defaults it made (E.babyDefaults).
+    const fn = st => E.babyDefaults.follow(st, fn0(st));
     const prev = app.state;
     const next = fn(prev);
     if (!next || next === prev) return false;

@@ -198,6 +198,29 @@ Dated one-time or monthly changes on top of the plan:
   (`kidCosts('2027-05-15')` gives the costs from age 1.) Items keep their `template` tag; edit
   amounts, then set `accepted` when the household decides.
 
+### The baby's due date (`plan.settings.babyDueDate`)
+
+Optional: `"settings": { …, "babyDueDate": "2027-05-14" }` (`YYYY-MM-DD`; leave it out or `null`
+when not known). It times the baby-cost defaults the app adds by itself (ARCHITECTURE.md §8,
+`BudgetEngine.babyDefaults`), as editable estimates in one baby group (the what-if copied from a baby
+scenario when there is one, else "New baby"):
+
+- setup $2,000 once, in the month before the birth month;
+- supplies $450 a month from the birth month (feeding, diapers and wipes, clothing, care, toys, a
+  contingency);
+- childcare $1,800 a month from the month 6 weeks after the due date (a planning allowance, not a
+  booking or a confirmed rate), plus a $150 yearly membership fee in the first care month and every
+  12 months after.
+
+Medical costs, insurance premium changes and parental-leave pay stay unknown (never $0). Without a
+date, a copied baby what-if's birth month gives a month-level estimate (childcare two months
+after it); with neither, nothing is added until the date is known. The household can set the date
+in Budget's setup details (Baby); a date saved there wins over the setup file's (the merge rule
+below). A new date moves only the estimates whose start month nobody changed. Amounts, dates and
+inclusion the household changes are kept, and a default they remove is not added again. Do not also
+accept the New baby or Childcare pack for the same costs: the plan counts them once (the defaults
+are held back) and the Plan says so.
+
 ### Balances in the plan (`plan.balances`)
 
 Prefer statement balances in the import config (section 2). `plan.balances.accounts`

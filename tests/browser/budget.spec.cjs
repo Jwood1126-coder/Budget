@@ -497,4 +497,33 @@ module.exports = [
       t.assert.deepEqual(dialogs, []);
     },
   },
+  {
+    name: 'baby due date: the setup details time the baby-cost estimates; the Plan shows one caveat line and childcare’s yearly fee',
+    async run(t) {
+      const { page, assert } = t;
+      await openBudget(t, '#/budget?section=baby');
+      await page.waitForFunction(() => document.getElementById('bud-area-baby').open);
+      // The sample's invented due date (14 May 2027): setup in April, supplies from May, childcare from June (+ 42 days).
+      assert.equal(await page.inputValue('#bud-baby-due'), '2027-05-14');
+      assert.match(await text(page, '#bud-baby-line'), /Due May 14, 2027/);
+      const care0 = (await state(page)).plan.changes.find(c => c.id === 'sc-childcare');
+      assert.deepEqual([care0.startMonth, care0.cents, care0.yearlyCents, care0.accepted], ['2027-06', 180000, 15000, true]);
+      // A later date moves the estimates whose start months were not changed by hand.
+      await page.fill('#bud-baby-due', '2027-06-25');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.settings.babyDueDate === '2027-06-25');
+      await settled(t);
+      const after = (await state(page)).plan.changes;
+      assert.deepEqual(['baby-default-setup', 'baby-default-supplies', 'sc-childcare'].map(id => after.find(c => c.id === id).startMonth), ['2027-05', '2027-06', '2027-08']);
+      await t.nav('overview');
+      await page.waitForSelector('#plan-baby-caveat');
+      await t.settled();
+      assert.match(await text(page, '#plan-baby-caveat'), /medical costs, insurance premium changes and parental-leave pay are unknown, not \$0/);
+      assert.match(await text(page, '#plan-ch-sc-childcare-yearly'), /plus \$150(\.00)? a year \(membership fee\) in Aug 2027 and every 12 months after/);
+      assert.equal(await page.$$eval('#plan-baby-overlap', x => x.length), 0, 'nothing planned twice');
+      // Undo puts the date and the start months back.
+      await page.click('#undoBtn');
+      await page.waitForFunction(() => window.HouseholdBudget.getState().plan.settings.babyDueDate === '2027-05-14');
+      assert.equal((await state(page)).plan.changes.find(c => c.id === 'sc-childcare').startMonth, '2027-06');
+    },
+  },
 ];

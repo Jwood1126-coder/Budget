@@ -137,6 +137,9 @@
 .plan-ch-sublist { list-style: none; margin: 0 0 var(--space-2) 4px; padding: 0 0 0 var(--space-3); border-left: 2px solid var(--border-strong); }
 .plan-ch-sublist > .plan-ch-item:last-child { border-bottom: 0; }
 .plan-ch-unset { margin: 0 0 0 54px; font-size: .8rem; font-weight: 600; color: var(--warn); }
+/* Baby-cost defaults: childcare's yearly fee under its row; the caveat (and counted-once) lines under the group. */
+.plan-ch-yearly { margin: 0 0 4px 54px; font-size: .8rem; color: var(--text-2); }
+.plan-ch-caveat { margin: 0 0 var(--space-2) 54px; font-size: .8rem; color: var(--text-2); }
 .plan-ch-item .field-error { margin: 0 0 0 54px; }
 .plan-ch-empty { margin: 0; padding: var(--space-3) 0 var(--space-1); color: var(--text-3); font-size: .88rem; }
 .plan-ch-addrow { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-2) var(--space-3); }
@@ -168,7 +171,7 @@
   .plan-ch-status .badge-good { font-size: 0; gap: 0; padding: 1px 7px; }
   .plan-ch-status .badge-good .badge-icon { font-size: .78rem; }
   .plan-ch-edit > summary { padding: 2px 4px; }
-  .plan-ch-unset, .plan-ch-item .field-error { margin-left: 0; }
+  .plan-ch-unset, .plan-ch-yearly, .plan-ch-caveat, .plan-ch-item .field-error { margin-left: 0; }
   .plan-ch-field, .plan-ch-field input[name="label"], .plan-ch-field .input-money input, .plan-add-form input[type="date"], .plan-add-form input[type="month"] { width: 100%; }
   .plan-ch-addrow > .plan-ch-field { flex: 1 1 100%; }
   .plan-add-btn { padding-right: 12px; }

@@ -23,6 +23,7 @@
     "engine/timeline.js",
     "engine/state.js",
     "engine/setup-sync.js",
+    "engine/baby-defaults.js",
     "engine/attention.js"
   ],
   "ui": [
