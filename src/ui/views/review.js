@@ -521,7 +521,7 @@
   function missingCard(ctx) {
     let plan = null;
     try { plan = ctx.plan(); } catch { plan = null; }
-    if (!plan) return c.card(c.notice({ tone: 'warn', title: 'The budget could not be calculated', body: 'Open Budget to check the inputs.' }), { title: 'Missing information', id: 'rv-missing' });
+    if (!plan) return c.card(c.notice({ tone: 'warn', title: 'The budget could not be calculated', body: 'Open Edit plan to check the inputs.' }), { title: 'Missing information', id: 'rv-missing' });
     const missing = plan.missing || [];
     const missingIds = new Set(missing.map(m => String(m.id)));
     let attention = [];

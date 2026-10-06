@@ -727,7 +727,7 @@
       </div>
       <div class="dp-task">
         <h3>Print</h3>
-        <p>Opens Budget and your browser’s print window. On any page you can also use the browser’s Print command (Ctrl+P, or ⌘P on a Mac); navigation and buttons are left out of the printout.</p>
+        <p>Opens Edit plan and your browser’s print window. On any page you can also use the browser’s Print command (Ctrl+P, or ⌘P on a Mac); navigation and buttons are left out of the printout.</p>
         <div class="dp-actions">${c.button('Print the budget', { action: 'dp:print', id: 'dp-print' })}</div>
       </div>`;
     return c.card(body, { title: 'Save, share and back up', id: 'dp-save', subtitle: 'How your changes are kept, and how to back them up or move them.' });

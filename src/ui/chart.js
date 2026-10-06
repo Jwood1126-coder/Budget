@@ -748,7 +748,7 @@
 
     // ---- legend: toggle chips per series + static keys for the line/fill treatments
     const chip = (key, name, swatch, tip = '') => `<button type="button" class="cc-chip" id="${esc(UI.dom.domId(figId + '-chip', key))}" data-cc-key="${esc(key)}" aria-pressed="${hiddenSet.has(key) ? 'false' : 'true'}"${tip ? ` title="${esc(tip)}"` : ''}><span class="key ${swatch}" aria-hidden="true"></span><span class="cc-chip-name">${esc(name)}</span></button>`;
-    const planKeys = '<span class="cc-key-item"><span class="key key-line cc-key-solid" aria-hidden="true"></span>Actual</span><span class="cc-key-item"><span class="key key-line key-dashed" aria-hidden="true"></span>Plan (projected)</span>';
+    const planKeys = '<span class="cc-key-item"><span class="key key-line cc-key-solid" aria-hidden="true"></span>Actual</span><span class="cc-key-item"><span class="key key-line key-dashed" aria-hidden="true"></span>Plan (estimate)</span>';
     let chips = '', keys = [];
     if (mode === 'balance') {
       // The baseline's and the what-if's chips come after the real lines.

@@ -95,7 +95,7 @@ test('balance mode: plan months are dashed, actual months solid, and the dash st
   assert.equal(solid.length, 1);
   assert.equal(pointsOf(solid[0].d).length, lastActual + 1);
   // Label, not only colour: a dashed key and "Plan" text.
-  assert.match(html, /key key-line key-dashed[^>]*><\/span>Plan \(projected\)/);
+  assert.match(html, /key key-line key-dashed[^>]*><\/span>Plan \(estimate\)/);
   assert.match(html, /class="cc-marker-label cc-plan-label"[^>]*>Plan<\/text>/);
   assert.match(html, /class="cc-marker-label cc-today-label"[^>]*>Today<\/text>/);
   assert.equal(model.months[lastActual + 1].p, 'Plan');
@@ -744,7 +744,7 @@ test('trends mode: series, moving-average and trend lines with their own classes
   assert.match(html, new RegExp(`data-cc-key="groc" aria-pressed="true" title="Trend ${reEsc(slopeText)}"><span class="key key-line series-1"`));
   assert.match(html, /<span class="key key-line cc-key-ma cc-key-ink" aria-hidden="true"><\/span>MA 3<\/span>/);
   assert.match(html, /<span class="key key-line cc-key-trend cc-key-ink" aria-hidden="true"><\/span>Trend<\/span>/);
-  assert.match(html, /<span class="key key-line key-dashed" aria-hidden="true"><\/span>Plan \(projected\)/);
+  assert.match(html, /<span class="key key-line key-dashed" aria-hidden="true"><\/span>Plan \(estimate\)/);
   // Same timeline as the other modes.
   const bal = modelOf(cashChart({ ...trendSpec(), mode: 'balance', lines: [{ key: 'c', name: 'C', role: 'combined', points: TREND_MONTHS.map((m, i) => ({ month: m, cents: groceries[i] })) }] }));
   assert.deepEqual(xs, bal.months.map(m => m.x));

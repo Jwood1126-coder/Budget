@@ -2018,7 +2018,7 @@ them; `tools/plan-report.cjs` runs it too.
 ### BudgetEngine.attention
 - `list({ dataset, txns, state, ctx, balanceKnown? }) -> [{ id, severity: 'action'|'decision'|'info', title, detail, route, cta? }]`
   — data items (from `review.queues`), plan items and forecast items (`ctx.project(scenarioId, { months })`
-  supplies projections; they open the Plan: `#/overview`, a scenario's missing amounts `#/overview?compare=<name>`); sorted action → decision → info; items whose `'attention:' + id` is in
+  supplies projections; they open the Overview: `#/overview`, a scenario's missing amounts Edit plan's planned changes `#/budget?focus=plan-changes-h`); sorted action → decision → info; items whose `'attention:' + id` is in
   `state.ui.dismissed` are hidden; a part that fails becomes one `info` item instead of breaking the list.
   The "Enter today's balances" item (id `balance`, route `#/overview`) is listed only when no starting
   balance is known: `balanceKnown` as the caller passes it (the app: from `ctx.cashPlan()`), else

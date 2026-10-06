@@ -172,7 +172,7 @@
       try { p = ctx.project(sc.id, { months: 36 }); } catch { continue; }
       // Event amounts not entered include income changes (e.g. pay during leave), not only costs.
       const missing = p.missing.filter(m => m.source === 'event');
-      if (missing.length) items.push({ id: 'scn-missing-' + sc.id, severity: 'info', title: `“${sc.name}” has ${missing.length} amount${missing.length === 1 ? '' : 's'} not entered`, detail: missing.slice(0, 3).map(m => m.label).join('; ') + (missing.length > 3 ? '…' : ''), route: '#/overview?compare=' + encodeURIComponent(sc.name), cta: 'Fill in' });
+      if (missing.length) items.push({ id: 'scn-missing-' + sc.id, severity: 'info', title: `“${sc.name}” has ${missing.length} amount${missing.length === 1 ? '' : 's'} not entered`, detail: missing.slice(0, 3).map(m => m.label).join('; ') + (missing.length > 3 ? '…' : ''), route: '#/budget?focus=plan-changes-h', cta: 'Fill in' });
     }
     return items;
   }
