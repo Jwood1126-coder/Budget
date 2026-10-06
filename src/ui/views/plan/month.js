@@ -47,9 +47,13 @@
     return out;
   }
 
-  /** The keys a level-1 drill row holds purchases under (see categorySpend). */
+  /**
+   * The keys a level-1 drill row holds purchases under (see categorySpend). An aggregate budget's
+   * row (the migrated energy one) also holds its members' purchases (`covers`: they plan at $0).
+   */
   function rowKeys(r) {
     if (r.synthetic) return ['m:' + String(r.merchant || r.label).trim()];
+    if (Array.isArray(r.covers) && r.covers.length) return [r.category].concat(r.covers).map(cat => 'c:' + cat);
     if (Array.isArray(r.members) && r.members.length) return r.members.map(cat => 'c:' + cat);
     return ['c:' + r.category];
   }
@@ -59,7 +63,9 @@
     const d = tl.dialsByKey[key];
     if (!d || !d.drill || d.drill.kind !== 'categories') return [];
     return d.drill.rows.filter(r => r.level === 1 && r.included !== false)
-      .map(r => ({ label: r.label, category: r.synthetic ? null : r.category, keys: rowKeys(r), planCents: r.planCents }));
+      .map(r => ({ label: r.label, category: r.synthetic ? null : r.category, keys: rowKeys(r), planCents: r.planCents }))
+      // Aggregate rows first, so their members' purchases are counted once, against them.
+      .sort((a, b) => b.keys.length - a.keys.length);
   }
 
   /** One line: a name, an optional link, the amount and, so far, "of $X". */

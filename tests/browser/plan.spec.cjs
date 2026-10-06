@@ -238,6 +238,41 @@ module.exports = [
     },
   },
   {
+    name: 'month breakdown: an aggregate budget (the migrated energy one) counts its members’ spending once, on its own line',
+    async run(t) {
+      const { page, assert } = t;
+      const ENERGY = 'Energy (gas + electric, migrated)';
+      const linesOf = async month => {
+        await page.goto(t.url + '#/overview?month=' + month);
+        await page.waitForSelector(`#plan-month[data-month="${month}"]`);
+        await page.click('#plan-month-grp-essentials > summary');
+        return page.$$eval('#plan-month-grp-essentials .ov-mcats > li', ls => ls.map(l => ({ name: l.querySelector('.ov-mline-name').textContent.trim(), amt: l.querySelector('.ov-mline-amt').textContent.trim() })));
+      };
+      await t.open('#/overview');
+      const dollars = x => Number(x.replace(/[^0-9.-]/g, ''));
+      const before = await linesOf('2026-08');
+      const members = before.filter(l => l.name === 'Gas & heating' || l.name === 'Electric');
+      assert.ok(members.length, 'the sample spends on gas or electric in Aug 2026: ' + before.map(l => l.name).join(', '));
+      // The migrated budget in place of the members' own (a member with a budget of its own keeps its row).
+      await page.evaluate(name => {
+        const H = window.HouseholdBudget, st = H.getState();
+        delete st.plan.targets['Gas & heating'];
+        delete st.plan.targets.Electric;
+        st.plan.targets[name] = 20000;
+        H.setState(st);
+      }, ENERGY);
+      await t.settled();
+      const after = await linesOf('2026-08');
+      const energy = after.find(l => l.name === ENERGY);
+      assert.ok(energy, 'one line for the aggregate: ' + after.map(l => l.name).join(', '));
+      // Whole dollars on screen: each rounded line may be off by under a dollar.
+      const near = (a, b, n, what) => assert.ok(Math.abs(a - b) <= n, `${what}: ${a} vs ${b}`);
+      near(dollars(energy.amt), members.reduce((s, l) => s + dollars(l.amt), 0), members.length, 'its members’ spending');
+      assert.ok(!after.some(l => l.name === 'Gas & heating' || l.name === 'Electric'), 'not counted again on their own lines');
+      near(after.reduce((s, l) => s + dollars(l.amt), 0), before.reduce((s, l) => s + dollars(l.amt), 0), members.length, 'the group’s total is unchanged');
+    },
+  },
+  {
     name: 'phone: a tap on a month shows its readout and its breakdown together; the tiles fit three across',
     viewport: 'phone',
     async run(t) {
