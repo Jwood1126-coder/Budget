@@ -60,7 +60,8 @@ module.exports = [
       t.assert.equal((await t.page.textContent('.mainnav a[data-nav="budget"]')).trim(), 'Edit plan');
       await t.nav('budget');
       await t.page.waitForFunction(() => location.hash.startsWith('#/budget'));
-      await t.page.waitForSelector('#page-title');
+      // The hash changes before the page is drawn again: wait for the new page's title, not any title.
+      await t.page.waitForFunction(() => { const h = document.querySelector('#page-title'); return !!h && h.textContent.trim() !== 'Overview'; });
       t.assert.equal((await t.page.textContent('#page-title')).trim(), 'Edit plan');
       t.assert.match(await t.page.title(), /^Edit plan · /);
     },
