@@ -119,8 +119,9 @@
    * `seenDebtCents`: the monthly amounts of the debt-payment bills seen and running in the baseline
    * months (status 'seen' with no end month, or 'ends') added up. The history holds them, but
    * averaged over the whole window a debt that started (or was entered) recently is diluted
-   * (three $80 payments in twelve months average $20), so the other dial plans debt payments at
-   * no less than this (buildDials), and an 'ends' change takes out exactly what it counts.
+   * (three $80 payments in twelve months average $20), and a payment lowered or refinanced keeps
+   * its older, higher amount there, so the other dial plans debt payments at this amount whenever
+   * it is more than $0 (buildDials), and an 'ends' change takes out exactly what it counts.
    * @returns {{ changes: object[], bills: { id, label, status, changeId }[], seenDebtCents: number }}
    *   status: 'seen' | 'ends' | 'added' | 'ended' | 'notJoint' | 'noAmount' | 'noCategory' | 'inBudget'
    */

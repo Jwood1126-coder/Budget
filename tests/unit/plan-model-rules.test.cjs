@@ -203,10 +203,35 @@ test('debt: a current debt bill the history holds plans at its amount, not the w
   assert.equal(tl.months.find(m => m.month === '2032-06').out.debt, 8000);
 });
 
-test('debt: without double counting — a larger history average stays; an ending bill takes out exactly what it counts', () => {
-  // Another debt with no bill is paid every month too: the average (80×3/12 + 50) is more than the bill.
+test('debt: a payment lowered on purpose plans at the current bill, keeping none of the older, higher history', () => {
+  // Paid $120 a month all year; the bill now says $80 (refinanced). Not max($80, $120).
+  const ds = dataset([['Groceries', 200]], [paid([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], 120)]);
+  const tl = build(ds, planOf({ bills: [installment()] }));
+  const other = tl.dialsByKey.other;
+  assert.equal(other.baselineCents, 8000);
+  assert.equal(other.planCents, 8000);
+  assert.deepEqual(other.debtCheck, { billsCents: 8000, averageCents: 12000 });
+  assert.match(other.basis, /current debt bills from Budget \(\$80\.00 a month, not the average of \$120\.00\)\. Your history paid more toward debts than these bills/);
+  assert.deepEqual(tl.bills.map(b => b.status), ['seen'], 'still seen: not added a second time');
+  for (const m of ['2032-01', '2032-06', '2032-12']) assert.equal(tl.months.find(x => x.month === m).out.debt, 8000, m);
+  // Raised again later: the bill's amount, whichever side of the average it is.
+  assert.equal(build(ds, planOf({ bills: [installment({ monthlyCents: 15000 })] })).dialsByKey.other.baselineCents, 15000);
+  assert.equal(build(ds, planOf({ bills: [installment({ monthlyCents: 15000 })] })).dialsByKey.other.debtCheck, null, 'the bills are more: nothing to check');
+});
+
+test('debt: without double counting — the bills are the debt payments (a larger average is flagged, not added); an ending bill takes out exactly what it counts', () => {
+  // Another debt with no bill is paid every month too: the average (80×3/12 + 150) is more than the
+  // bill. The history cannot be split by bill, so the bill is the debt part and the dial says so.
   const both = dataset([['Groceries', 200]], [paid([10, 11, 12]), paid([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], 150, 'Invented Store Card')]);
-  assert.equal(build(both, planOf({ bills: [installment()] })).dialsByKey.other.baselineCents, 2000 + 15000);
+  const other = build(both, planOf({ bills: [installment()] })).dialsByKey.other;
+  assert.equal(other.baselineCents, 8000);
+  assert.deepEqual(other.debtCheck, { billsCents: 8000, averageCents: 2000 + 15000 });
+  assert.match(other.basis, /if a debt payment is missing from your bills, add it in Edit plan, or set this amount here/);
+  // With the store card listed as a bill too, both count and nothing is flagged.
+  const card = installment({ id: 'store-card', label: 'Invented store card', monthlyCents: 15000 });
+  const listed = build(both, planOf({ bills: [installment(), card] })).dialsByKey.other;
+  assert.equal(listed.baselineCents, 8000 + 15000);
+  assert.equal(listed.debtCheck, null);
   // A bill ending in the plan: $80 until its end month, then $0 (not $20 − $80).
   const ds = dataset([['Groceries', 200]], [paid([10, 11, 12])]);
   const tl = build(ds, planOf({ bills: [installment({ endMonth: '2032-03' })] }));

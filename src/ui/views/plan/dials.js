@@ -118,7 +118,9 @@
       basis += ' · ' + budgetLink('Set pay in Budget');
       why += (/[.!?]$/.test(d.basis) ? '' : '.') + (unknown.length ? ' ' + esc('Budget has no amount for: ' + unknown.join(', ') + '.') : '') + ' Enter the current amount here, or save pay in Budget.';
     }
-    const unconfirmed = person && d.needsConfirm ? badgeWithId(id + '-unconfirmed', 'Not confirmed', 'warn') : '';
+    const unconfirmed = person && d.needsConfirm ? badgeWithId(id + '-unconfirmed', 'Not confirmed', 'warn')
+      // Debt payments in the history are more than the current debt bills (the plan uses the bills): one may be missing.
+      : d.debtCheck ? badgeWithId(id + '-check', 'Check debt bills', 'warn', { title: 'Your history paid ' + amt(d.debtCheck.averageCents) + ' a month toward debts; your current debt bills add up to ' + amt(d.debtCheck.billsCents) + '.' }) : '';
     // At the pay from Budget, or at the setup file's amount (where Reset puts it), the deposit
     // average is one click away: an explicit choice, kept as the household's.
     const atSetup = d.basisKind === 'direct' && setupOf(ctx.state, 'dials.' + d.key) === d.planCents;
