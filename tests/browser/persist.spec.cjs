@@ -426,8 +426,9 @@ module.exports = [
       const note = notes.filter(n => /^ui\.plan\.dialShift\.flexible: /.test(n));
       assert.equal(note.length, 1, JSON.stringify(notes));
       assert.match(note[0], /^ui\.plan\.dialShift\.flexible: Flexible is planned at \$[\d,]+\.\d\d: the \$2,500\.00 you set, less \$[\d,]+\.\d\d for “Natural gas”, now read as Gas & heating and planned in Essentials, so it is not counted twice\.$/);
-      // The dial shows the amount planned: what was set less what moved.
+      // The dial shows the amount planned: what was set less what moved, and says so under it.
       assert.equal(await page.inputValue('#plan-dial-flexible'), boxText(250000 + shift.cents));
+      assert.match((await page.textContent('#plan-dial-flexible-basis')).trim(), /^Set here, less \$[\d,]+ for Natural gas moved out$/);
       // Opened again: nothing more changes.
       await page.reload();
       await page.waitForSelector('#page-title');
