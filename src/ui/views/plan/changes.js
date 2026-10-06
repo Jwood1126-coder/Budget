@@ -20,7 +20,7 @@
   const { esc } = UI.dom;
   const fmt = UI.fmt;
   const P = UI._plan;
-  const { amt, plural, inputText, badgeWithId, isCents, packOf, SCENARIO_CLS, groupKeyOf, groupIdOf, compact } = P;
+  const { amt, plural, inputText, badgeWithId, isCents, packOf, SCENARIO_CLS, groupKeyOf, groupIdOf, compact, whole } = P;
 
   const KIND_LABEL = { oneTime: 'One-time', monthly: 'Monthly' };
   const CHANGE_GROUP_LABEL = { income: 'Income', essentials: 'Essentials', flexible: 'Flexible', irregular: 'Irregular', savings: 'Savings' };
@@ -129,10 +129,15 @@
       const def = byId.get(o.id);
       const mine = o.with.length === 1 && byId.get(o.with[0]);
       const who = o.kind === 'pack' ? esc(PACK_NAME[o.template] || 'a pack') : mine ? `“${esc(mine.label)}”` : 'another accepted item';
-      if (!def || def.kind === 'oneTime') return `“${esc(o.label)}” is not counted: ${who} covers it.`;
+      // Replaced by an item for the whole allowance, or lowered by what the covering items pay for (o.cents).
+      const part = !o.whole && isCents(o.cents);
+      if (!def || def.kind === 'oneTime') {
+        return part ? `“${esc(o.label)}” counts ${esc(whole(Math.max(0, (def ? def.cents : 0) - o.cents)))}: ${who} pays ${esc(whole(o.cents))} of it.` : `“${esc(o.label)}” is not counted: ${who} covers it.`;
+      }
       const from = o.from && o.from > def.startMonth ? o.from : null;
       const when = from && o.until ? ` (${fmt.month(from)} to ${fmt.month(o.until)})` : from ? ` (from ${fmt.month(from)})` : o.until ? ` (until ${fmt.month(o.until)})` : '';
-      return `“${esc(o.label)}” is held back while ${who} covers it${esc(when)}.`;
+      return part ? `“${esc(o.label)}” is lowered by ${esc(whole(o.cents))} a month while ${who} pays for part of it${esc(when)}.`
+        : `“${esc(o.label)}” is held back while ${who} covers it${esc(when)}.`;
     }).join(' ');
     return `<p class="plan-ch-caveat fine" id="plan-baby-caveat">${esc(st.caveat)}${month}</p>${twice ? `<p class="plan-ch-caveat fine" id="plan-baby-overlap" role="note"><strong>Counted once:</strong> ${twice}</p>` : ''}`;
   }

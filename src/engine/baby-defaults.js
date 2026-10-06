@@ -72,8 +72,20 @@
     ['setup', /set\s*-?\s*up|gear|crib|stroller|car seat/i],
   ];
   const BABY_RE = /\b(baby|babies|birth|newborn)\b/i;
-  /** Outside the baby group, a supplies or setup label must be about a child too ("Office supplies" is not). */
-  const CHILD_RE = /\b(baby|babies|newborn|infant|toddler|kids?|child|children|nursery)\b|diaper|wipes|formula|crib|stroller|car seat/i;
+  /**
+   * Outside the baby group, an item is about this baby only when its label says so ("Baby's
+   * daycare", "Infant care"): an older child's "Daycare" or "Kids' school supplies" is not, and
+   * neither are "Office supplies".
+   */
+  const THIS_BABY_RE = /\b(baby|baby's|babies|newborn|infant)\b/i;
+  /**
+   * A label for the whole allowance (the household's own estimate of it: it replaces the default);
+   * any other item about the role ("Diapers", a pack's "Car seat and stroller") covers only its own
+   * amount. Childcare is one arrangement: an item for it replaces the default.
+   */
+  const WHOLE_RE = { setup: /set\s*-?\s*up|\bgear\b/i, supplies: /suppl/i, childcare: /./ };
+  /** What a pack's item pays for, by role (a pack's medical, hospital or income items cover none of the defaults). */
+  const PACK_WORDS = { setup: /car seat|stroller|crib|nursery|gear|basics/i, supplies: /diaper|wipes|formula|feed|food|cloth|toy/i, childcare: /child\s*-?\s*care|day\s*-?\s*care|nanny/i };
   /** The packs (templates) that cover a default's costs too, in the months their items run. */
   const PACK_ROLES = Object.freeze({ babyFirstYear: ['setup', 'supplies'], childcare: ['childcare'], kidCosts: ['supplies'] });
 
@@ -86,10 +98,12 @@
   }
   const derivedRole = c => (isObj(c) && isObj(c.derived) && ROLES.includes(c.derived.role) ? c.derived.role : null);
   /**
-   * One of the household's own items is about `role` (roleOf), in the defaults' group `name` or,
-   * about a child, anywhere: childcare words are; supplies and setup words need a child word too.
+   * One of the household's own items is about `role` (roleOf) for this baby: in the defaults' group
+   * `name`, or elsewhere with a label about the baby (THIS_BABY_RE).
    */
-  const ownOf = (c, role, name) => roleOf(c) === role && (c.scenario === name || role === 'childcare' || CHILD_RE.test(String(c.label || '')));
+  const ownOf = (c, role, name) => roleOf(c) === role && (c.scenario === name || THIS_BABY_RE.test(String(c.label || '')));
+  /** An item for the whole allowance of `role` (it replaces the default), else it covers its own amount. */
+  const wholeOf = (c, role) => WHOLE_RE[role].test(String(c.label || ''));
   const isCopied = c => isObj(c) && typeof c.id === 'string' && c.id.startsWith('sc-');
   const monthsOf = d => d.slice(0, 7);
   const monthText = m => E.months.label(m);
@@ -163,13 +177,13 @@
   }
 
   /**
-   * The household covers `role` already, so its default is never made: an accepted item about it in
-   * the defaults' group `name`, of the default's kind, with an amount of $0 or more (an explicit $0
+   * The household covers `role` already, so its default is never made: an accepted item for the
+   * whole allowance (wholeOf) in the defaults' group `name`, of the default's kind, with an amount of $0 or more (an explicit $0
    * is their choice), a monthly one running at the default's start month `month`. Items elsewhere in the plan (their own 'Daycare'
    * row) do not stop the default from being made: guard holds it back in the months they run, so
    * it still counts before and after them.
    */
-  const covered = (changes, name, role, month) => changes.some(c => !c.template && !derivedRole(c) && c.scenario === name && roleOf(c) === role
+  const covered = (changes, name, role, month) => changes.some(c => !c.template && !derivedRole(c) && c.scenario === name && roleOf(c) === role && wholeOf(c, role)
     && c.kind === DEFAULTS[role].kind && c.accepted === true && isCents(c.cents) && c.cents >= 0
     && (c.kind !== 'monthly' || (!(E.months.isMonth(c.startMonth) && c.startMonth > month) && !(E.months.isMonth(c.endMonth) && c.endMonth < month))));
 
@@ -311,24 +325,30 @@
   /**
    * What keeps a cost from counting twice, for the plan (BudgetEngine.timeline.build): `changes`
    * as timeline readChanges gives them (babyRole: the default a change is; yearlyCents). A default
-   * is covered by an accepted item with a cost (more than $0; $0 in its group), of the same kind (one-time or monthly):
-   *   - a New baby pack (babyFirstYear) item covers setup (its one-time items) and supplies (its
-   *     monthly ones, the first year), a Kid costs pack item supplies (from age 1), a Childcare pack
-   *     item childcare;
-   *   - the household's own item of the same kind (roleOf; in the defaults' group, or about a child
-   *     anywhere in the plan, whatever its what-if: e.g. their own 'Daycare' row);
+   * is covered, in the months a covering item runs (a one-time default by covering one-time items
+   * whatever their month), by an accepted item of the same kind with a cost (more than $0; $0 in
+   * its group):
+   *   - the household's own item about it for this baby (ownOf: in the defaults' group, or with a
+   *     label about the baby; an older child's "Daycare" is not), and a Childcare pack item: an
+   *     item for the whole allowance (wholeOf; any childcare item) replaces the default; any other
+   *     ("Diapers") covers only its own amount;
+   *   - a New baby or Kid costs pack item for what the default pays for (PACK_WORDS: "Diapers and
+   *     wipes", "Car seat and stroller"; not its medical or hospital items): its own amount;
    *   - an unaccepted item of the same kind in the group is an alternative: never added on top of
    *     the default (not in a what-if comparison either).
-   * A one-time default is held back when covered; a monthly one only in the months a covering item
-   * runs (it counts again once they end), its yearly amount with it.
-   * @returns {{ held: Set<string>, heldIn: function(string, string): boolean, alternatives: Set<string>, overlaps: object[] }}
-   *   held: the defaults held back in some month; heldIn(id, month): held back in that month;
-   *   overlaps: { kind: 'pack'|'alternative', role, id (the default held back), label, with: ids,
-   *   template?, from, until (the months held back; until null: as long as both run) }
+   * The default counts at its amount less what covers it in that month, never below $0 (all of it
+   * when an item replaces it), its yearly amount with it.
+   * @returns {{ held: Set<string>, cutIn: function(string, string, number): number, heldIn: function(string, string): boolean, alternatives: Set<string>, overlaps: object[] }}
+   *   cutIn(id, month, cents): how much of `cents` (the default's amount that month) is covered;
+   *   heldIn(id, month): replaced (or covered in full) that month; held: the defaults covered in
+   *   some month; overlaps: { kind: 'pack'|'alternative', role, id (the default), label, with: ids,
+   *   template?, whole (replaced, else lowered by `cents` a month, or once for a one-time
+   *   default), cents, from, until (the months; until null: as long as both run) }
    */
   function guard(changes) {
-    const held = new Set(), alternatives = new Set(), overlaps = [], spans = new Map();
+    const held = new Set(), alternatives = new Set(), overlaps = [], covers = new Map();
     const list = Array.isArray(changes) ? changes : [];
+    const active = (c, m) => m >= c.startMonth && (c.kind === 'oneTime' ? m === c.startMonth : !(c.endMonth && m > c.endMonth));
     for (const d of list) {
       const role = d.babyRole;
       if (!ROLES.includes(role)) continue;
@@ -337,23 +357,38 @@
       if (!d.accepted || d.cents === null) continue;
       // A cost covers it (an explicit $0 too, in the group); a credit (a subsidy or reimbursement,
       // below $0) does not replace the cost.
-      const covers = c => c.accepted && isCents(c.cents) && (c.cents > 0 || (c.cents === 0 && c.scenario === d.scenario)) && c.kind === d.kind && spends(c);
-      const sources = [{ kind: 'alternative', items: own.filter(covers) }];
-      for (const [template, roles] of Object.entries(PACK_ROLES)) if (roles.includes(role)) sources.push({ kind: 'pack', template, items: list.filter(c => c.template === template && covers(c)) });
+      const costs = c => c.accepted && isCents(c.cents) && (c.cents > 0 || (c.cents === 0 && c.scenario === d.scenario)) && c.kind === d.kind && spends(c);
+      const sources = [{ kind: 'alternative', items: own.filter(costs).map(c => ({ c, whole: role === 'childcare' || wholeOf(c, role) })) }];
+      for (const [template, roles] of Object.entries(PACK_ROLES)) {
+        if (!roles.includes(role)) continue;
+        const items = list.filter(c => c.template === template && costs(c) && PACK_WORDS[role].test(String(c.label || '')));
+        sources.push({ kind: 'pack', template, items: items.map(c => ({ c, whole: role === 'childcare' })) });
+      }
       const whole = spanOf(d);
+      const mine = [];
       for (const src of sources) {
-        // A one-time cost covered is covered whatever the month; a monthly one in the months both run.
-        const hits = src.items.map(c => [c, d.kind === 'oneTime' ? whole : shared(whole, spanOf(c))]).filter(([, sp]) => sp);
+        // A one-time default is covered by one-time items whatever their month; a monthly one in the months both run.
+        const hits = src.items.map(x => Object.assign({}, x, { span: d.kind === 'oneTime' ? whole : shared(whole, spanOf(x.c)) })).filter(x => x.span);
         if (!hits.length) continue;
         held.add(d.id);
-        spans.set(d.id, (spans.get(d.id) || []).concat(hits.map(([, sp]) => sp)));
-        const from = hits.reduce((m, [, sp]) => (sp[0] < m ? sp[0] : m), hits[0][1][0]);
-        const until = hits.some(([, sp]) => sp[1] === null) ? null : hits.reduce((m, [, sp]) => (sp[1] > m ? sp[1] : m), hits[0][1][1]);
-        overlaps.push(Object.assign({ kind: src.kind, role, id: d.id, label: d.label, with: hits.map(([c]) => c.id) }, src.template ? { template: src.template } : {}, { from, until }));
+        mine.push(...hits);
+        const from = hits.reduce((m, x) => (x.span[0] < m ? x.span[0] : m), hits[0].span[0]);
+        const until = hits.some(x => x.span[1] === null) ? null : hits.reduce((m, x) => (x.span[1] > m ? x.span[1] : m), hits[0].span[1]);
+        const all = hits.some(x => x.whole);
+        overlaps.push(Object.assign({ kind: src.kind, role, id: d.id, label: d.label, with: hits.map(x => x.c.id) }, src.template ? { template: src.template } : {},
+          { whole: all, cents: all ? null : hits.reduce((t, x) => t + x.c.cents, 0), from, until }));
       }
+      if (mine.length) covers.set(d.id, { kind: d.kind, items: mine });
     }
-    const heldIn = (id, m) => (spans.get(id) || []).some(([from, until]) => m >= from && (until === null || m <= until));
-    return { held, heldIn, alternatives, overlaps };
+    const cutIn = (id, m, cents) => {
+      const cv = covers.get(id);
+      if (!cv || !isCents(cents) || cents <= 0) return 0;
+      const on = cv.items.filter(x => (cv.kind === 'oneTime' ? true : active(x.c, m)) && m >= x.span[0] && (x.span[1] === null || m <= x.span[1]));
+      if (on.some(x => x.whole)) return cents;
+      return Math.min(cents, on.reduce((t, x) => t + x.c.cents, 0));
+    };
+    const heldIn = (id, m) => { const cv = covers.get(id); return !!cv && cutIn(id, m, Number.MAX_SAFE_INTEGER) === Number.MAX_SAFE_INTEGER; };
+    return { held, cutIn, heldIn, alternatives, overlaps };
   }
 
   E.babyDefaults = { ROLES, GROUP_NAME, CAVEAT, DEFAULTS, PACK_ROLES, CARE_AFTER_DAYS, CARE_AFTER_MONTHS, ensure, status, follow, guard, roleOf };

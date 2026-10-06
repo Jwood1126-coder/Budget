@@ -1649,12 +1649,19 @@ naming what is missing, when a public name has not been added), the parts in bet
     worked out from Budget (`source: 'bill'` with `billId`, or `'goal'` with `goalId`; `readOnly:
     true`, `accepted: true`: edited in Budget, never by `setChange`/`acceptChanges`), each with
     `status: 'unset'|'notAccepted'|'applied'|'overridden'|'overlap'|'outside'`, `monthsApplied`, `appliedCents`
-    ('overlap': a baby-cost default held back in every plan month because an accepted New baby /
-    Childcare / Kid costs pack, or the household's own accepted item of the same kind (in its group,
-    or about a child anywhere), covers the same cost: `babyDefaults.guard`; a monthly default is held
-    back only in the months a covering item runs and counts again after; each one in `overlaps` as
-    `{ kind: 'pack'|'alternative', role, id, label, with: ids, template?, from, until }`, so the
-    screen warns; nothing is removed. An unaccepted item of the same kind there is an alternative:
+    ('overlap': a baby-cost default replaced in every plan month: `babyDefaults.guard`. An accepted
+    item of the same kind covers a default in the months it runs (a one-time default: one-time
+    items, whatever their month): the household's own item for this baby (in the defaults' group,
+    or labelled about the baby: an older child's "Daycare" is not) or a Childcare pack item
+    replaces it when it is for the whole allowance (any childcare item; "… supplies", "… setup" or
+    "… gear"), else lowers it by its own amount; a New baby or Kid costs pack item lowers it by its
+    own amount when it pays for part of it (diapers, formula, food, clothes, toys; car seat,
+    stroller, crib, nursery, basics; never the medical or hospital items); a credit never covers.
+    The default counts at its amount less what covers it that month, never below $0
+    (`guard.cutIn(id, month, cents)`); each covering source is in `overlaps` as
+    `{ kind: 'pack'|'alternative', role, id, label, with: ids, template?, whole, cents, from, until }`
+    (whole: replaced; else `cents` a month, or once for a one-time default), so the screen says
+    what is replaced or lowered; nothing is removed. An unaccepted item of the same kind there is an alternative:
     never added on top of the default, not in `tl.compare` either);
     `applied`: how many of the household's own applied; `derived`: how many are worked out from
     Budget; `unset`: ids with no amount (never applied as $0). A savings goal spent at its target

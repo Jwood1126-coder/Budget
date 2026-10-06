@@ -337,7 +337,9 @@
     };
     const changes = readChanges(plan);
     // Baby-cost defaults covered by a pack or the household's own choice are held back in the months it covers (counted once).
-    const guard = E.babyDefaults ? E.babyDefaults.guard(changes) : { held: new Set(), heldIn: () => false, alternatives: new Set(), overlaps: [] };
+    const guard = E.babyDefaults ? E.babyDefaults.guard(changes) : { held: new Set(), cutIn: () => 0, heldIn: () => false, alternatives: new Set(), overlaps: [] };
+    // A change's amount in month m, less what covers it there (a baby-cost default; guard.cutIn).
+    const netIn = (g, ch, m) => { const cents = centsIn(ch, m); return cents - g.cutIn(ch.id, m, cents); };
     // Worked out from Budget: bills that start or end (fromBills, above), savings goals spent at
     // their target. Part of the plan as it stands (the ghost has them too), read-only on the screen.
     // Pay in Budget that starts or ends later in the plan moves that person's money in from then on.
@@ -391,7 +393,7 @@
       };
       for (const ch of changes.concat(derived)) {
         if (!ch.accepted || ch.cents === null || !changeActiveIn(ch, m) || overridden(ch) || guard.heldIn(ch.id, m)) continue;
-        const cents = centsIn(ch, m);
+        const cents = netIn(guard, ch, m);
         applyChange(row, cents === ch.cents ? ch : Object.assign({}, ch, { cents }), people);
         row.changesApplied.push({ id: ch.id, label: ch.label, group: ch.group, cents, source: ch.source });
       }
@@ -434,8 +436,8 @@
       const added = new Set(extra.map(c => c.id));
       const cmpGuard = E.babyDefaults ? E.babyDefaults.guard(changes.map(c => (added.has(c.id) ? Object.assign({}, c, { accepted: true }) : c))) : null;
       const defaults = cmpGuard ? changes.filter(c => c.babyRole && c.accepted && c.cents !== null && !overridden(c)) : [];
-      const listFor = m => extra.concat(defaults.filter(d => changeActiveIn(d, m) && !guard.heldIn(d.id, m) && cmpGuard.heldIn(d.id, m))
-        .map(d => Object.assign({}, d, { cents: 0 - centsIn(d, m), yearlyCents: null })));
+      const listFor = m => extra.concat(defaults.filter(d => changeActiveIn(d, m) && !guard.heldIn(d.id, m) && netIn(cmpGuard, d, m) !== netIn(guard, d, m))
+        .map(d => Object.assign({}, d, { cents: netIn(cmpGuard, d, m) - netIn(guard, d, m), yearlyCents: null })));
       const cmpRows = new Map(monthRows.map(r => [r.month, r.month >= planStart ? monthAt(r, r, listFor(r.month)) : r]));
       const cb = balancesFor(Object.assign({ rowsByMonth: cmpRows }, balanceInput));
       const pts = cb.combined ? cb.combined.points.map(p => ({ month: p.month, cents: p.status === 'projected' ? p.cents : null, status: p.status === 'projected' ? 'projected' : null })) : null;

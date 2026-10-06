@@ -232,19 +232,23 @@ test('an alternative childcare quote stays unaccepted, is never added on top of 
   assert.ok(byId(chosen.plan.changes, 'sc-care'), 'nothing removed');
 });
 
-test('a New baby pack accepted beside the defaults is flagged and counted once (the defaults it covers are held back while it runs)', () => {
+test('a New baby pack accepted beside the defaults is flagged and counted once (the defaults are lowered by what its items pay for, while they run)', () => {
   const st = B.ensure(opened(profile({ due: '2031-06-10' }))).state;
   const pack = E.timeline.templates.babyFirstYear('2031-06-10', { scenario: 'New baby' }).map(x => Object.assign(x, { accepted: true }));
   const withPack = E.timeline.addChange(st, pack);
   const tl = build(withPack);
-  const held = tl.changes.overlaps.filter(o => o.kind === 'pack').map(o => [o.role, o.id, o.template]);
-  assert.deepEqual(held, [['setup', 'baby-default-setup', 'babyFirstYear'], ['supplies', 'baby-default-supplies', 'babyFirstYear']]);
-  assert.equal(changeOf(tl, 'baby-default-setup').status, 'overlap');
+  // Setup: car seat and stroller, nursery, starter basics ($1,750; not the hospital costs). Supplies:
+  // diapers, formula and clothes ($270 a month; not the health copays).
+  const held = tl.changes.overlaps.filter(o => o.kind === 'pack').map(o => [o.role, o.id, o.template, o.whole, o.cents]);
+  assert.deepEqual(held, [['setup', 'baby-default-setup', 'babyFirstYear', false, 175000], ['supplies', 'baby-default-supplies', 'babyFirstYear', false, 27000]]);
+  assert.equal(changeOf(tl, 'baby-default-setup').status, 'applied');
+  assert.equal(changeOf(tl, 'baby-default-setup').appliedCents, 200000 - 175000, 'the rest of the setup allowance');
   assert.equal(changeOf(tl, 'baby-default-childcare').status, 'applied', 'the pack has no childcare');
-  for (const r of tl.months.filter(x => x.month >= tl.planStart)) {
-    const counted = r.changesApplied.some(a => a.id === 'baby-default-supplies');
-    assert.equal(counted, r.month > '2032-05', r.month + ': supplies counted once (the pack’s through May 2032, then the default)');
+  for (const r of tl.months.filter(x => x.month >= '2031-06')) {
+    const a = r.changesApplied.find(x => x.id === 'baby-default-supplies');
+    assert.equal(a.cents, r.month > '2032-05' ? 45000 : 45000 - 27000, r.month + ': supplies counted once (less the pack’s items through May 2032)');
   }
+  onceEach(tl);
   assert.equal(withPack.plan.changes.length, st.plan.changes.length + pack.length, 'nothing deleted');
   // Unaccepted, the pack no longer holds anything back.
   const off = E.timeline.acceptChanges(withPack, withPack.plan.changes.filter(c => c.template).map(c => c.id), false);
@@ -285,8 +289,8 @@ test('an explicit $0 childcare amount: no yearly membership fee either (the save
   assert.equal(changeOf(back, 'baby-default-childcare').yearlyCents, 15000);
 });
 
-test('the household’s own Daycare outside the baby group covers the childcare default in the months it runs: held back then, counted before and after', () => {
-  const daycare = fields => Object.assign({ id: 'my-daycare', label: 'Daycare', kind: 'monthly', group: 'essentials', personId: null, startMonth: '2031-11', endMonth: null, cents: 150000, accepted: true, template: null, scenario: null, note: '' }, fields);
+test('the household’s own daycare for the baby outside the baby group covers the childcare default in the months it runs; an older child’s Daycare does not', () => {
+  const daycare = fields => Object.assign({ id: 'my-daycare', label: 'Baby’s daycare', kind: 'monthly', group: 'essentials', personId: null, startMonth: '2031-11', endMonth: null, cents: 150000, accepted: true, template: null, scenario: null, note: '' }, fields);
   // Before the defaults are made: all three are made (their Daycare starts after the care month), and
   // the childcare default is held back once their Daycare runs; "Office supplies" are not baby supplies.
   const st0 = copy(opened(profile({ due: '2031-08-03' })));
@@ -350,9 +354,16 @@ test('the household’s own Daycare outside the baby group covers the childcare 
   const off = E.timeline.acceptChanges(made, ['my-daycare'], false);
   assert.deepEqual(build(off).changes.overlaps, []);
   assert.ok(counts(build(off), '2031-11', 'baby-default-childcare'));
+  // An older child's "Daycare" (no word about the baby) is another cost: the baby's default counts beside it.
+  const older = copy(B.ensure(opened(profile({ due: '2031-08-03' }))).state);
+  older.plan.changes.push(daycare({ id: 'sam-daycare', label: 'Daycare (Sam)', startMonth: '2031-04', endMonth: null, cents: 90000 }));
+  const tlO = build(older);
+  assert.deepEqual(tlO.changes.overlaps, []);
+  assert.equal(monthOf(tlO, '2031-10').out.total - tlO.plan.out.total, 90000 + 45000 + 180000);
+  assert.ok(byId(B.ensure(older).state.plan.changes, 'baby-default-childcare'));
 });
 
-test('due 2031-08-03 with the New baby pack: to Jul 2032 its items count and not the supplies default; from Aug 2032 the default counts again', () => {
+test('due 2031-08-03 with the New baby pack: to Jul 2032 its items count and the supplies default only for what they do not pay for; from Aug 2032 the whole default', () => {
   const st = B.ensure(opened(profile({ due: '2031-08-03' }))).state;
   const pack = E.timeline.templates.babyFirstYear('2031-08-03', { scenario: 'New baby' }).map(x => Object.assign(x, { accepted: true }));
   const tl = build(E.timeline.addChange(st, pack));
@@ -361,23 +372,24 @@ test('due 2031-08-03 with the New baby pack: to Jul 2032 its items count and not
   for (const m of E.months.range('2031-08', '2033-03')) {
     const p = packIn(tl, m, 'babyFirstYear');
     if (m <= '2032-07') {
-      assert.equal(counts(tl, m, 'baby-default-supplies'), false, m + ': the pack’s supplies, not the default');
+      // Diapers, feeding and clothes ($270) come off the $450 default; the health copays are not supplies.
+      assert.equal(monthOf(tl, m).changesApplied.find(a => a.id === 'baby-default-supplies').cents, 45000 - 27000, m + ': the default less the pack’s supplies');
       assert.equal(p.cents - (m === '2031-09' ? 300000 : 0), firstYear, m + ': the pack’s monthly items');
     } else {
       assert.equal(counts(tl, m, 'baby-default-supplies'), true, m + ': the pack ended, the default counts again');
       assert.deepEqual(p.ids, [], m + ': no pack items');
     }
   }
-  assert.equal(extra('2031-07'), 50000, 'the pack’s starter basics; the setup default is held back');
-  assert.equal(extra('2031-08'), firstYear);
-  assert.equal(extra('2031-09'), firstYear + 300000 + 180000 + 15000);
-  assert.equal(extra('2032-07'), firstYear + 180000);
+  assert.equal(extra('2031-07'), 50000 + (200000 - 175000), 'the pack’s starter basics, and the setup default less its three setup items ($1,750)');
+  assert.equal(extra('2031-08'), firstYear + 18000);
+  assert.equal(extra('2031-09'), firstYear + 300000 + 180000 + 15000 + 18000);
+  assert.equal(extra('2032-07'), firstYear + 180000 + 18000);
   assert.equal(extra('2032-08'), 45000 + 180000);
   assert.equal(extra('2032-09'), 45000 + 180000 + 15000);
   assert.equal(extra('2033-03'), 45000 + 180000);
   assert.deepEqual(tl.changes.overlaps.map(o => [o.role, o.template, o.from, o.until]), [['setup', 'babyFirstYear', '2031-07', '2031-07'], ['supplies', 'babyFirstYear', '2031-08', '2032-07']]);
-  assert.deepEqual([changeOf(tl, 'baby-default-supplies').status, changeOf(tl, 'baby-default-supplies').monthsApplied], ['applied', 8], 'Aug 2032 to Mar 2033');
-  assert.equal(changeOf(tl, 'baby-default-setup').status, 'overlap');
+  assert.deepEqual([changeOf(tl, 'baby-default-supplies').status, changeOf(tl, 'baby-default-supplies').monthsApplied], ['applied', 20], 'Aug 2031 to Mar 2033 (lowered to Jul 2032)');
+  assert.equal(changeOf(tl, 'baby-default-setup').status, 'applied');
   onceEach(tl);
   // The Childcare pack the same way: held back while it runs, counted again after.
   const care = E.timeline.templates.childcare('2032-01', 130000, { scenario: 'New baby' }).map(x => Object.assign(x, { accepted: true, endMonth: '2032-12' }));
@@ -387,30 +399,60 @@ test('due 2031-08-03 with the New baby pack: to Jul 2032 its items count and not
   onceEach(tc);
 });
 
-test('a Kid costs pack (from age 1) holds the supplies default back in the months it runs and is flagged; with the New baby pack too, supplies count once in every month', () => {
+test('a Kid costs pack (from age 1) lowers the supplies default by what its items pay for while it runs, and is flagged; with the New baby pack too, supplies count once in every month', () => {
   const st = B.ensure(opened(profile({ due: '2031-08-03' }))).state;
   const kid = E.timeline.templates.kidCosts('2031-08-03', { scenario: 'New baby' }).map(x => Object.assign(x, { accepted: true }));
   const kidMonthly = 20000 + 8000 + 7000 + 6000 + 10000;
+  // Food, diapers, clothes and toys ($430) are supplies; the health copays are not: $20 of the default is left.
+  const rest = 45000 - (20000 + 7000 + 6000 + 10000);
   let tl = build(E.timeline.addChange(st, kid));
   const extra = m => monthOf(tl, m).out.total - tl.plan.out.total;
+  const supplies = m => (monthOf(tl, m).changesApplied.find(a => a.id === 'baby-default-supplies') || { cents: null }).cents;
   assert.equal(extra('2032-07'), 45000 + 180000, 'the default until the Kid costs start');
-  assert.equal(extra('2032-08'), kidMonthly + 180000, 'Kid costs, not the default too');
-  assert.equal(extra('2032-09'), kidMonthly + 180000 + 15000);
-  assert.equal(extra('2033-03'), kidMonthly + 180000);
-  for (const m of E.months.range('2031-08', '2033-03')) assert.equal(counts(tl, m, 'baby-default-supplies'), m < '2032-08', m);
-  assert.deepEqual(tl.changes.overlaps.map(o => [o.kind, o.role, o.id, o.template, o.from, o.until]), [['pack', 'supplies', 'baby-default-supplies', 'kidCosts', '2032-08', null]]);
-  assert.deepEqual([changeOf(tl, 'baby-default-supplies').status, changeOf(tl, 'baby-default-supplies').monthsApplied], ['applied', 12]);
+  assert.equal(extra('2032-08'), kidMonthly + rest + 180000, 'Kid costs, and only the rest of the default');
+  assert.equal(extra('2032-09'), kidMonthly + rest + 180000 + 15000);
+  assert.equal(extra('2033-03'), kidMonthly + rest + 180000);
+  for (const m of E.months.range('2031-08', '2033-03')) assert.equal(supplies(m), m < '2032-08' ? 45000 : rest, m);
+  assert.deepEqual(tl.changes.overlaps.map(o => [o.kind, o.role, o.id, o.template, o.whole, o.cents, o.from, o.until]), [['pack', 'supplies', 'baby-default-supplies', 'kidCosts', false, 45000 - rest, '2032-08', null]]);
+  assert.deepEqual([changeOf(tl, 'baby-default-supplies').status, changeOf(tl, 'baby-default-supplies').monthsApplied], ['applied', 20]);
   onceEach(tl);
-  // Both packs: the first year's items, then Kid costs; the default never on top, never a month without supplies.
+  // Both packs: the first year's items, then Kid costs; the default only for the rest, never on top, never a month without supplies.
   const first = E.timeline.templates.babyFirstYear('2031-08-03', { scenario: 'New baby' }).map(x => Object.assign(x, { accepted: true }));
   tl = build(E.timeline.addChange(E.timeline.addChange(st, first), kid));
   for (const m of E.months.range('2031-08', '2033-03')) {
-    assert.equal(counts(tl, m, 'baby-default-supplies'), false, m);
+    assert.equal(supplies(m), m <= '2032-07' ? 45000 - 27000 : rest, m);
     assert.ok(packIn(tl, m, m <= '2032-07' ? 'babyFirstYear' : 'kidCosts').cents > 0, m + ': supplies counted by a pack');
   }
-  assert.equal(changeOf(tl, 'baby-default-supplies').status, 'overlap');
+  assert.equal(changeOf(tl, 'baby-default-supplies').status, 'applied');
   assert.deepEqual(tl.changes.overlaps.filter(o => o.role === 'supplies').map(o => [o.template, o.from, o.until]), [['babyFirstYear', '2031-08', '2032-07'], ['kidCosts', '2032-08', null]]);
   onceEach(tl);
+});
+
+test('a single diapers item (a pack’s, or the household’s own) lowers the supplies default by its own amount; their own whole supplies estimate replaces it', () => {
+  const st = B.ensure(opened(profile({ due: '2031-08-03' }))).state;
+  const supplies = (tl, m) => (monthOf(tl, m).changesApplied.find(a => a.id === 'baby-default-supplies') || { cents: 0 }).cents;
+  // Only the New baby pack's "Diapers and wipes" ($80) accepted: $370 of the default still counts.
+  const pack = E.timeline.templates.babyFirstYear('2031-08-03', { scenario: 'New baby' });
+  const diapers = pack.filter(x => /^Diapers/.test(x.label)).map(x => Object.assign(x, { accepted: true }));
+  const withDiapers = E.timeline.addChange(st, pack.filter(x => !/^Diapers/.test(x.label)).concat(diapers));
+  const tl = build(withDiapers);
+  assert.equal(supplies(tl, '2031-10'), 45000 - 8000);
+  assert.deepEqual(tl.changes.overlaps.map(o => [o.role, o.template, o.whole, o.cents]), [['supplies', 'babyFirstYear', false, 8000]]);
+  onceEach(tl);
+  // Their own "Diapers" for the baby (in the group): the same, by its amount; and it does not stop the default from being made.
+  const own = { id: 'my-diapers', label: 'Diapers', kind: 'monthly', group: 'essentials', personId: null, startMonth: '2031-08', endMonth: null, cents: 9000, accepted: true, template: null, scenario: B.GROUP_NAME, note: '' };
+  const fresh = copy(opened(profile({ due: '2031-08-03' })));
+  fresh.plan.changes.push(own);
+  const made = B.ensure(fresh).state;
+  assert.ok(byId(made.plan.changes, 'baby-default-supplies'), 'made: a diapers row is not the whole allowance');
+  assert.equal(supplies(build(made), '2031-10'), 45000 - 9000);
+  // Their own whole estimate ("Baby supplies", in the group) replaces the default in its months.
+  const whole = E.timeline.addChange(st, Object.assign({}, own, { id: undefined, label: 'Baby supplies (our estimate)', cents: 30000, startMonth: '2032-01' }));
+  const tw = build(whole);
+  assert.equal(supplies(tw, '2031-10'), 45000);
+  assert.equal(supplies(tw, '2032-02'), 0);
+  assert.deepEqual(tw.changes.overlaps.map(o => [o.kind, o.role, o.whole, o.from]), [['alternative', 'supplies', true, '2032-01']]);
+  onceEach(tw);
 });
 
 // ------------------------------------------------------------------ keeping the household's edits
