@@ -448,7 +448,7 @@
 .ov-up { display: grid; grid-template-columns: 5.2rem 10px minmax(0, 1fr) auto; align-items: baseline; gap: 2px var(--space-3); padding: 9px 0; border-top: 1px solid var(--border); }
 .ov-up-month { font-size: .82rem; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ov-up-dot { width: 10px; height: 10px; border-radius: 50%; align-self: center; }
-.ov-up-label { min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+.ov-up-label { min-width: 0; font-weight: 600; overflow-wrap: break-word; }
 .ov-up-meta { font-size: .78rem; font-weight: 500; color: var(--text-3); }
 .ov-up-amt { font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ov-up.is-off .ov-up-label, .ov-up.is-off .ov-up-amt { color: var(--text-2); }
@@ -467,6 +467,8 @@
   .ov-mcols { grid-template-columns: minmax(0, 1fr); }
   .ov-mfigs { gap: var(--space-2) var(--space-5); }
   .ov-up { grid-template-columns: 4.4rem 10px minmax(0, 1fr) auto; gap: 2px var(--space-2); }
+  /* A long amount ("$2k once + $2.5k/mo") wraps itself instead of squeezing the name mid-word. */
+  .ov-up-amt { white-space: normal; text-align: right; max-width: 7.5rem; }
 }
 @media (max-width: 374px) {
   .plan-kpis.kpis-3 .kpi-value { font-size: .98rem; }
