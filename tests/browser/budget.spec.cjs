@@ -514,8 +514,8 @@ module.exports = [
       await settled(t);
       const after = (await state(page)).plan.changes;
       assert.deepEqual(['baby-default-setup', 'baby-default-supplies', 'sc-childcare'].map(id => after.find(c => c.id === id).startMonth), ['2027-05', '2027-06', '2027-08']);
-      await t.nav('overview');
-      await page.waitForSelector('#plan-baby-caveat');
+      // The changes list (with the baby caveat) is on Edit plan, this screen.
+      await page.waitForSelector('#plan-baby-caveat', { state: 'attached' });
       await t.settled();
       assert.match(await text(page, '#plan-baby-caveat'), /medical costs, insurance premium changes and parental-leave pay are unknown, not \$0/);
       assert.match(await text(page, '#plan-ch-sc-childcare-yearly'), /plus \$150(\.00)? a year \(membership fee\) in Aug 2027 and every 12 months after/);

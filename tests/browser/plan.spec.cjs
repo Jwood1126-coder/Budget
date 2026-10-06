@@ -693,7 +693,7 @@ module.exports = [
     name: 'drill-down: a category row’s Reset brings it back in at its budget, which stays; a place’s goes back to its average',
     async run(t) {
       const { page, assert } = t;
-      await t.open('#/overview');
+      await t.open('#/budget');
       const exp = await timeline(page);
       const cat = exp.essentials.rows.find(r => r.level === 1 && r.groupKey === 'Groceries');
       assert.ok(cat && cat.budgetCents !== null && cat.source === 'budget', 'the sample budgets Groceries');
@@ -824,7 +824,7 @@ module.exports = [
     name: 'irregular costs: one left out of planning in Transactions or Spending is unticked with a note; ticking it puts it back on purpose',
     async run(t) {
       const { page, assert } = t;
-      await t.open('#/overview');
+      await t.open('#/budget');
       const exp = await timeline(page);
       const item = exp.irregular.rows.slice().sort((a, b) => b.cents - a.cents)[0];
       const d = dialOf(exp, 'irregular');

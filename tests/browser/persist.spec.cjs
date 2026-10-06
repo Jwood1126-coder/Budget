@@ -346,7 +346,7 @@ module.exports = [
     name: 'Reset on the Plan puts back the setup file’s dial value, so a rebuilt page’s changed value still reaches it',
     async run(t) {
       const { page, assert } = t;
-      await t.open('#/overview');
+      await t.open('#/budget');
       const dist = decodeURIComponent(t.url.replace(/^file:\/\//, ''));
       const html = fs.readFileSync(dist, 'utf8');
       const open = html.indexOf('>', html.indexOf('<script id="budget-profile"')) + 1;
@@ -362,7 +362,7 @@ module.exports = [
       };
       const first = page_('setup-reset-first.html', 123400);
       const later = page_('setup-reset-later.html', 131500);
-      const visit = async file => { await page.goto('file://' + file + '#/overview'); await page.waitForSelector('#page-title'); await t.settled(); };
+      const visit = async file => { await page.goto('file://' + file + '#/budget'); await page.waitForSelector('#page-title'); await t.settled(); };
       const stored = () => page.evaluate(k => JSON.parse(localStorage.getItem(k)).ui.plan.dials.flexible, KEY);
       try {
         await visit(first);
