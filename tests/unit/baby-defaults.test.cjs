@@ -310,6 +310,13 @@ test('the household’s own Daycare outside the baby group covers the childcare 
   const rd = B.ensure(deposit);
   assert.ok(byId(rd.state.plan.changes, 'baby-default-childcare'));
   assert.ok(counts(build(rd.state), '2031-10', 'baby-default-childcare'));
+  // A what-if holding their Daycare, compared before it is accepted, shows what accepting it gives:
+  // the default is held back in its months there too (not counted on top).
+  const wi = copy(B.ensure(opened(profile({ due: '2031-08-03' }))).state);
+  wi.plan.changes.push(daycare({ accepted: false, scenario: 'Back to work (invented)', endMonth: '2032-10' }));
+  const cmp = build(wi, 'Back to work (invented)').compare;
+  const yes = build(E.timeline.acceptChanges(wi, ['my-daycare'], true));
+  for (const m of E.months.range('2031-09', '2033-03')) assert.equal(cmp.months.find(x => x.month === m).out, monthOf(yes, m).out.total, 'compared ' + m);
   // A credit (a subsidy, below $0) does not replace the care: the default still counts beside it.
   const subsidy = copy(B.ensure(opened(profile({ due: '2031-08-03' }))).state);
   subsidy.plan.changes.push(daycare({ id: 'my-subsidy', label: 'Childcare subsidy', startMonth: '2031-09', cents: -40000 }));

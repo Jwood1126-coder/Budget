@@ -425,7 +425,14 @@
       const name = input.compare.trim();
       // An alternative to an accepted baby-cost default (an unaccepted quote of the same kind) is not added on top of it.
       const extra = changes.filter(c => c.scenario === name && !c.accepted && c.cents !== null && !guard.alternatives.has(c.id));
-      const cmpRows = new Map(monthRows.map(r => [r.month, r.month >= planStart ? monthAt(r, r, extra) : r]));
+      // With the what-if's items in the plan, the baby-cost defaults they cover are held back in their
+      // months, as accepting them would: taken back out where the plan itself still counts them.
+      const added = new Set(extra.map(c => c.id));
+      const cmpGuard = E.babyDefaults ? E.babyDefaults.guard(changes.map(c => (added.has(c.id) ? Object.assign({}, c, { accepted: true }) : c))) : null;
+      const defaults = cmpGuard ? changes.filter(c => c.babyRole && c.accepted && c.cents !== null && !overridden(c)) : [];
+      const listFor = m => extra.concat(defaults.filter(d => changeActiveIn(d, m) && !guard.heldIn(d.id, m) && cmpGuard.heldIn(d.id, m))
+        .map(d => Object.assign({}, d, { cents: 0 - centsIn(d, m), yearlyCents: null })));
+      const cmpRows = new Map(monthRows.map(r => [r.month, r.month >= planStart ? monthAt(r, r, listFor(r.month)) : r]));
       const cb = balancesFor(Object.assign({ rowsByMonth: cmpRows }, balanceInput));
       const pts = cb.combined ? cb.combined.points.map(p => ({ month: p.month, cents: p.status === 'projected' ? p.cents : null, status: p.status === 'projected' ? 'projected' : null })) : null;
       compare = {
