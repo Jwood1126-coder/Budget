@@ -163,11 +163,15 @@
   }
 
   /**
-   * The household covers `role` already: an accepted item of that kind with an amount, in the group
-   * or anywhere in the plan (ownOf; a monthly one still running at the default's start month `month`).
+   * The household covers `role` already, so its default is never made: an accepted item about it in
+   * the defaults' group `name`, of the default's kind, with an amount of $0 or more (an explicit $0
+   * is their choice), a monthly one running at the default's start month `month`. Items elsewhere in the plan (their own 'Daycare'
+   * row) do not stop the default from being made: guard holds it back in the months they run, so
+   * it still counts before and after them.
    */
-  const covered = (changes, name, role, month) => changes.some(c => !c.template && !derivedRole(c) && ownOf(c, role, name) && c.accepted === true && isCents(c.cents)
-    && !(DEFAULTS[role].kind === 'monthly' && c.kind === 'monthly' && E.months.isMonth(c.endMonth) && c.endMonth < month));
+  const covered = (changes, name, role, month) => changes.some(c => !c.template && !derivedRole(c) && c.scenario === name && roleOf(c) === role
+    && c.kind === DEFAULTS[role].kind && c.accepted === true && isCents(c.cents) && c.cents >= 0
+    && (c.kind !== 'monthly' || (!(E.months.isMonth(c.startMonth) && c.startMonth > month) && !(E.months.isMonth(c.endMonth) && c.endMonth < month))));
 
   // ------------------------------------------------------------------ ensure
 
@@ -307,7 +311,7 @@
   /**
    * What keeps a cost from counting twice, for the plan (BudgetEngine.timeline.build): `changes`
    * as timeline readChanges gives them (babyRole: the default a change is; yearlyCents). A default
-   * is covered by an accepted item with an amount, of the same kind (one-time or monthly):
+   * is covered by an accepted item with a cost (more than $0; $0 in its group), of the same kind (one-time or monthly):
    *   - a New baby pack (babyFirstYear) item covers setup (its one-time items) and supplies (its
    *     monthly ones, the first year), a Kid costs pack item supplies (from age 1), a Childcare pack
    *     item childcare;
@@ -331,7 +335,9 @@
       const own = list.filter(c => c.id !== d.id && !c.template && !c.babyRole && ownOf(c, role, d.scenario));
       for (const c of own) if (!c.accepted && c.scenario === d.scenario) alternatives.add(c.id);
       if (!d.accepted || d.cents === null) continue;
-      const covers = c => c.accepted && c.cents !== null && c.kind === d.kind && spends(c);
+      // A cost covers it (an explicit $0 too, in the group); a credit (a subsidy or reimbursement,
+      // below $0) does not replace the cost.
+      const covers = c => c.accepted && isCents(c.cents) && (c.cents > 0 || (c.cents === 0 && c.scenario === d.scenario)) && c.kind === d.kind && spends(c);
       const sources = [{ kind: 'alternative', items: own.filter(covers) }];
       for (const [template, roles] of Object.entries(PACK_ROLES)) if (roles.includes(role)) sources.push({ kind: 'pack', template, items: list.filter(c => c.template === template && covers(c)) });
       const whole = spanOf(d);

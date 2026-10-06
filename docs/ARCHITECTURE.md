@@ -2004,9 +2004,12 @@ them; `tools/plan-report.cjs` runs it too.
 - `ensure(state, { now }?) -> { state, notes, changed, status }` — one canonical group: the group
   already holding a default, else a copied what-if group (ids `'sc-…'`) whose name or a label is
   about a baby or a birth, else a new group `'New baby'` (`GROUP_NAME`). Per role not yet in
-  `meta.babyDefaults.done`: covered when the group, or the plan anywhere for an item about a child
-  (e.g. the household's own 'Daycare' with no what-if), holds an accepted item of that kind with an
-  amount (the household's own choice, an explicit $0 included: nothing added); else an untouched placeholder
+  `meta.babyDefaults.done`: covered when the group holds an accepted item about it of the default's
+  kind with an amount of $0 or more (a monthly one running at the default's start month; the
+  household's own choice, an explicit $0 included: nothing added). An item elsewhere in the plan
+  (e.g. the household's own 'Daycare' with no what-if) does not stop the default from being made:
+  `guard` holds it back in the months that item runs (a credit below $0 never covers a cost);
+  else an untouched placeholder
   of that kind (`roleOf` its label; no amount; start month still the one its scenario event gave it,
   or the group's birth month) is filled (amount, timing, accepted, `derived`; a name still as copied
   gains "(estimate)"; its note is kept after the default's); else the default row is added to the

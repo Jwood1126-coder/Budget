@@ -285,18 +285,37 @@ test('an explicit $0 childcare amount: no yearly membership fee either (the save
   assert.equal(changeOf(back, 'baby-default-childcare').yearlyCents, 15000);
 });
 
-test('the household’s own Daycare outside the baby group covers the childcare default: not added, or held back in the months they overlap', () => {
+test('the household’s own Daycare outside the baby group covers the childcare default in the months it runs: held back then, counted before and after', () => {
   const daycare = fields => Object.assign({ id: 'my-daycare', label: 'Daycare', kind: 'monthly', group: 'essentials', personId: null, startMonth: '2031-11', endMonth: null, cents: 150000, accepted: true, template: null, scenario: null, note: '' }, fields);
-  // Before the defaults are made: childcare is not added (setup and supplies are); "Office supplies" are not baby supplies.
+  // Before the defaults are made: all three are made (their Daycare starts after the care month), and
+  // the childcare default is held back once their Daycare runs; "Office supplies" are not baby supplies.
   const st0 = copy(opened(profile({ due: '2031-08-03' })));
   st0.plan.changes.push(daycare(), daycare({ id: 'my-office', label: 'Office supplies', startMonth: '2031-04', cents: 3000 }));
   const r = B.ensure(st0);
-  assert.deepEqual(ids(r.state).filter(id => id.startsWith('baby-default-')), ['baby-default-setup', 'baby-default-supplies']);
+  assert.deepEqual(ids(r.state).filter(id => id.startsWith('baby-default-')), ['baby-default-setup', 'baby-default-supplies', 'baby-default-childcare']);
   assert.deepEqual(byId(r.state.plan.changes, 'my-daycare'), daycare(), 'the household’s row is left as it is');
   const tl0 = build(r.state);
-  assert.deepEqual(tl0.changes.overlaps, []);
+  assert.deepEqual(tl0.changes.overlaps.map(o => [o.kind, o.role, o.with, o.from, o.until]), [['alternative', 'childcare', ['my-daycare'], '2031-11', null]]);
+  assert.equal(monthOf(tl0, '2031-09').out.total - tl0.plan.out.total, 3000 + 45000 + 180000 + 15000, 'before their Daycare starts: the default (and its fee)');
   assert.equal(monthOf(tl0, '2031-11').out.total - tl0.plan.out.total, 3000 + 45000 + 150000, 'office supplies, baby supplies and their Daycare: once each');
   onceEach(tl0);
+  // The same totals whether their row was there before the defaults were made or added after.
+  const after = copy(B.ensure(opened(profile({ due: '2031-08-03' }))).state);
+  after.plan.changes.push(daycare(), daycare({ id: 'my-office', label: 'Office supplies', startMonth: '2031-04', cents: 3000 }));
+  const tlA = build(after);
+  for (const m of E.months.range('2031-04', '2033-03')) assert.equal(monthOf(tlA, m).out.total, monthOf(tl0, m).out.total, m);
+  // A one-time daycare deposit is not monthly care: the monthly default is made and counts.
+  const deposit = copy(opened(profile({ due: '2031-08-03' })));
+  deposit.plan.changes.push(daycare({ id: 'my-deposit', label: 'Daycare deposit', kind: 'oneTime', startMonth: '2031-08', cents: 50000 }));
+  const rd = B.ensure(deposit);
+  assert.ok(byId(rd.state.plan.changes, 'baby-default-childcare'));
+  assert.ok(counts(build(rd.state), '2031-10', 'baby-default-childcare'));
+  // A credit (a subsidy, below $0) does not replace the care: the default still counts beside it.
+  const subsidy = copy(B.ensure(opened(profile({ due: '2031-08-03' }))).state);
+  subsidy.plan.changes.push(daycare({ id: 'my-subsidy', label: 'Childcare subsidy', startMonth: '2031-09', cents: -40000 }));
+  const tlS = build(subsidy);
+  assert.deepEqual(tlS.changes.overlaps, []);
+  assert.equal(monthOf(tlS, '2031-10').out.total - tlS.plan.out.total, 45000 + 180000 - 40000);
   // A Daycare that ended before the care month (an older child's) does not cover it.
   const ended = copy(opened(profile({ due: '2031-08-03' })));
   ended.plan.changes.push(daycare({ startMonth: '2031-04', endMonth: '2031-06' }));
