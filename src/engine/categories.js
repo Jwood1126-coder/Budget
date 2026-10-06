@@ -159,6 +159,16 @@
     const list = entriesOf(name);
     return list.length > 0 && list.every(c => c.essential);
   }
+  /**
+   * The reading before imported names were resolved: essential only for a taxonomy category of
+   * exactly that name (or ESSENTIAL_EXTRA); an alias, a keyword family, an aggregate or an unknown
+   * name was flexible. Only for carrying over amounts the household set under that reading
+   * (timeline: ui.plan.groupsRead 'exact'); everything else uses isEssential.
+   */
+  function isEssentialByName(name) {
+    const c = byName.get(name);
+    return !!(c && c.essential) || ESSENTIAL_EXTRA.has(name);
+  }
   function names() { return DEFAULT.map(c => c.name); }
   /** Sort category names by group order then by the taxonomy order; unknown names last, alphabetically. */
   function sortNames(list) {
@@ -171,5 +181,5 @@
     });
   }
 
-  E.categories = { DEFAULT, GROUP_ORDER, UNCATEGORIZED, MIXED_RETAIL, AGGREGATES, ALIASES, find, resolve, membersOf, groupOf, isSeasonal, isEssential, names, sortNames };
+  E.categories = { DEFAULT, GROUP_ORDER, UNCATEGORIZED, MIXED_RETAIL, AGGREGATES, ALIASES, find, resolve, membersOf, groupOf, isSeasonal, isEssential, isEssentialByName, names, sortNames };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

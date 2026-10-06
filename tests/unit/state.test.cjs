@@ -98,7 +98,7 @@ test('defaults: compares the baseline with the first other scenario', () => {
 
 test('defaults: joint scope, overview route, what-ifs off and epoch timestamps', () => {
   const st = base();
-  assert.deepEqual(st.ui, { scope: 'joint', lastRoute: '#/overview', whatIf: { excludePendingReimbursements: false, excludeBusinessCandidates: false }, plan: { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null, groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true }, otherDial: 'debt', investReturnPct: null, scenariosCopied: true }, dismissed: {} });
+  assert.deepEqual(st.ui, { scope: 'joint', lastRoute: '#/overview', whatIf: { excludePendingReimbursements: false, excludeBusinessCandidates: false }, plan: { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null, groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true }, otherDial: 'debt', investReturnPct: null, scenariosCopied: true, groupsRead: 'resolved' }, dismissed: {} });
   assert.deepEqual(st.meta, { createdAt: '1970-01-01T00:00:00.000Z', updatedAt: '1970-01-01T00:00:00.000Z', migratedFrom: null, migrationNotes: [], legacySnapshot: null });
   assert.equal(st.scenarios[1].createdAt, '1970-01-01T00:00:00.000Z');
 });
@@ -642,7 +642,7 @@ test('sanitize: references, checklist, ui and meta are validated', () => {
   const r = S.sanitize(raw, profile(), DS);
   assert.deepEqual(r.state.references.map(x => x.id), ['q3']);
   assert.deepEqual(r.state.checklist, { balances: true });
-  assert.deepEqual(r.state.ui, { scope: 'household', lastRoute: '#/forecast?horizon=36', whatIf: { excludePendingReimbursements: true, excludeBusinessCandidates: false }, plan: { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null, groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true }, otherDial: 'debt', investReturnPct: null, scenariosCopied: true }, dismissed: { tip1: true } });
+  assert.deepEqual(r.state.ui, { scope: 'household', lastRoute: '#/forecast?horizon=36', whatIf: { excludePendingReimbursements: true, excludeBusinessCandidates: false }, plan: { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null, groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true }, otherDial: 'debt', investReturnPct: null, scenariosCopied: true, groupsRead: 'resolved' }, dismissed: { tip1: true } });
   assert.equal(r.state.meta.createdAt, NOW);
   assert.equal(r.state.meta.updatedAt, '1970-01-01T00:00:00.000Z');
   assert.equal(r.state.meta.migratedFrom, null);
@@ -2024,7 +2024,7 @@ test('Plan settings: dials keep signed cents through saving, loading and unrelat
   assert.equal(st.ui.plan.dials.flexible, 0, 'zero is an amount, not "use the baseline"');
   assert.deepEqual(st.ui.plan, { baselineMonths: 'all', horizon: 60, past: 6, mode: 'flows', coverFromSavings: false,
     dials: { savings: -123648, essentials: 234567, flexible: 0, p1: 398800 }, rows: { 'essentials-m-x1y2': { included: false }, 'flexible-r-z9': { cents: 12345 } }, hidden: ['p2', 'combined'],
-    groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true }, otherDial: 'debt', investReturnPct: null, scenariosCopied: true });
+    groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true }, otherDial: 'debt', investReturnPct: null, scenariosCopied: true, groupsRead: 'resolved' });
   // Through storage and back.
   const store = new Map();
   const storage = { getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k), key: i => Array.from(store.keys())[i] ?? null, get length() { return store.size; } };
@@ -2053,12 +2053,13 @@ test('Plan settings: dials keep signed cents through saving, loading and unrelat
   const emptyChoice = JSON.parse(JSON.stringify(S.setPath(st, 'ui.plan.hidden', [])));
   assert.deepEqual(S.sanitize(emptyChoice, profile(), DS).state.ui.plan.hidden, []);
   assert.throws(() => S.setPath(st, 'ui.home.cardCents', 100), isValidationError(/no field/), 'ui.home is gone');
-  // A damaged saved copy keeps what is valid and says what was dropped.
+  // A damaged saved copy keeps what is valid and says what was dropped (saved without groupsRead,
+  // with Flexible set directly: marked for the plan screen to carry it over, ui.plan.groupsRead upgrade).
   const raw = JSON.parse(JSON.stringify(st));
   raw.ui.plan = { baselineMonths: 7, horizon: 24, dials: { essentials: 'lots', flexible: 5000, 'bad key!': 1, mystery: 2 }, rows: { 'essentials-m-a': { included: 'x' }, 'essentials-m-b': { cents: -250 }, 'essentials-m-c': { cents: 1, extra: true } }, hidden: 'p1' };
   const r = S.sanitize(raw, profile(), DS);
   assert.deepEqual(r.state.ui.plan, { baselineMonths: 12, horizon: 24, past: 12, mode: 'balance', coverFromSavings: true, dials: { flexible: 5000 }, rows: { 'essentials-m-b': { cents: -250 } }, hidden: null,
-    groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true }, otherDial: 'debt', investReturnPct: null, scenariosCopied: true });
+    groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true }, otherDial: 'debt', investReturnPct: null, scenariosCopied: true, groupsRead: 'exact' });
   for (const re of [/ui\.plan\.baselineMonths/, /ui\.plan\.dials: dropped plan amounts.*"mystery"/, /ui\.plan\.rows: dropped plan row changes/, /ui\.plan\.hidden/]) assert.ok(hasNote(r.notes, re), String(re));
 });
 
@@ -2069,7 +2070,7 @@ test('Plan settings: the earlier Home settings (ui.home) move to ui.plan once, l
   const r = S.sanitize(raw, profile(), DS);
   assert.equal(r.state.ui.home, undefined, 'ui.home is dropped');
   assert.deepEqual(r.state.ui.plan, { baselineMonths: 6, horizon: 60, past: 12, mode: 'balance', coverFromSavings: true, dials: { p1: 300000, savings: -5075 }, rows: {}, hidden: null,
-    groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true }, otherDial: 'debt', investReturnPct: null, scenariosCopied: true, legacyDials: { card: 0, bank: 187612 } }, 'card and bank wait in legacyDials for the plan screen');
+    groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true }, otherDial: 'debt', investReturnPct: null, scenariosCopied: true, groupsRead: 'resolved', legacyDials: { card: 0, bank: 187612 } }, 'card and bank wait in legacyDials for the plan screen');
   const note = r.notes.find(n => /^ui\.home: /.test(n));
   assert.ok(note, 'noted');
   assert.match(note, /p1 \$3,000\.00, card \$0\.00, bank \$1,876\.12, savings −\$50\.75, baselineMonths 6, horizon 60/);
@@ -2271,7 +2272,7 @@ test('income streams take an optional gross pay per paycheck (whole cents, never
 
 /** ui.plan's defaults and constants as they were written out before the descriptor table. */
 const PLAN_UI_DEFAULT_BEFORE = { baselineMonths: 12, horizon: 12, past: 12, mode: 'balance', coverFromSavings: true, dials: {}, rows: {}, hidden: null,
-  groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true }, otherDial: 'debt', investReturnPct: null, scenariosCopied: true };
+  groups: {}, irregularOff: {}, trends: { series: ['card'], ma: 3, trend: true }, otherDial: 'debt', investReturnPct: null, scenariosCopied: true, groupsRead: 'resolved' };
 const TRENDS_DEFAULT_BEFORE = { series: ['card'], ma: 3, trend: true };
 
 test('ui.plan descriptor: the defaults derived from PLAN_UI are the ones written out before, and every field is documented', () => {
@@ -2287,11 +2288,12 @@ test('ui.plan descriptor: the defaults derived from PLAN_UI are the ones written
   fresh.dials.p1 = 1;
   assert.deepEqual(S.defaults(null, DS).ui.plan, PLAN_UI_DEFAULT_BEFORE);
   // One row per field, in the saved order; optional fields have no default.
-  // otherDial, investReturnPct and scenariosCopied came with the integrated plan (investments, what-ifs).
-  assert.deepEqual(S.PLAN_UI.map(d => d.name), ['baselineMonths', 'horizon', 'past', 'mode', 'coverFromSavings', 'dials', 'rows', 'hidden', 'groups', 'irregularOff', 'trends', 'otherDial', 'investReturnPct', 'scenariosCopied', 'legacyDials', 'cardSplit']);
+  // otherDial, investReturnPct and scenariosCopied came with the integrated plan (investments, what-ifs);
+  // groupsRead with imported category names read as the category they stand for.
+  assert.deepEqual(S.PLAN_UI.map(d => d.name), ['baselineMonths', 'horizon', 'past', 'mode', 'coverFromSavings', 'dials', 'rows', 'hidden', 'groups', 'irregularOff', 'trends', 'otherDial', 'investReturnPct', 'scenariosCopied', 'groupsRead', 'legacyDials', 'cardSplit', 'dialShift']);
   for (const d of S.PLAN_UI) {
     assert.deepEqual(d.default, d.optional ? undefined : PLAN_UI_DEFAULT_BEFORE[d.name], d.name);
-    assert.equal(d.optional, d.name === 'legacyDials' || d.name === 'cardSplit', d.name);
+    assert.equal(d.optional, ['legacyDials', 'cardSplit', 'dialShift'].includes(d.name), d.name);
     assert.ok(typeof d.doc === 'string' && d.doc.length > 10, d.name + ' says what it holds');
   }
   // The timeline's exported defaults and choices are the same facts (one list each, plan-settings.js).
@@ -2363,6 +2365,10 @@ const PLAN_UI_PATHS = [
   ['otherDial', [['debt', 'debt'], ['withInvesting', 'withInvesting']], ['investments', null]],
   ['investReturnPct', [[5, 5], [0, 0], [6.5, 6.5], ['4', 4], [null, null]], [-1, 26, 'high']],
   ['scenariosCopied', [[false, false], [true, true]], ['maybe', null]],
+  ['groupsRead', [['exact', 'exact'], ['resolved', 'resolved']], ['names', null, true]],
+  ['dialShift.flexible', [[{ cents: -12000, categories: ['Natural gas'] }, { cents: -12000, categories: ['Natural gas'] }], [{ cents: 500 }, { cents: 500, categories: [] }]],
+    [{ cents: 1.5, categories: [] }, { categories: [] }, { cents: 1, categories: [''] }, 'x']],
+  ['dialShift.irregular', [], [{ cents: 1, categories: [] }]],
   ['futureField', [], [1]],
   ['home', [], [{}]]
 ];
@@ -2402,16 +2408,19 @@ function beforeUpgrades() {
   // Saved before the integrated plan: no markers yet (the profile's scenarios have events to copy).
   delete raw.ui.plan.otherDial;
   delete raw.ui.plan.scenariosCopied;
+  delete raw.ui.plan.groupsRead;
   return raw;
 }
 
 test('V5 upgrades: a registry run in order by sanitize; each entry runs once, and running again gives the same budget and no new notes', () => {
-  assert.deepEqual(S.V5_UPGRADES.map(u => u.id), ['ui.home', 'ui.plan.dials.card-bank', 'ui.plan.otherDial', 'plan.changes.scenarios']);
+  assert.deepEqual(S.V5_UPGRADES.map(u => u.id), ['ui.home', 'ui.plan.dials.card-bank', 'ui.plan.otherDial', 'plan.changes.scenarios', 'ui.plan.groupsRead']);
   for (const u of S.V5_UPGRADES) assert.deepEqual(Object.keys(u).sort(), ['applies', 'apply', 'id']);
   const raw = deepFreeze(beforeUpgrades());
   const once = S.upgrade(raw);
-  // No other amount was saved, so the otherDial entry has nothing to mark (its default is right).
+  // No other, essentials or flexible amount was saved, so the otherDial and groupsRead entries have
+  // nothing to mark (their defaults are right).
   assert.deepEqual(once.applied, ['ui.home', 'ui.plan.dials.card-bank', 'plan.changes.scenarios']);
+  assert.equal(S.sanitize(raw, profile(), DS).state.ui.plan.groupsRead, 'resolved');
   assert.equal(once.raw.ui.home, undefined);
   assert.deepEqual(once.raw.ui.plan.dials, { p1: 300000, savings: 2500 });
   assert.deepEqual(once.raw.ui.plan.legacyDials, { card: 88000, bank: -1500 }, 'the Home card amount and the bank dial both wait');
@@ -2426,8 +2435,10 @@ test('V5 upgrades: a registry run in order by sanitize; each entry runs once, an
   // Each entry alone: after it ran, it no longer applies (safe to run twice), and it left a note.
   const withOther = JSON.parse(JSON.stringify(raw));
   withOther.ui.plan.dials.other = 30000;
+  const withFlexible = JSON.parse(JSON.stringify(raw));
+  withFlexible.ui.plan.dials.flexible = 41000;
   for (const u of S.V5_UPGRADES) {
-    let r = u.id === 'ui.plan.otherDial' ? withOther : raw;
+    let r = u.id === 'ui.plan.otherDial' ? withOther : u.id === 'ui.plan.groupsRead' ? withFlexible : raw;
     if (u.id !== 'ui.home') r = S.V5_UPGRADES[0].apply(r).raw;
     assert.equal(u.applies(r), true, u.id);
     const a = u.apply(r);

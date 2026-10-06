@@ -15,11 +15,13 @@
  *   templates         ready-made packs of planned changes (babyFirstYear(due), childcare(start,
  *                     cents?), kidCosts(due)), never accepted for you
  *   setDial / setRow / setTarget / resetDial / resetRow / resetPlan / setGroup / setIrregular /
- *   addChange / setChange / removeChange / acceptChanges / migrateRows / migrateDials / splitOther
+ *   addChange / setChange / removeChange / acceptChanges / migrateRows / migrateDials / splitOther /
+ *   regroupDials
  *                     validated state writes for the screen (setRow on a category, and setTarget,
  *                     write its budget: plan.targets; the resets put back what the setup file
  *                     supplied, else remove the change)
- *   pendingUpgrade(tl) the upgrades the screen applies once (migrateRows, migrateDials, splitOther), named
+ *   pendingUpgrade(tl) the upgrades the screen applies once (migrateRows, regroupDials, migrateDials,
+ *                     splitOther), named
  *
  * The module is split by section over src/engine/timeline-*.js (timeline-core.js lists them and
  * how they share their functions); this file holds build, the Trends series catalogue and the
@@ -68,6 +70,25 @@
  * and the projected savings balance gives each goal a reach month (tl.goals, cumulative in list
  * order). These are the plan as it stands: in the ghost too, never a "change".
  *
+ * Regrouping with a spending dial set directly: an amount set directly for Essentials or Flexible
+ * stays exactly as saved; categories moved between the two groups since add to it or take off it
+ * (ui.plan.dialShift[key] = { cents, categories }, applied only while the dial is set directly:
+ * plan amount = the amount set + cents, never below $0; the dial's `shift` says so, and its basis
+ * ends "Set here: $300.00, less $120.00 for …, now planned in Essentials"). setGroup writes it when
+ * exactly one of the two is set directly (the moved category's plan amount in the group it leaves);
+ * setDial, resetDial and resetPlan remove it. Amounts set before imported category names were
+ * resolved (ui.plan.groupsRead 'exact', marked by the ui.plan.groupsRead upgrade when Essentials or
+ * Flexible was set directly) were chosen when only exact taxonomy names were essential, so an
+ * imported 'Natural gas' or the energy aggregate counted as flexible. tl.migration.regroupDials says
+ * how regroupDials carries them over once: { moved: [{ category, from, to }], set:
+ * 'essentials'|'flexible'|null, cents: d|null, shift: { dial, setCents, cents, categories,
+ * plannedCents }|null, note|null }. d is what moved from Flexible to Essentials, measured on the
+ * group not set directly (at its rows, else its baseline) under the reading now and with each moved
+ * category in its earlier group (a group the household chose is never treated as moved). Flexible
+ * alone: a shift of −d (Essentials' baseline now holds d too); Essentials alone: +d (Flexible's no
+ * longer does); both or neither set: nothing but the mark changes. Until then the plan uses the
+ * dials as saved (counted twice or left out).
+ *
  * Investments: accounts typed 'investment' have a line of their own (tl.balances.investments),
  * never part of joint cash: known balances, then + each month's net to investments, growing only
  * at a rate the household entered (ui.plan.investReturnPct), then labelled illustrative.
@@ -85,7 +106,7 @@
   // The other parts' functions build uses, looked up when called.
   const anchors = late('anchors'), mirrorPlan = late('mirrorPlan'), balancesFor = late('balancesFor'), investmentsFor = late('investmentsFor');
   const spendGroups = late('spendGroups');
-  const buildDials = late('buildDials'), planMonth = late('planMonth'), legacyDialsPlan = late('legacyDialsPlan');
+  const buildDials = late('buildDials'), planMonth = late('planMonth'), legacyDialsPlan = late('legacyDialsPlan'), regroupDialsPlan = late('regroupDialsPlan');
   const readChanges = late('readChanges'), changeActiveIn = late('changeActiveIn'), centsIn = late('centsIn'), applyChange = late('applyChange'), summarizeChanges = late('summarizeChanges');
   const billChanges = late('billChanges'), goalChanges = late('goalChanges'), incomeChanges = late('incomeChanges');
 
@@ -460,8 +481,10 @@
         + (dialsByKey.investing && dialsByKey.investing.source === 'direct' ? 'Investing was already set by you and was left as it is; ' : 'Investing is set to ' + E.money.format(sp.investingCents) + ', its average; ')
         + 'Debt & business is set to ' + E.money.format(sp.otherCents) + '.',
     }) : null;
+    // Essentials or Flexible set before imported category names were resolved: carried over once (regroupDials).
+    const regroupDials = regroupDialsPlan({ base, byId, cfg, targets, dialsByKey });
     let migration = null;
-    if (legacyIds.length || regrouped.length || dialMigration || otherSplit) {
+    if (legacyIds.length || regrouped.length || dialMigration || otherSplit || regroupDials) {
       const moved = legacy.slice().sort((a, b) => (a.from < b.from ? -1 : 1));
       const dropped = legacyIds.filter(id => !moved.some(l => l.from === id));
       // Rows of categories now planned in the other group because their names are recognised
@@ -474,9 +497,12 @@
         + regroupedNote).trim();
       migration = {
         rows: moved.concat(regrouped.slice().sort((a, b) => (a.from < b.from ? -1 : 1))), dropped, superseded: superseded.slice().sort(), rowsNote, dials: dialMigration, other: otherSplit,
-        // What to tell the household, once: the row note (without its path), the dial note and the split note (without its path).
+        regroupDials,
+        // What to tell the household, once: the row note (without its path), the dial note, the split
+        // note and the regrouped dial's note (both without their path).
         note: [rowsNote ? rowsNote.replace(/^ui\.plan\.rows: /, '') : null, dialMigration ? dialMigration.note : null,
-          otherSplit && otherSplit.note ? otherSplit.note.replace(/^ui\.plan\.dials\.other: y/, 'Y') : null].filter(Boolean).join(' '),
+          otherSplit && otherSplit.note ? otherSplit.note.replace(/^ui\.plan\.dials\.other: y/, 'Y') : null,
+          regroupDials && regroupDials.note ? regroupDials.note.replace(/^ui\.plan\.dialShift\.\w+: /, '') : null].filter(Boolean).join(' '),
       };
     }
 
@@ -521,7 +547,7 @@
     'TINY_CATEGORY_CENTS', 'STABLE_MIN_CHARGES', 'STABLE_SPREAD', 'OTHER_CATEGORY', 'SIMPLE_LABEL', 'RULE', 'SIMPLE_RULE', 'ILLUSTRATIVE', 'DIAL_LABEL',
     'INVEST_RULE',
     'build', 'anchors', 'settings', 'depositHint', 'prorate', 'toCSV', 'templates',
-    'setDial', 'setRow', 'setTarget', 'resetDial', 'resetRow', 'resetPlan', 'setGroup', 'setIrregular', 'addChange', 'setChange', 'removeChange', 'acceptChanges', 'migrateRows', 'migrateDials', 'splitOther', 'acceptCarriedOver',
+    'setDial', 'setRow', 'setTarget', 'resetDial', 'resetRow', 'resetPlan', 'setGroup', 'setIrregular', 'addChange', 'setChange', 'removeChange', 'acceptChanges', 'migrateRows', 'migrateDials', 'splitOther', 'regroupDials', 'acceptCarriedOver',
     'pendingUpgrade',
   ];
   const missing = PUBLIC.filter(k => T[k] === undefined);
