@@ -121,7 +121,7 @@
   function babyLines(ctx, tl, name) {
     const st = E.babyDefaults.status(ctx.state);
     if (!st.items.length || st.group !== name) return '';
-    const month = st.timing === 'month' ? ` Timed from the birth month (${esc(fmt.month(st.birthMonth))}), to the month only: add the due date in Budget’s setup details.` : '';
+    const month = st.timing === 'month' ? ` Timed from the birth month (${esc(fmt.month(st.birthMonth))}), to the month only: add the due date under Pay, bills and debts below.` : '';
     const PACK_NAME = { babyFirstYear: 'the New baby pack', childcare: 'the Childcare pack', kidCosts: 'the Kid costs pack' };
     const byId = new Map(tl.changes.list.map(ch => [ch.id, ch]));
     // Held back only in the months the covering items run: say which (a monthly default counts again after them).

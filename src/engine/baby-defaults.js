@@ -19,7 +19,7 @@
  * days. Without it, a copied baby what-if group's birth month (its earliest monthly item) gives a
  * month-level estimate, flagged precision 'month': childcare two months after the birth month.
  * With neither, the timing is unknown: nothing is written; status() lists the defaults as "date
- * needed", and the date is asked for in Budget's setup details only.
+ * needed", and the date is asked for in Edit plan's setup details only.
  *
  * One canonical path: the group is the copied what-if group (ids 'sc-…', copied from a saved
  * scenario, its name or labels about a baby or birth) when there is one, else a new group 'New
@@ -261,10 +261,10 @@
     if (touched && now) next.meta.updatedAt = now;
 
     const notes = [];
-    const when = t.precision === 'month' ? ' (timed from the birth month of “' + name + '”, ' + monthText(t.birthMonth) + ': an estimate until you enter the due date in Budget’s setup details)' : '';
+    const when = t.precision === 'month' ? ' (timed from the birth month of “' + name + '”, ' + monthText(t.birthMonth) + ': an estimate until you enter the due date in Edit plan’s setup details)' : '';
     if (added.length || filled.length) {
       const parts = added.map(d => d.label).concat(filled);
-      notes.push('Baby costs: planning estimates are now in the plan under “' + name + '” (' + parts.join(', ') + ')' + when + '. They are estimates, not quotes: change them on the Plan.');
+      notes.push('Baby costs: planning estimates are now in the plan under “' + name + '” (' + parts.join(', ') + ')' + when + '. They are estimates, not quotes: change them in Edit plan.');
     }
     notes.push(...fullNote);
     if (moved.length) notes.push('Baby costs: ' + moved.join(', ') + ' moved to follow ' + (t.precision === 'day' ? 'the due date (' + t.dueDate + ')' : 'the birth month (' + monthText(t.birthMonth) + ')') + '; start months you set yourself were kept.');
